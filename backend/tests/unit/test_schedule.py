@@ -29,7 +29,7 @@ def test_clock_times_legs_and_buffers():
     assert t.contingency == math.ceil((500 + leg.fare.max) / 10)
     assert t.worst_case == 500 + leg.fare.max + t.contingency
     assert t.budget == 2000 and t.budget_left == 2000 - t.worst_case
-    assert plan.date == ctx.date and plan.city == "Bangalore" and plan.timezone == "Asia/Kolkata"
+    assert plan.date == ctx.date and plan.city == "Bengaluru" and plan.timezone == "Asia/Kolkata"
 
 
 def test_walking_minutes_count_walk_legs_and_walking_stops():

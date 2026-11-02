@@ -1,9 +1,9 @@
 """Phase 2 verification: the real FastAPI app + LangGraph graph + scripted fake model on the frozen world.
 
 Everything here runs in-process (httpx ASGITransport, in-memory SQLite store and checkpointer); no network, no keys.
-Tests marked ``xfail(strict=True)`` reproduce a defect documented in docs/verification/PHASE2.md (the reason starts
-with the defect ID). They assert the CORRECT behaviour, so a fix turns them into XPASS failures that must then be
-un-marked. Everything else asserts behaviour verified to hold today.
+The tests under "Former defects" reproduced defects documented in docs/verification/PHASE2.md; they assert the
+CORRECT behaviour and pass now that the defects are fixed (no xfail markers remain). Everything else asserts
+behaviour verified to hold today.
 """
 
 from __future__ import annotations
@@ -238,7 +238,7 @@ async def test_rate_limit_429_shape_and_resume_is_not_counted(client_for: Callab
 
 
 # ---------------------------------------------------------------------------------------------------------
-# Defects (xfail strict: they assert the correct behaviour)
+# Former defects (fixed; they assert the correct behaviour)
 # ---------------------------------------------------------------------------------------------------------
 
 

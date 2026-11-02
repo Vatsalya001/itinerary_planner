@@ -33,17 +33,19 @@ from app.domain.schemas import (
 TARGET_DATE = date(2026, 11, 7)  # eval_cases.json fixed_context.target_saturday
 NOW = datetime(2026, 11, 5, 4, 30, tzinfo=UTC)  # 2026-11-05T10:00+05:30
 
+# The same Locations as data/fixtures/world.json (what FixtureGeocoder returns), so domain tests and graph/eval
+# tests see one frozen world: the Bangalore fixture is named "Bengaluru" and Mumbai is centred on Fort.
 BANGALORE = Location(
-    id="fixture:bangalore", name="Bangalore", country_code="IN", admin1="Karnataka",
+    id="fixture:bangalore", name="Bengaluru", country_code="IN", admin1="Karnataka",
     lat=12.9716, lng=77.5946, timezone="Asia/Kolkata", currency="INR", population=8_443_675,
 )
 MUMBAI = Location(
     id="fixture:mumbai", name="Mumbai", country_code="IN", admin1="Maharashtra",
-    lat=19.0760, lng=72.8777, timezone="Asia/Kolkata", currency="INR",
+    lat=18.9322, lng=72.8317, timezone="Asia/Kolkata", currency="INR", population=12_691_836,
 )
 LONDON = Location(
-    id="fixture:london", name="London", country_code="GB", lat=51.5074, lng=-0.1278,
-    timezone="Europe/London", currency="GBP",
+    id="fixture:london", name="London", country_code="GB", admin1="England", lat=51.5074, lng=-0.1278,
+    timezone="Europe/London", currency="GBP", population=8_961_989,
 )
 
 ALL_DAY = Hours(status="known", periods=[(8 * 60, 23 * 60)])

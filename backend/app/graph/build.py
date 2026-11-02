@@ -1,7 +1,9 @@
 """StateGraph assembly. Nodes set ``state["route"]``; conditional edges follow it.
 
     guard_input -> parse_preferences -> resolve_location -> check_clarity
-    check_clarity -> ask_clarification (interrupt) -> parse_preferences | build_context | finalize
+    check_clarity -> ask_clarification | build_context | finalize (city missing or not found after asking,
+                     or the lookup failed)
+    ask_clarification (interrupt; on resume the answers are folded into the request) -> parse_preferences
     build_context -> plan_agent | fallback_planner (baseline, or no time left)
     plan_agent -> tools | plan_agent (one nudge) | fallback_planner
     tools -> plan_agent | validate_plan (submit_plan) | fallback_planner

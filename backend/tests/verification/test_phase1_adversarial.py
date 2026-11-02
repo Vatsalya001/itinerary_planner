@@ -1,9 +1,9 @@
 """Phase 1 verification: adversarial tests for the validator, rules parser, providers, travel estimator and
 the deterministic planner's plan quality.
 
-Tests marked ``xfail(strict=True)`` reproduce a defect documented in docs/verification/PHASE1.md (the reason
-starts with the defect ID). They assert the CORRECT behaviour, so a fix turns them into XPASS failures that
-must then be un-marked. Everything else asserts behaviour that holds today. All synthetic data; no network.
+Tests that once reproduced a defect documented in docs/verification/PHASE1.md (D-n) were written to assert the
+CORRECT behaviour; every such defect has been fixed and its xfail marker removed, so all tests here assert
+behaviour that holds today. All synthetic data; no network.
 """
 
 from __future__ import annotations

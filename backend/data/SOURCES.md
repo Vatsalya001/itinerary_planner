@@ -73,9 +73,72 @@ re-select the same OSM IDs, check that each still exists with the same tags, and
 ## `price_bands.yaml`: per-person price bands (estimates)
 
 - **What it covers:** hand-set per-person bands for each Google `priceLevel` and currency, plus category default
-  levels for currencies other than INR.
+  levels for currencies other than INR. Every currency in `countries.yaml` has a band table.
+- **Source:** our own judgement of typical per-person spend for a casual visit. No menu or price survey was used.
+  INR, GBP, USD and EUR were set first. The other currencies were set later, on the same date, from the USD bands,
+  the reference rates in `fx.yaml` and a rough sense of local price levels. They are rougher still.
 - **Status:** these are estimates, labelled `price_level_estimate` or `category_estimate` wherever they are used,
-  and were checked on 2 November 2026.
+  and were set on 2 November 2026 (`checked: 2026-11-02`). They are not quotes and were not checked against real
+  venues.
+- **Licence:** project data.
+
+## `categories.yaml`: canonical place categories (project heuristics)
+
+- **What it covers:** the 23 category keys every provider maps onto. Each has a group, meal/indoor/seated/walking
+  flags, effort, a visit duration range, an alcohol flag, a default INR cost (`cost_inr`), interest tags and
+  typical Saturday busy windows.
+- **Source:** hand-written project configuration, added on 2 November 2026. No external dataset is recorded as
+  its source.
+- **Status:** durations, `cost_inr` and busy windows are heuristics. Costs derived from `cost_inr` are labelled
+  `category_estimate`. Busy windows only feed the "likely busy" heuristic and are never shown as live crowd data.
+- **Licence:** project data.
+
+## `cities.yaml`: travel speeds, pickup times and fares (estimates)
+
+- **What it covers:** door-to-door speeds and pickup minutes per mode, and auto and cab fare tables for Bangalore,
+  Mumbai, Delhi, other Indian cities (`default_IN`) and everywhere else (`default`, keyed by currency).
+- **Source and status:** each fare entry carries its own `source` and `as_of`. The Bangalore, Mumbai and Delhi
+  auto tariffs match news reports of the notified fares, but were not checked against the official notifications.
+  Every cab fare and every `default*` entry is labelled `estimate (unverified)`. That includes the cab fares added
+  for the currencies of every gazetteer country, which are rough figures set on 2 November 2026. Speeds and pickup
+  minutes are heuristics. Fares are always shown to users as estimates.
+- **Licence:** project data. The tariff figures themselves are public facts.
+
+## `countries.yaml`: country to currency and display symbol
+
+- **What it covers:** an ISO 3166-1 alpha-2 country code mapped to its ISO 4217 currency and a display symbol, for
+  every country used in `gazetteer.yaml` (34 countries) and no others. In a country that is not listed, a bare
+  budget number triggers a currency question.
+- **Source:** public reference facts (ISO 4217 currency of each country). Checked by hand on 2 November 2026.
+  Where the usual symbol is ambiguous or written after the amount (for example `kr`, `Kč`, `Rs`, `CHF`), the ISO
+  code is used as a prefix instead.
+- **Licence:** public facts, no licence needed.
+
+## `fx.yaml`: reference exchange rates (approximate, not live)
+
+- **What it covers:** `units_per_usd` for every currency in `countries.yaml`. These rates only convert a budget
+  stated in one currency into the planning city's currency. The plan says so in an assumption
+  ("≈ ... at an approximate reference rate (2026-11-02, not live)").
+- **Source:** mid-market quotes captured on 2 November 2026 (`as_of`). The file header lists, per currency, which
+  public quote pages were used: Trading Economics, OFX, X-Rates, XE, Bloomberg, the RBA, the ECB's 30 October 2026
+  reference rates, exchangerates.org.uk, Wise and Pluang. Pegged currencies (AED, QAR, HKD, NPR, DKK) were checked
+  against their pegs or bands.
+- **Status:** approximate and rounded. They are never presented as live, and a converted budget is rounded down.
+  Refresh them by hand before relying on them.
+- **Licence:** individual rates are facts. No provider's table is redistributed.
+
+## `gazetteer.yaml`: cities, aliases and neighbourhoods
+
+- **What it covers:** 93 cities in 34 countries, each with a country code, IANA timezone, approximate centre and
+  aliases, plus neighbourhood centroids for Bangalore, Mumbai and Delhi.
+- **How it is used:** the rules parser uses it to spot place names in free text, the baseline uses it to bias
+  searches towards a neighbourhood, and the live geocoder consults it first (it is the fallback Location when
+  Open-Meteo has no match or fails).
+- **Source:** hand-compiled for this project, added on 2 November 2026. The file does not record a source for
+  each entry. Coordinates are approximate centre points (public geographic facts, rounded to 4 decimals), good
+  enough for a search bias and a 40 km sanity check but not for routing. Names that are common English words or
+  brands are deliberately left out.
+- **Licence:** project data. Place names and approximate coordinates are public facts.
 
 ## Live sources (not stored in the repo)
 
@@ -88,7 +151,8 @@ re-select the same OSM IDs, check that each still exists with the same tags, and
 - **Tavily and event pages:**
   - **Search:** Tavily search (`Authorization: Bearer` header), restricted to an allow-list that starts with
     `district.in`.
-  - **Page fetching:** at most three result pages are fetched, with the `SaturdayPlanner/0.1` User-Agent,
-    robots.txt respected, a 5 s timeout and a 1 MB cap.
+  - **Page fetching:** at most three result pages are fetched concurrently, with the `SaturdayPlanner/0.1`
+    User-Agent, a 5 s timeout (4 s to connect), a 1 MB cap and a 15 s budget for the whole search. robots.txt is
+    respected. It is cached per site for 24 hours, and a failed fetch counts as "disallow" for 1 hour.
   - **Parsing:** only schema.org Event JSON-LD is parsed, in code. Descriptions are never kept. Each event links
     back to its page.
