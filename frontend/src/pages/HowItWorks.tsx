@@ -14,7 +14,7 @@ const NODES: Array<[string, string, string]> = [
   [
     'parse_preferences',
     'rules + LLM',
-    'The rule-based parser always reads your request. Except in the no-LLM baseline, the model reads it too, grounded in your words: it can only keep interests and hard constraints that your text supports, never re-adds a constraint you dropped, and its time and budget count only when your text mentions a time or an amount. The two readings are merged: fields you filled in win, then the model, then the rules, and hard constraints are combined. If the model fails or times out, the rule-based reading is used and the trace says so.',
+    'The rule-based parser always reads your request. When you write a free-text description (and the planner is not the no-LLM baseline), the model reads it too, grounded in your words; requests made only with the form fields skip this model call because the fields are already exact. The model can only keep interests and hard constraints that your text supports, never re-adds a constraint you dropped, and its time and budget count only when your text mentions a time or an amount. The two readings are merged: fields you filled in win, then the model, then the rules, and hard constraints are combined. If the model fails or times out, the rule-based reading is used and the trace says so.',
   ],
   [
     'resolve_location',
@@ -39,7 +39,7 @@ const NODES: Array<[string, string, string]> = [
   [
     'plan_agent',
     'LLM with tools',
-    'The model takes a turn: it calls tools or replies. A model error, timeout or refusal, the turn cap, or running low on time hands over to the rule-based planner. A turn that ends without submitting a plan gets one nudge; a second one hands over too.',
+    'The model takes a turn: it calls tools or replies. A model error, timeout, refusal or provider rate limit, the turn cap, or running low on time hands over to the rule-based planner. A turn that ends without submitting a plan gets one nudge; a second one hands over too.',
   ],
   [
     'tools',
@@ -71,13 +71,13 @@ const NODES: Array<[string, string, string]> = [
 const TOOLS: Array<[string, string, string]> = [
   [
     'search_places',
-    'Up to 8 places in a compact form: name, category, distance, price with its basis, rating, hours on the day, diet and wheelchair evidence, a likely-busy flag, typical visit length and source.',
-    '6',
+    'Up to four searches in one call (and, if asked, the day’s events), so the whole search takes one model request. Each place comes in a compact form: name, category, distance, price with its basis, rating, hours on the day, diet and wheelchair evidence, a likely-busy flag, whether the visit is mostly walking, typical visit length and source.',
+    '3 calls, 8 searches',
   ],
-  ['search_events', 'Events on the target date in the same form, with start time and price.', '2'],
-  ['estimate_travel', 'Mode, distance, minutes and fare range between consecutive stops.', '4'],
-  ['check_plan', 'Schedule, totals, errors and warnings for a draft, and the next step to take. Nothing is submitted.', '4'],
-  ['submit_plan', 'Sends the plan to validate_plan.', '3 (first try + 2 repairs)'],
+  ['search_events', 'Events on the target date in the same form, with start time and price (also available through search_places).', '2'],
+  ['estimate_travel', 'Mode, distance, minutes and fare range between consecutive stops. Optional; the model is told to skip it.', '4'],
+  ['check_plan', 'Schedule, totals, errors and warnings for a draft, without submitting. Optional; submit_plan already checks.', '4'],
+  ['submit_plan', 'Sends the plan to validate_plan. A rejected plan comes back with the computed schedule and a one-line fix (for example how many minutes to cut).', '3 (first try + 2 repairs)'],
 ]
 
 const CHECKS: Array<[string, string]> = [
