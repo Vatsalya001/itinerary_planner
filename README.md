@@ -125,7 +125,7 @@ Details: [docs/HLD.md](docs/HLD.md) (design) and [docs/LLD.md](docs/LLD.md) (mod
 | `cd backend && RUN_OLLAMA=1 uv run pytest -m ollama tests/graph/test_ollama_e2e.py` | One end-to-end plan with a local model |
 | `cd frontend && npx playwright install chromium && npm run e2e` | Browser tests against a locally started backend on the frozen world |
 | `make eval-offline` | Offline eval suite (scripted fake model and injected faults; what CI runs) |
-| `make eval MODELS=baseline:deterministic,ollama:granite4:tiny-h REPEATS=1` | Model evals on the frozen world |
+| `make eval MODELS=baseline:deterministic,ollama:granite4:tiny-h REPEATS=1` | Model evals on the frozen world; add `ARGS="--max-cost-usd 5"` (or `--max-minutes`) to cap a run and `--resume` to finish it. With `JUDGE_MODEL` set, an LLM judge also scores the plans (`--judge-model none` turns it off) |
 | `make eval-all` | Baseline, the local models, and Claude when `ANTHROPIC_API_KEY` is set |
 | `make eval-report` | Regenerate `docs/EVAL_REPORT.md` and `backend/evals/results/summary.json` |
 
@@ -135,7 +135,8 @@ Details: [docs/HLD.md](docs/HLD.md) (design) and [docs/LLD.md](docs/LLD.md) (mod
 shows, per model, hard pass rate, status accuracy, agent success, first-submission validity, tool-protocol errors,
 clarification precision and recall, parse accuracy, security, latency and cost, with dev and holdout cases reported
 separately and every number shown with its `n`. Baseline, hosted-API and local-model rows are separate populations,
-and all comparisons run on the synthetic frozen world. The same summary feeds the `/evals` page. Read the report for
+and all comparisons run on the synthetic frozen world. Cost is shown per plan and per run, and runs the harness
+could not finish are counted as failures, not dropped. The same summary feeds the `/evals` page. Read the report for
 the current numbers and the list of models that have not been run yet.
 
 ## Deployment (Render + Neon)
@@ -146,9 +147,11 @@ the current numbers and the list of models that have not been run yet.
    on an always-on plan, with health check `/api/health` and deploys only after the GitHub checks pass.
 3. Fill the `sync: false` values: `DATABASE_URL` (Neon), `ANTHROPIC_API_KEY`, and optionally `GOOGLE_MAPS_API_KEY`,
    `TAVILY_API_KEY`, `FALLBACK_MODEL`, `SENTRY_DSN`, `LANGSMITH_API_KEY` (with `TRACING_ENABLED=true`).
-4. On startup the app creates its tables and the LangGraph checkpoint tables. The image includes
-   `backend/evals/results/summary.json` for `/evals`; `uv run python -m evals.report --publish` (from `backend/`) with the Neon
-   `DATABASE_URL` stores a newer summary in the database, which takes precedence.
+4. On startup the app creates its tables and the LangGraph checkpoint tables. `/api/health` answers 503 when the
+   database is unreachable, so Render's health check catches a broken `DATABASE_URL`; its `places` field shows a
+   rejected Maps key (`auth_error`). The image includes `backend/evals/results/summary.json` for `/evals`;
+   `uv run python -m evals.report --publish` (from `backend/`) with the Neon `DATABASE_URL` also stores the summary in
+   the database, and `/api/evals/summary` serves whichever copy was generated more recently.
 5. Roll back from the Render dashboard (Events -> earlier deploy -> Rollback).
 
 Local container: `make docker-build && make docker-run`, or `docker compose up --build` (add `--profile postgres`
@@ -170,14 +173,17 @@ All settings are environment variables (or `backend/.env`); the full list with d
 | `RATE_LIMIT_PER_10MIN`, `RATE_LIMIT_PER_DAY`, `DAILY_PLAN_CAP` | 15, 60, 200 | Per-IP and global plan limits |
 | `TRUST_PROXY_HEADERS` | false | `true` behind Render's proxy |
 | `SENTRY_DSN`, `TRACING_ENABLED`, `LANGSMITH_API_KEY` | none, false, none | Error tracking and tracing |
+| `JUDGE_MODEL` | none | Default judge for `make eval` (the app never reads it) |
 
 ## Limitations
 
 * Live providers (Google Places, Tavily, Open-Meteo), Claude, Postgres/Neon and the Render deploy were not exercised
   by the verification runs, which had no keys; see the verification reports.
 * Without a Google key, places come only from the Bangalore snapshot. Fares, price bands and FX rates are dated
-  estimates; "likely busy" is a heuristic.
-* Small local models often fall back to the rule-based planner; no judge model has scored plan quality yet.
+  estimates (price bands and cab fares are hand-set, roughest outside INR, GBP, USD and EUR; only the Indian auto
+  tariffs come from reports of notified fares); "likely busy" is a heuristic.
+* Small local models often fall back to the rule-based planner; no judge model has scored plan quality in the
+  committed results.
 * Gemini and Grok are placeholders until model IDs are pinned.
 * Resume locks and caches are per process; the deployment is one instance.
 * More: [docs/HLD.md §15](docs/HLD.md#15-known-limitations-and-risks).
