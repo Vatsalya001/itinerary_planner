@@ -24,6 +24,7 @@ from app.graph.prompts import (
 from app.graph.tools import (
     TOOL_CAPS,
     TOOL_NAMES,
+    PlaceQueryArgs,
     SearchEventsArgs,
     SearchPlacesArgs,
     ToolEnv,
@@ -49,20 +50,28 @@ def test_tool_schemas_cover_every_tool_with_required_reason() -> None:
         assert "reason" in params["properties"]
         assert "$defs" not in json.dumps(params)  # inline schemas: small local models handle them better
     search = schemas[0]["function"]["parameters"]
-    assert "restaurant" in search["properties"]["category"]["enum"]
-    assert TOOL_CAPS == {"search_places": 6, "search_events": 2, "estimate_travel": 4, "check_plan": 4}
+    assert TOOL_CAPS == {"search_places": 3, "search_events": 2, "estimate_travel": 4, "check_plan": 4}
+    items = search["properties"]["queries"]["items"]
+    assert search["required"] == ["queries", "reason"] and search["properties"]["queries"]["maxItems"] == 4
+    assert "restaurant" in items["properties"]["category"]["enum"] and items["required"] == ["intent"]
 
 
 def test_search_places_args_validation() -> None:
-    args = SearchPlacesArgs.model_validate({"intent": "quiet cafe", "category": "Cafe", "open_at": "16:30",
-                                            "max_price_level": "", "reason": "x" * 500})
-    assert args.category == "cafe" and args.max_price_level is None and len(args.reason) == 140
+    legacy = SearchPlacesArgs.model_validate({"intent": "quiet cafe", "category": "Cafe", "open_at": "16:30",
+                                              "max_price_level": "", "reason": "x" * 500})
+    assert legacy.queries == [{"intent": "quiet cafe", "category": "Cafe", "open_at": "16:30", "max_price_level": ""}]
+    assert len(legacy.reason) == 140
+    q = PlaceQueryArgs.model_validate(legacy.queries[0])
+    assert q.category == "cafe" and q.max_price_level is None
+    batched = SearchPlacesArgs.model_validate({"queries": json.dumps([{"intent": "a"}, {"intent": "b"}])})
+    assert [x["intent"] for x in batched.queries] == ["a", "b"]
+    assert SearchPlacesArgs.model_validate({"queries": {"intent": "one"}}).queries == [{"intent": "one"}]
     with pytest.raises(ValidationError):
-        SearchPlacesArgs.model_validate({"intent": "x", "category": "spaceport"})
+        PlaceQueryArgs.model_validate({"intent": "x", "category": "spaceport"})
     with pytest.raises(ValidationError):
-        SearchPlacesArgs.model_validate({"intent": "x", "open_at": "late"})
+        PlaceQueryArgs.model_validate({"intent": "x", "open_at": "late"})
     with pytest.raises(ValidationError):
-        SearchPlacesArgs.model_validate({"category": "cafe"})
+        SearchPlacesArgs.model_validate({"category": "cafe"})  # no intent and no queries: nothing to run
     assert SearchEventsArgs.model_validate({"interests": "music, art"}).interests == ["music", "art"]
 
 
@@ -254,3 +263,24 @@ def test_fix_line_quotes_the_offending_prose() -> None:
     assert line.startswith('Fix: stop 1: rewrite why without "45-minute", "2 km", "₹300", "6pm"')
     assert 'plan: rewrite summary_note without numbers or number words: "Two hours of fun"' in line
     assert "stop 2: arrive before the event starts" in line and "\n" not in line
+
+
+async def test_batched_search_groups_results_and_lists_each_candidate_once() -> None:
+    from app.graph.tools import run_search_places
+    from app.providers.fixture import FixtureGeocoder
+
+    deps = make_deps()
+
+    location = (await FixtureGeocoder().resolve("Bangalore"))[0]
+    ctx = make_ctx(location=location)
+    env = ToolEnv(deps=deps, ctx=ctx, prefs=make_prefs(), enforced=[], original=[], ledger={})
+    args = SearchPlacesArgs.model_validate({"queries": [
+        {"intent": "quiet cafe", "category": "cafe"}, {"intent": "cafe with books", "category": "cafe"},
+        {"intent": "park", "category": "park"}], "reason": "batch"})
+    outcome = await run_search_places(args, env)
+    body = json.loads(outcome.content)
+    assert [r["query"] for r in body["results"]] == ["quiet cafe", "cafe with books", "park"]
+    listed = [c["id"] for r in body["results"] for c in r["candidates"]]
+    assert len(listed) == len(set(listed)) == len(outcome.candidates)
+    assert any(r.get("also") for r in body["results"][1:2])  # overlapping cafe results are referenced, not repeated
+    assert env.queries_used == 3 and outcome.data and outcome.data["queries"] == 3

@@ -206,3 +206,43 @@ def test_cerebras_param_rules_and_construction(monkeypatch: pytest.MonkeyPatch) 
 
     model = get_chat_model("cerebras:gpt-oss-120b", "agent", settings)  # built directly, not via init_chat_model
     assert isinstance(model, ChatCerebras) and model.model_name == "gpt-oss-120b"
+
+
+def test_production_chain_retry_settings_and_structured_schema() -> None:
+    settings = fixture_settings()
+    cerebras = get_spec("cerebras:gpt-oss-120b")
+    groq = get_spec("groq:openai/gpt-oss-120b")
+    assert provider_kwargs(cerebras, "agent", settings)["max_retries"] == 0  # a 429 goes straight to Groq
+    assert provider_kwargs(groq, "agent", settings)["max_retries"] == 1
+    as_dict = registry.structured_schema(cerebras, LLMParse)
+    assert isinstance(as_dict, dict) and as_dict["title"] == "LLMParse"
+    assert "$defs" not in json.dumps(as_dict) and "$ref" not in json.dumps(as_dict)
+    assert registry.structured_schema(groq, LLMParse) is LLMParse
+
+
+async def test_cerebras_structured_parse_has_no_serializer_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    import warnings
+
+    import httpx
+    from langchain_cerebras import ChatCerebras
+
+    from app.domain.schemas import PlanRequest
+    from app.graph.prompts import parse_messages
+    from tests.factories import NOW
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        content = json.dumps({"city": "Pune", "energy": "low", "hard_constraints": [{"kind": "diet", "value": "vegan"}]})
+        return httpx.Response(200, json={
+            "id": "x", "object": "chat.completion", "created": 1, "model": "gpt-oss-120b",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+
+    llm = ChatCerebras(model="gpt-oss-120b", api_key="test-key",  # type: ignore[arg-type]
+                       http_async_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(registry, "get_chat_model", lambda *a, **k: llm)
+    runnable = build_structured_runnable(["cerebras:gpt-oss-120b"], LLMParse, fixture_settings())
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = await runnable.ainvoke(parse_messages(PlanRequest(free_text="Pune, vegan"), NOW))
+    assert isinstance(out["parsed"], LLMParse) and out["parsed"].hard_constraints[0].value == "vegan"
+    assert not [w for w in caught if "PydanticSerializationUnexpectedValue" in str(w.message)]

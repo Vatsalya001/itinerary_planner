@@ -310,6 +310,24 @@ def structured_method(spec: ModelSpec) -> Literal["json_schema", "function_calli
     return "function_calling" if spec.params.get("structured_output") == "function_calling" else "json_schema"
 
 
+# Providers built on langchain-openai. Given a Pydantic class, their json_schema path calls the OpenAI SDK's
+# beta parse(), whose model_dump() emits "PydanticSerializationUnexpectedValue ... field_name='parsed'" on every
+# call. A plain JSON-schema dict avoids that path; _tag_structured validates the dict into the class.
+_OPENAI_COMPATIBLE = {"cerebras", "openai", "xai"}
+
+
+def structured_schema(spec: ModelSpec, schema: type[Any]) -> Any:
+    if spec.provider not in _OPENAI_COMPATIBLE or not hasattr(schema, "model_json_schema"):
+        return schema
+    from langchain_core.utils.json_schema import dereference_refs
+
+    raw = schema.model_json_schema()
+    inlined = dereference_refs(raw)
+    inlined.pop("$defs", None)
+    inlined.setdefault("title", schema.__name__)
+    return inlined
+
+
 def is_refusal(message: BaseMessage) -> bool:
     meta = message.response_metadata or {}
     if meta.get("stop_reason") == "refusal":
@@ -377,6 +395,11 @@ def _tag_structured(model_id: str, schema: type[Any]) -> Callable[[Any], dict[st
         if isinstance(raw, BaseMessage) and is_refusal(raw):
             raise ModelRefusalError(model_id)
         parsed = output.get("parsed")
+        if isinstance(parsed, dict) and hasattr(schema, "model_validate"):  # dict-schema providers (see below)
+            try:
+                parsed = schema.model_validate(parsed)
+            except ValueError:
+                parsed = None
         if parsed is None and isinstance(raw, BaseMessage):
             parsed = _json_from_text(raw, schema)
         if parsed is None:
@@ -439,7 +462,8 @@ def build_structured_runnable(model_ids: Sequence[str], schema: type[Any], setti
     for model_id, role in zip(model_ids, roles, strict=True):
         spec = get_spec(model_id)
         model = get_chat_model(model_id, purpose, settings, role=role)
-        structured = model.with_structured_output(schema, method=structured_method(spec), include_raw=True)
+        structured = model.with_structured_output(structured_schema(spec, schema), method=structured_method(spec),
+                                                  include_raw=True)
         chains.append(RunnableLambda(_prepare_messages(spec))
                       | structured.with_config(metadata={METADATA_KEY: model_id})
                       | RunnableLambda(_tag_structured(model_id, schema)))

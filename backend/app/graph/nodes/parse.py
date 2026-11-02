@@ -1,5 +1,8 @@
 """parse_preferences: LLM structured output merged with the rules parser.
 
+Requests without free text skip the LLM call entirely: their fields are authoritative and the rules parse
+covers them (recorded in the trace as ``rules_reason: "structured_request"``; not a degradation).
+
 The LLM may only add hard constraints (merge_parse unions them with the rules parse and the raw request).
 Any failure (timeout, refusal, provider error, bad output, model not configured) falls back to the rules
 parse with the degradation "AI parser unavailable; used rule-based parsing". The baseline never calls an LLM.
@@ -157,13 +160,19 @@ async def parse_preferences(state: PlannerState, runtime: Runtime[RunContext]) -
         rules = parse_rules(request, rc.deps.now())
         llm_outcome: ParseOutcome | None = None
         answered: str | None = None
-        if not is_baseline(model_id):
+        # Structured requests need no LLM: the fields are authoritative and the rules parse covers them, which
+        # saves a model call (the production model allows only a few requests per minute).
+        structured = not (request.free_text or "").strip()
+        rules_reason = "baseline" if is_baseline(model_id) else "structured_request" if structured else None
+        if rules_reason is None:
             llm_outcome, usage, answered, failure = await llm_parse(request, rc, model_id)
             if failure is not None:
                 degradations = degrade(tracer, "parse_preferences", PARSER_DEGRADED, reason=failure)
         outcome = merge_parse(llm_outcome, rules, request)
         prefs = outcome.preferences
-        info["summary"] = (f"{outcome.source} parse: city={prefs.city or '?'}, energy={prefs.energy.value}, "
-                           f"{len(prefs.hard_constraints)} hard constraint(s)")
-        info["data"] = {"source": outcome.source, "model": answered, "missing": outcome.missing}
+        why = {"structured_request": " (structured request, no LLM needed)", "baseline": " (no-LLM baseline)"}
+        info["summary"] = (f"{outcome.source} parse{why.get(rules_reason or '', '')}: city={prefs.city or '?'}, "
+                           f"energy={prefs.energy.value}, {len(prefs.hard_constraints)} hard constraint(s)")
+        info["data"] = {"source": outcome.source, "model": answered, "missing": outcome.missing,
+                        "rules_reason": rules_reason}
     return {"parse": dump(outcome), "usage": usage, "degradations": degradations, "route": "resolve_location"}

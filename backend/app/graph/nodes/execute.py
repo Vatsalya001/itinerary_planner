@@ -31,6 +31,7 @@ from app.graph.state import (
 from app.graph.tools import (
     ARG_MODELS,
     CHECK_PLAN,
+    QUERIES_KEY,
     SEARCH_EVENTS,
     SEARCH_PLACES,
     SUBMIT_PLAN,
@@ -108,7 +109,8 @@ async def run_tools(state: PlannerState, runtime: Runtime[RunContext]) -> dict[s
     env = ToolEnv(deps=rc.deps, ctx=get_ctx(state), prefs=get_prefs(state),
                   enforced=get_constraints(state, "enforced"), original=get_constraints(state, "original"),
                   ledger=get_ledger(state), places_mode=state.get("places_mode", "live"),  # type: ignore[arg-type]
-                  events_failed=bool(state.get("events_failed")))
+                  events_failed=bool(state.get("events_failed")),
+                  queries_used=int((state.get("tool_exec") or {}).get(QUERIES_KEY, 0)))
     requested: Counter[str] = Counter(state.get("tool_calls") or {})
     executed: Counter[str] = Counter(state.get("tool_exec") or {})
     kinds: Counter[str] = Counter(state.get("protocol_error_kinds") or {})
@@ -197,6 +199,7 @@ async def run_tools(state: PlannerState, runtime: Runtime[RunContext]) -> dict[s
                            + ("; plan submitted" if pending else ""))
         info["data"] = {"ledger_size": len(env.ledger), "places_mode": env.places_mode}
 
+    executed[QUERIES_KEY] = env.queries_used
     turns_left = rc.deps.settings.max_agent_turns - int(state.get("agent_turns") or 0)
     messages = [m.model_copy(update={"content": with_turns_left(str(m.content), turns_left)}) for m in messages]
     has_places = any(c.kind == "place" for c in env.ledger.values())

@@ -62,7 +62,7 @@ async def test_soft_deadline_skips_the_agent() -> None:
     result, events = await collect(request_for("assignment_example"), deps)
     assert time.perf_counter() - t0 < 5
     assert result.status == "fallback" and result.mode == "deterministic"
-    assert AGENT_NO_TIME in result.degradations and PARSER_DEGRADED in result.degradations
+    assert AGENT_NO_TIME in result.degradations and PARSER_DEGRADED not in result.degradations  # no LLM parse
     assert "plan_agent" not in nodes_run(events)
     assert_trace_integrity(events)
     assert_plan_sound(result)
@@ -206,13 +206,16 @@ def _call(name: str, args: dict[str, Any], call_id: str) -> dict[str, Any]:
 async def test_protocol_errors_are_counted_and_recovered(monkeypatch: pytest.MonkeyPatch) -> None:
     turn = AIMessage(content="", tool_calls=[
         _call("book_table", {"reason": "book it"}, "c1"),
-        _call("search_places", {"intent": "cafe", "category": "spaceport", "reason": "x"}, "c2"),
-        _call("search_places", {"category": "cafe", "reason": "missing intent"}, "c3"),
+        # a batch with two bad queries: the good ones still run, one schema_invalid for the call
+        _call("search_places", {"queries": [
+            {"intent": "cafe", "category": "spaceport"},
+            {"intent": "quiet vegetarian restaurant", "category": "restaurant"},
+            {"category": "cafe"},
+            {"intent": "live music venue", "category": "live_music_venue"}], "reason": "a"}, "c2"),
+        _call("search_places", {"category": "cafe", "reason": "missing intent"}, "c3"),  # nothing to run
         _call("estimate_travel", {"candidate_ids": ["fx:nope", "fx:nada"], "reason": "x"}, "c4"),
-        _call("search_places", {"intent": "quiet vegetarian restaurant", "category": "restaurant", "reason": "a"}, "c5"),
-        _call("search_places", {"intent": "quiet cafe", "category": "cafe", "reason": "b"}, "c6"),
-        _call("search_places", {"intent": "live music venue", "category": "live_music_venue", "reason": "c"}, "c7"),
-        _call("search_places", {"intent": "park for a walk", "category": "park", "reason": "d" * 300}, "c8"),
+        # the old single-query shape is still accepted
+        _call("search_places", {"intent": "park for a walk", "category": "park", "reason": "d" * 300}, "c5"),
     ], invalid_tool_calls=[{"name": "search_places", "args": "{not json", "id": "c9", "error": "bad json",
                             "type": "invalid_tool_call"}])
     _use_model(monkeypatch, [turn])
@@ -225,23 +228,48 @@ async def test_protocol_errors_are_counted_and_recovered(monkeypatch: pytest.Mon
     codes = [(e.tool, (e.data or {}).get("code")) for e in events if e.type == "tool_failed"]
     assert ("book_table", "UNKNOWN_TOOL") in codes and ("search_places", "MALFORMED_ARGS") in codes
     assert ("search_places", "SCHEMA_INVALID") in codes and ("estimate_travel", "UNKNOWN_ID") in codes
+    batch = next(e for e in events if e.type == "tool_completed" and e.tool == "search_places")
+    assert batch.data and batch.data["queries"] == 2
     assert all(len(e.reason or "") <= 140 for e in events)
     assert result.status == "complete" and result.mode == "agent"
     assert_plan_sound(result)
 
 
 async def test_tool_caps_are_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
-    intents = ["vegetarian restaurant", "cafe", "park", "live music venue", "bookstore", "art gallery", "dessert"]
+    intents = ["vegetarian restaurant", "cafe", "park", "live music venue"]
     turn = AIMessage(content="", tool_calls=[
         _call("search_places", {"intent": i, "reason": f"search {i}"}, f"s{n}") for n, i in enumerate(intents)])
     _use_model(monkeypatch, [turn])
     result, events = await collect(request_for("assignment_example"), make_deps())
     assert_trace_integrity(events)
     capped = [e for e in events if e.type == "tool_failed" and (e.data or {}).get("code") == "CAP_REACHED"]
-    assert len(capped) == 1
-    assert agent_tools(events)["search_places"] == 7
+    assert len(capped) == 1  # three search_places calls per run
+    assert agent_tools(events)["search_places"] == 4
     data = finalize_data(events)
     assert data["protocol_errors"] == 1 and data["protocol_error_kinds"] == {"cap_reached": 1}
+    assert result.status == "complete"
+
+
+async def test_query_budget_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
+    def q(intent: str, category: str) -> dict[str, str]:
+        return {"intent": intent, "category": category}
+
+    five = [q("vegetarian restaurant", "restaurant"), q("quiet cafe", "cafe"), q("park", "park"),
+            q("live music", "live_music_venue"), q("bookstore", "bookstore")]
+    four = [q("art gallery", "art_gallery"), q("dessert", "dessert"), q("museum", "museum"), q("garden", "garden")]
+    turn = AIMessage(content="", tool_calls=[
+        _call("search_places", {"queries": five, "reason": "five at once"}, "b1"),  # 4 run, 1 skipped
+        _call("search_places", {"queries": four, "reason": "four more"}, "b2"),  # 4 run: budget of 8 used
+        _call("search_places", {"queries": [q("lake", "lake")], "reason": "one more"}, "b3"),  # nothing left
+    ])
+    _use_model(monkeypatch, [turn])
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert_trace_integrity(events)
+    ran = [(e.data or {}).get("queries") for e in events if e.type == "tool_completed" and e.tool == "search_places"]
+    assert ran == [4, 4]
+    capped = [e for e in events if e.type == "tool_failed" and (e.data or {}).get("code") == "CAP_REACHED"]
+    assert len(capped) == 1
+    assert finalize_data(events)["protocol_error_kinds"] == {"schema_invalid": 1, "cap_reached": 1}
     assert result.status == "complete"
 
 
@@ -317,7 +345,7 @@ async def test_deadline_after_a_clean_check_plan_uses_the_checked_draft(monkeypa
 
     def fake_get(model_id: str, purpose: str, settings: Any, *, role: str = "primary") -> Any:
         if purpose == "agent":
-            return _HangsAfterCheck(model_id=model_id, role=role)
+            return _HangsAfterCheck(model_id=model_id, role=role, check_first=True)
         return original(model_id, purpose, settings, role=role)  # type: ignore[arg-type]
 
     monkeypatch.setattr(registry_module, "get_chat_model", fake_get)
@@ -429,3 +457,47 @@ async def test_parse_node_adds_no_constraints_outside_merge_parse(monkeypatch: p
     assert seen and result.preferences is not None
     keys = {c.key for c in result.preferences.hard_constraints}
     assert keys == {c.key for c in seen[-1].preferences.hard_constraints}
+
+
+async def test_structured_requests_skip_the_llm_parse() -> None:
+    from app.domain.schemas import PlanRequest
+
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    parse = next(e for e in events if e.type == "node_completed" and e.node == "parse_preferences")
+    assert parse.data and parse.data["rules_reason"] == "structured_request" and parse.data["source"] == "rules"
+    assert not result.degradations and finalize_data(events)["usage"]["llm_calls"] == 2
+    free = PlanRequest(free_text="Bangalore, 4 hours from 3pm, ₹2000, tired, vegetarian, love food and music")
+    _, free_events = await collect(free, make_deps())
+    parse = next(e for e in free_events if e.type == "node_completed" and e.node == "parse_preferences")
+    assert parse.data and parse.data["rules_reason"] is None and parse.data["source"] == "llm"
+    assert finalize_data(free_events)["usage"]["llm_calls"] == 3  # parse + search + submit
+
+
+class _RateLimitedSecondCall(ScriptedAgentModel):
+    """The primary answers its first agent call, then hits a 429 (Cerebras trial: 5 requests per minute)."""
+
+    async def _agenerate(self, messages: list[BaseMessage], stop: list[str] | None = None,
+                         run_manager: Any = None, **kwargs: Any) -> Any:
+        if self.mode == "agent" and self.role == "primary" and any(isinstance(m, AIMessage) for m in messages):
+            raise RuntimeError("Error code: 429 - rate limit exceeded")
+        return await super()._agenerate(messages, stop, run_manager, **kwargs)
+
+
+async def test_rate_limit_on_the_primary_mid_run_falls_through_and_sticks(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = registry_module.get_chat_model
+    calls: list[str] = []
+
+    def fake_get(model_id: str, purpose: str, settings: Any, *, role: str = "primary") -> Any:
+        if purpose == "agent":
+            calls.append(role)
+            return _RateLimitedSecondCall(model_id=model_id, role=role)
+        return original(model_id, purpose, settings, role=role)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry_module, "get_chat_model", fake_get)
+    result, events = await collect(request_for("assignment_example"),
+                                   make_deps(primary_model="fake:agent", fallback_model="fake:secondary"))
+    assert_trace_integrity(events)
+    assert result.status == "complete" and result.mode == "agent" and result.model == "fake:secondary"
+    switch = [e for e in events if e.type == "degraded" and "switched to fake:secondary" in (e.summary or "")]
+    assert len(switch) == 1
+    assert finalize_data(events)["agent_turns"] == 2

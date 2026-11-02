@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.deps import Deps
 from app.domain.categories import currency_symbol, is_category, load_categories
@@ -44,9 +44,13 @@ SUBMIT_PLAN = "submit_plan"
 TOOL_NAMES = (SEARCH_PLACES, SEARCH_EVENTS, ESTIMATE_TRAVEL, CHECK_PLAN, SUBMIT_PLAN)
 
 # Per-run caps (submit_plan's cap is settings.max_submit_attempts).
-TOOL_CAPS: dict[str, int] = {SEARCH_PLACES: 6, SEARCH_EVENTS: 2, ESTIMATE_TRAVEL: 4, CHECK_PLAN: 4}
+TOOL_CAPS: dict[str, int] = {SEARCH_PLACES: 3, SEARCH_EVENTS: 2, ESTIMATE_TRAVEL: 4, CHECK_PLAN: 4}
+MAX_QUERIES_PER_CALL = 4  # search_places batches several queries into one call (one model request)
+MAX_QUERIES_PER_RUN = 8
+QUERIES_KEY = "search_places_queries"  # tool_exec key that counts executed queries
 
-MAX_RESULTS = 8
+MAX_RESULTS = 8  # per query when a call has one query
+BATCH_RESULTS = 6  # per query when a call has several (keeps the tool result, and every later prompt, small)
 REASON_MAX = 140
 NAME_MAX = 120
 NEAR_RADIUS_M = 2500
@@ -103,20 +107,30 @@ def tool_schemas() -> list[dict[str, Any]]:
         {"type": "function", "function": {
             "name": SEARCH_PLACES,
             "description": (
-                "Search real places in the plan's city. Returns up to 8 candidates with ID, name, category, "
-                "distance, price with its basis, rating, hours on the target day, diet and wheelchair evidence, "
-                "indoor/seated/effort, likely-busy windows and the allowed visit length. "
-                f"At most {TOOL_CAPS[SEARCH_PLACES]} calls per run."),
+                f"Search real places in the plan's city. Send 1-{MAX_QUERIES_PER_CALL} queries in ONE call (for "
+                "example a meal, a cafe and a walk together). Returns candidates grouped per query with ID, name, "
+                "category, distance, price with its basis, rating, hours on the target day, diet and wheelchair "
+                "evidence, indoor/seated/effort, likely-busy windows and the allowed visit length. "
+                f"At most {TOOL_CAPS[SEARCH_PLACES]} calls and {MAX_QUERIES_PER_RUN} queries per run."),
             "parameters": {"type": "object", "properties": {
-                "intent": {"type": "string", "description": "What to look for, e.g. 'quiet vegetarian cafe'"},
-                "category": {"type": "string", "enum": categories, "description": "Optional canonical category"},
-                "near_candidate_id": {"type": "string",
-                                      "description": "Optional: search around this previously returned candidate"},
-                "max_price_level": {"type": "integer", "minimum": 0, "maximum": 4,
-                                    "description": "Optional: 0 free .. 4 very expensive"},
-                "open_at": {"type": "string", "description": "Optional local time HH:MM the place must be open"},
+                "queries": {
+                    "type": "array", "minItems": 1, "maxItems": MAX_QUERIES_PER_CALL,
+                    "description": "The searches to run, all in this one call",
+                    "items": {"type": "object", "properties": {
+                        "intent": {"type": "string",
+                                   "description": "What to look for, e.g. 'quiet vegetarian cafe'"},
+                        "category": {"type": "string", "enum": categories,
+                                     "description": "Optional canonical category"},
+                        "near_candidate_id": {"type": "string", "description":
+                                              "Optional: search around this previously returned candidate"},
+                        "max_price_level": {"type": "integer", "minimum": 0, "maximum": 4,
+                                            "description": "Optional: 0 free .. 4 very expensive"},
+                        "open_at": {"type": "string",
+                                    "description": "Optional local time HH:MM the place must be open"},
+                    }, "required": ["intent"]},
+                },
                 "reason": _REASON,
-            }, "required": ["intent", "reason"]},
+            }, "required": ["queries", "reason"]},
         }},
         {"type": "function", "function": {
             "name": SEARCH_EVENTS,
@@ -185,7 +199,14 @@ class _Args(BaseModel):
         return clip_reason(v)
 
 
-class SearchPlacesArgs(_Args):
+QUERY_KEYS = ("intent", "category", "near_candidate_id", "max_price_level", "open_at")
+
+
+class PlaceQueryArgs(BaseModel):
+    """One search inside a search_places call."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
     intent: str = Field(min_length=1, max_length=200)
     category: str | None = None
     near_candidate_id: str | None = Field(default=None, max_length=120)
@@ -213,6 +234,27 @@ class SearchPlacesArgs(_Args):
         if v is not None and parse_hhmm(v) is None:
             raise ValueError("open_at must be a local time like 16:30")
         return v
+
+
+class SearchPlacesArgs(_Args):
+    """``queries`` holds the raw query objects; each is validated on its own (one bad query doesn't sink the
+    batch). The old single-query shape (``intent`` etc. at the top level) is still accepted for small models."""
+
+    queries: list[Any] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _shape(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        out = dict(data)
+        queries = _maybe_json(out.get("queries"))
+        if isinstance(queries, Mapping):
+            queries = [queries]
+        if not queries and out.get("intent"):
+            queries = [{k: out[k] for k in QUERY_KEYS if k in out}]
+        out["queries"] = queries if isinstance(queries, list) else []
+        return out
 
 
 class SearchEventsArgs(_Args):
@@ -403,6 +445,7 @@ class ToolEnv:
     ledger: dict[str, Candidate]
     places_mode: PlacesMode = "live"
     events_failed: bool = False
+    queries_used: int = 0  # search_places queries executed this run (cap MAX_QUERIES_PER_RUN)
 
 
 @dataclass
@@ -459,65 +502,136 @@ def _open_at_min(text: str | None, ctx: WorldContext) -> int | None:
     return value
 
 
-async def run_search_places(args: SearchPlacesArgs, env: ToolEnv) -> ToolOutcome:
+async def _search_one(q: PlaceQueryArgs, env: ToolEnv, limit: int
+                      ) -> tuple[list[Candidate], tuple[float, float] | None, str | None]:
+    """Run one query: (candidates, distance centre, error for the model). Falls back from the live provider to
+    the curated snapshot (sticky for the run); sets ``env.places_mode`` to "unavailable" when both fail."""
     ctx = env.ctx
     lat, lng, radius = search_bias(env.prefs, ctx)
-    if args.near_candidate_id:
-        anchor = env.ledger.get(args.near_candidate_id)
+    if q.near_candidate_id:
+        anchor = env.ledger.get(q.near_candidate_id)
         if anchor is None:
-            return error_outcome(f"near_candidate_id '{args.near_candidate_id[:60]}' was not returned by a tool "
-                                 "in this run; use an ID from earlier results or omit it",
-                                 protocol=True, code="UNKNOWN_ID")
+            return [], None, (f"near_candidate_id '{q.near_candidate_id[:60]}' was not returned by a tool in this "
+                              "run; use an ID from earlier results or omit it")
         lat, lng, radius = anchor.lat, anchor.lng, NEAR_RADIUS_M
     extra: dict[str, Any] = {}
-    if env.prefs.neighbourhood and "neighbourhood" in PlaceQuery.model_fields and not args.near_candidate_id:
+    if env.prefs.neighbourhood and "neighbourhood" in PlaceQuery.model_fields and not q.near_candidate_id:
         extra["neighbourhood"] = env.prefs.neighbourhood[:80]  # providers that support it bias to the area
-    query = PlaceQuery(intent=args.intent, category=args.category, near_lat=lat, near_lng=lng, radius_m=radius,
-                       max_price_level=args.max_price_level, open_at_min=_open_at_min(args.open_at, ctx),
-                       limit=MAX_RESULTS, **extra)
-    if env.places_mode == "unavailable":
+    query = PlaceQuery(intent=q.intent, category=q.category, near_lat=lat, near_lng=lng, radius_m=radius,
+                       max_price_level=q.max_price_level, open_at_min=_open_at_min(q.open_at, ctx), limit=limit,
+                       **extra)
+    found: list[Candidate] = []
+    while env.places_mode != "unavailable":
+        provider = env.deps.places if env.places_mode == "live" else env.deps.snapshot
+        try:
+            assert provider is not None
+            found = await provider.search(query, ctx)
+            break
+        except ProviderError:
+            snapshot = env.deps.snapshot
+            if env.places_mode == "live" and snapshot is not None and snapshot.covers(ctx.location):
+                env.places_mode = "snapshot"
+            else:
+                env.places_mode = "unavailable"
+    found = [c for c in found if c.kind == "place" or c.event_date == ctx.date][:limit]
+    centre = (lat, lng) if lat is not None and lng is not None else (ctx.location.lat, ctx.location.lng)
+    return found, centre, None
+
+
+async def run_search_places(args: SearchPlacesArgs, env: ToolEnv) -> ToolOutcome:
+    """One call, 1-4 queries, results grouped per query. Each candidate is listed once in full (later queries
+    that also matched it name it under "also"). Over-budget queries are skipped and reported."""
+    ctx = env.ctx
+    started_mode = env.places_mode
+    if started_mode == "unavailable":
         return ToolOutcome(content=dumps({"error": PLACES_UNAVAILABLE}), status="error",
                            summary=PLACES_UNAVAILABLE, provider_failed=True, data={"code": "PLACES_UNAVAILABLE"})
-    degradations: list[str] = []
-    provider = env.deps.places if env.places_mode == "live" else env.deps.snapshot
-    recovered = False
-    found: list[Candidate] = []
-    try:
-        assert provider is not None
-        found = await provider.search(query, ctx)
-    except ProviderError:
-        snapshot = env.deps.snapshot
-        if env.places_mode == "live" and snapshot is not None and snapshot.covers(ctx.location):
-            env.places_mode = "snapshot"
-            degradations.append(SNAPSHOT_USED)
-            recovered = True
-            try:
-                found = await snapshot.search(query, ctx)
-                provider = snapshot
-            except ProviderError:
-                env.places_mode = "unavailable"
-        else:
-            env.places_mode = "unavailable"
+    budget = MAX_QUERIES_PER_RUN - env.queries_used
+    if budget <= 0:
+        return error_outcome(f"search_places can run at most {MAX_QUERIES_PER_RUN} queries per run. Work with the "
+                             "candidates you already have.", protocol=True, code="CAP_REACHED")
+    raw_queries = list(args.queries)
+    protocol_kind: str | None = None
+    skipped: list[str] = []
+    if len(raw_queries) > MAX_QUERIES_PER_CALL:
+        skipped.append(f"{len(raw_queries) - MAX_QUERIES_PER_CALL} query(ies) over the {MAX_QUERIES_PER_CALL}-per-call "
+                       "limit were not run")
+        protocol_kind = "schema_invalid"
+        raw_queries = raw_queries[:MAX_QUERIES_PER_CALL]
+    if len(raw_queries) > budget:
+        skipped.append(f"{len(raw_queries) - budget} query(ies) over the {MAX_QUERIES_PER_RUN}-per-run limit were "
+                       "not run")
+        protocol_kind = protocol_kind or "cap_reached"
+        raw_queries = raw_queries[:budget]
+    limit = MAX_RESULTS if len(raw_queries) == 1 else BATCH_RESULTS
+
+    results: list[dict[str, Any]] = []
+    candidates: list[Candidate] = []
+    listed: set[str] = set()
+    ran = 0
+    for raw in raw_queries:
+        label = str(raw.get("intent", ""))[:60] if isinstance(raw, Mapping) else ""
+        try:
+            q = PlaceQueryArgs.model_validate(raw if isinstance(raw, Mapping) else {})
+        except ValidationError as exc:
+            results.append({"query": label, "error": f"invalid query: {validation_errors_text(exc)}"})
+            protocol_kind = protocol_kind or "schema_invalid"
+            continue
+        env.queries_used += 1
+        found, centre, error = await _search_one(q, env, limit)
+        if error is not None:
+            results.append({"query": q.intent[:60], "error": error})
+            protocol_kind = protocol_kind or "unknown_id"
+            continue
         if env.places_mode == "unavailable":
-            return ToolOutcome(content=dumps({"error": PLACES_UNAVAILABLE + ". Do not invent places."}),
-                               status="error", summary=PLACES_UNAVAILABLE, provider_failed=True,
-                               degradations=[PLACES_UNAVAILABLE], data={"code": "PLACES_UNAVAILABLE"})
-    found = [c for c in found if c.kind == "place" or c.event_date == ctx.date][:MAX_RESULTS]
-    centre = (lat, lng) if lat is not None and lng is not None else (ctx.location.lat, ctx.location.lng)
-    body: dict[str, Any] = {"count": len(found), "candidates": [compact_candidate(c, centre) for c in found]}
+            break
+        ran += 1
+        fresh = [c for c in found if c.id not in listed]
+        fresh_ids = {c.id for c in fresh}
+        listed.update(fresh_ids)
+        candidates += fresh
+        entry: dict[str, Any] = {"query": q.intent[:60], "count": len(found),
+                                 "candidates": [compact_candidate(c, centre) for c in fresh]}
+        also = [c.id for c in found if c.id not in fresh_ids]
+        if also:
+            entry["also"] = also
+        results.append(entry)
+
+    degradations: list[str] = []
+    recovered = started_mode == "live" and env.places_mode == "snapshot"
+    if recovered:
+        degradations.append(SNAPSHOT_USED)
+    if env.places_mode == "unavailable" and not candidates:
+        return ToolOutcome(content=dumps({"error": PLACES_UNAVAILABLE + ". Do not invent places."}),
+                           status="error", summary=PLACES_UNAVAILABLE, provider_failed=True,
+                           degradations=[PLACES_UNAVAILABLE], data={"code": "PLACES_UNAVAILABLE"})
+    if ran == 0:
+        return error_outcome("No query ran. Send queries: [{intent, category?, ...}] with candidate IDs from this "
+                             "run only. " + " ".join(str(r.get("error", "")) for r in results)[:300],
+                             protocol=True, code=(protocol_kind or "schema_invalid").upper())
+    body: dict[str, Any] = {"results": results}
     if env.places_mode == "snapshot":
         body["note"] = "Live place data is unavailable; these come from a curated snapshot. Hours may be unknown."
+    if env.places_mode == "unavailable":
+        body["note"] = PLACES_UNAVAILABLE + "; later queries were not run."
+        degradations.append(PLACES_UNAVAILABLE)
+    if skipped:
+        body["skipped"] = skipped
+    provider_name = env.deps.snapshot.name if env.places_mode == "snapshot" and env.deps.snapshot else \
+        getattr(env.deps.places, "name", "places")
+    bits = [f"{ran} quer{'y' if ran == 1 else 'ies'}, {len(candidates)} places ({provider_name})"]
     diet = next((c.value for c in env.enforced if c.kind == "diet"), None)
-    bits = [f"{len(found)} places for '{args.intent[:60]}' ({getattr(provider, 'name', 'places')})"]
     if diet:
-        confirmed = sum(1 for c in found if c.diet.get(diet) is not None and c.diet[diet].value == "confirmed")
+        confirmed = sum(1 for c in candidates if c.diet.get(diet) is not None and c.diet[diet].value == "confirmed")
         bits.append(f"{confirmed} with {diet} evidence")
-    busy = sum(1 for c in found if likely_busy(c, ctx.start_min, ctx.end_min))
+    busy = sum(1 for c in candidates if likely_busy(c, ctx.start_min, ctx.end_min))
     if busy:
         bits.append(f"{busy} likely busy")
-    return ToolOutcome(content=dumps(body), candidates=found, summary=", ".join(bits), recovered=recovered,
-                       degradations=degradations, data={"count": len(found), "recovered": recovered} if recovered
-                       else {"count": len(found)})
+    data: dict[str, Any] = {"count": len(candidates), "queries": ran}
+    if recovered:
+        data["recovered"] = True
+    return ToolOutcome(content=dumps(body), candidates=candidates, summary=", ".join(bits), recovered=recovered,
+                       degradations=degradations, data=data, protocol_kind=protocol_kind)
 
 
 async def run_search_events(args: SearchEventsArgs, env: ToolEnv) -> ToolOutcome:

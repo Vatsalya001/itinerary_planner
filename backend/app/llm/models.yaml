@@ -50,7 +50,7 @@ candidates:
     params:
       temperature: 0
       max_tokens: 8192
-      max_retries: 1
+      max_retries: 0  # a 429 (5 RPM on the trial) goes straight to the Groq fallback instead of retrying
       request_timeout_s: 60
       reasoning_effort: {parse: low, agent: medium, judge: medium}
     pricing_per_mtok: {input: 0, output: 0}

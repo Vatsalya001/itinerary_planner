@@ -112,7 +112,8 @@ async def test_sse_brief_stream_contract_share_and_grounding(client_for: Callabl
         result = assert_stream_contract(events)
         assert result["status"] == "complete" and result["mode"] == "agent" and result["share_id"]
         tool_calls = [e for e in events if e["type"] == "tool_called" and e.get("node") == "tools"]
-        assert {e["tool"] for e in tool_calls} >= {"search_places", "check_plan", "submit_plan"}
+        # check_plan is optional since the batched-tool redesign; search and submit are always used
+        assert {e["tool"] for e in tool_calls} >= {"search_places", "submit_plan"}
         assert all(e.get("reason") for e in tool_calls), "every agent tool call carries the model's reason"
         shared = await client.get(f"/api/plans/{result['share_id']}")
         assert shared.status_code == 200

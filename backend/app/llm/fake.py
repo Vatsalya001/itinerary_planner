@@ -5,11 +5,11 @@
 callbacks and graph nodes as a hosted model. It reads everything it needs from the JSON payloads defined
 in app.graph.prompts and from ToolMessage artifacts; it never sees the real objects.
 
-Policy (agent mode):
-  turn 1   search_places for each default query (max 6) + search_events
-  turn 2   compose with the deterministic planner over the returned candidates, then estimate_travel +
-           check_plan on that draft (or a one-sentence text reply when nothing fits)
-  turn 3+  submit_plan; after a rejected submission, re-compose and submit again
+Policy (agent mode), two model calls on the happy path:
+  turn 1   search_places with the default queries batched four per call (max 8 queries) + search_events
+  turn 2   compose with the deterministic planner over the returned candidates and submit_plan directly
+           (or a one-sentence text reply when nothing fits); after a rejected submission, re-compose and
+           submit again. With ``check_first`` (always under text_only_final_turn) it runs check_plan first.
 
 Faults (``settings.fault``): ``llm_timeout`` (never answers), ``llm_refusal`` (stop_reason "refusal"),
 ``primary_provider_503`` (primary role raises an HTTP-503-like error; ``fake:primary_503`` always does),
@@ -57,6 +57,7 @@ class ScriptedAgentModel(BaseChatModel):
     role: str = "primary"
     mode: str = "chat"  # chat | agent | parse
     tool_names: tuple[str, ...] = ()
+    check_first: bool = False  # dry-run with check_plan before submitting (always under text_only_final_turn)
 
     @property
     def _llm_type(self) -> str:
@@ -189,7 +190,8 @@ class ScriptedAgentModel(BaseChatModel):
             return self._submit_turn(prefs, ctx, enforced, ledger, turn, repair=False)
         if "submit_plan" in last_tools:
             return self._submit_turn(prefs, ctx, enforced, ledger, turn, repair=True)
-        if last_tools & {"search_places", "search_events"}:
+        if last_tools & {"search_places", "search_events"} and (
+                self.check_first or self.fault == "text_only_final_turn"):
             return self._check_turn(prefs, ctx, enforced, ledger, turn)
         return self._submit_turn(prefs, ctx, enforced, ledger, turn, repair=False)
 
@@ -206,15 +208,20 @@ class ScriptedAgentModel(BaseChatModel):
         if self.fault == "parser_omits_diet_and_agent_selects_nonveg":  # searches as if no diet was given
             prefs = prefs.model_copy(update={"hard_constraints": [c for c in prefs.hard_constraints
                                                                   if c.kind != "diet"]})
-        calls = []
-        for i, q in enumerate(default_queries(prefs, ctx)[:6]):
-            args: dict[str, Any] = {"intent": q.intent, "category": q.category,
-                                    "reason": f"Look for {q.intent} that fits the mood and constraints"}
+        queries: list[dict[str, Any]] = []
+        for q in default_queries(prefs, ctx)[:8]:  # the per-run query budget
+            item: dict[str, Any] = {"intent": q.intent, "category": q.category}
             if q.max_price_level is not None:
-                args["max_price_level"] = q.max_price_level
+                item["max_price_level"] = q.max_price_level
             if q.open_at_min is not None:
-                args["open_at"] = hhmm(q.open_at_min)
-            calls.append(_tool_call("search_places", args, f"call_{turn}_{i}"))
+                item["open_at"] = hhmm(q.open_at_min)
+            queries.append(item)
+        calls = []
+        for i in range(0, len(queries), 4):  # batched: up to four queries per search_places call
+            chunk = queries[i:i + 4]
+            calls.append(_tool_call("search_places", {
+                "queries": chunk, "reason": "Search for " + ", ".join(c["intent"] for c in chunk)[:120]},
+                f"call_{turn}_{i // 4}"))
         if payload.get("events_available"):
             calls.append(_tool_call("search_events", {
                 "interests": prefs.interests, "max_price": prefs.budget,
@@ -225,16 +232,9 @@ class ScriptedAgentModel(BaseChatModel):
         draft = self._compose(prefs, ctx, enforced, ledger)
         if draft is None:
             return AIMessage(content="I couldn't find a combination that meets every hard constraint and the budget.")
-        ids = [s.candidate_id for s in draft.stops]
-        calls = []
-        if len(ids) >= 2:
-            calls.append(_tool_call("estimate_travel", {"candidate_ids": ids,
-                                                        "reason": "Check the legs between the chosen stops"},
-                                    f"call_{turn}_travel"))
-        calls.append(_tool_call("check_plan", {**draft.model_dump(mode="json"),
-                                               "reason": "Dry-run the draft against budget, time and hours"},
-                                f"call_{turn}_check"))
-        return AIMessage(content="", tool_calls=calls)
+        return AIMessage(content="", tool_calls=[_tool_call("check_plan", {
+            **draft.model_dump(mode="json"), "reason": "Dry-run the draft against budget, time and hours"},
+            f"call_{turn}_check")])
 
     def _submit_turn(self, prefs: Any, ctx: Any, enforced: Any, ledger: dict[str, Any], turn: int, *,
                      repair: bool) -> AIMessage:

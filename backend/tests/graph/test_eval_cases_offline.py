@@ -63,7 +63,9 @@ async def test_assignment_example() -> None:
     assert all(c.status in {"pass", "warn", "unverified"} for c in result.checks)
     data = finalize_data(events)
     assert data["first_submit_valid"] is True and data["repairs"] == 0 and data["protocol_errors"] == 0
-    assert data["usage"]["llm_calls"] >= 3
+    # structured request: no parse call; one batched search turn and one submit turn
+    assert data["usage"]["llm_calls"] == 2 and data["agent_turns"] == 2
+    assert agent_tools(events)["search_places"] == 1 and "check_plan" not in agent_tools(events)
 
 
 async def test_city_alias_bengaluru() -> None:

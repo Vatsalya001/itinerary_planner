@@ -71,7 +71,10 @@ async def test_scripted_first_turn_searches_with_reasons() -> None:
     payload = agent_payload(make_prefs(constraints=["vegetarian"]), make_ctx(), [], {"search_places": 6}, True)
     reply = await model.ainvoke([agent_payload_message(payload)])
     names = [tc["name"] for tc in reply.tool_calls]
-    assert names.count("search_places") >= 3 and names[-1] == "search_events"
+    searches = [tc for tc in reply.tool_calls if tc["name"] == "search_places"]
+    assert 1 <= len(searches) <= 2 and names[-1] == "search_events"  # batched: up to four queries per call
+    assert all(1 <= len(tc["args"]["queries"]) <= 4 for tc in searches)
+    assert sum(len(tc["args"]["queries"]) for tc in searches) >= 3
     assert all(tc["args"]["reason"] for tc in reply.tool_calls)
 
 

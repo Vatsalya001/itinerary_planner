@@ -31,7 +31,7 @@ from app.graph.nodes.common import (
 )
 from app.graph.prompts import AGENT_SYSTEM_PROMPT, NUDGE_TEXT, agent_payload, agent_payload_message
 from app.graph.state import PlannerState, RunContext, get_constraints, get_ctx, get_prefs
-from app.graph.tools import SUBMIT_PLAN, TOOL_CAPS, tool_schemas
+from app.graph.tools import MAX_QUERIES_PER_RUN, SUBMIT_PLAN, TOOL_CAPS, tool_schemas
 from app.llm.registry import (
     METADATA_KEY,
     ModelRefusalError,
@@ -49,7 +49,8 @@ PRIMARY_SHARE = 0.6  # share of a turn's budget the primary gets when a fallback
 
 def _limits(state: PlannerState, rc: RunContext) -> dict[str, int]:
     settings = rc.deps.settings
-    return {**TOOL_CAPS, SUBMIT_PLAN: settings.max_submit_attempts, "max_turns": settings.max_agent_turns}
+    return {**TOOL_CAPS, "search_places_queries": MAX_QUERIES_PER_RUN, SUBMIT_PLAN: settings.max_submit_attempts,
+            "max_turns": settings.max_agent_turns}
 
 
 def _summary(turn: int, ai: AIMessage) -> str:
