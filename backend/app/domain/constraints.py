@@ -56,7 +56,7 @@ def map_constraint_text(text: str) -> list[Constraint]:
     found: list[Constraint] = []
     for pattern, kind, value in _RULES:
         if re.search(pattern, lowered):
-            c = Constraint(kind=kind, value=value, source_text=text)  # type: ignore[arg-type]
+            c = Constraint(kind=kind, value=value, source_text=text)  # type: ignore[arg-type,unused-ignore]
             if c not in found:
                 found.append(c)
     # vegan/jain imply vegetarian; keep only the strictest diet

@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     rate_limit_per_10min: int = 5
     rate_limit_per_day: int = 30
     max_body_bytes: int = 16_384
+    trust_proxy_headers: bool = False  # True behind Render/other proxies: client IP from X-Forwarded-For
+    share_ttl_days: int = 30
+    frontend_dist: str = "../frontend/dist"
 
     # Storage and observability
     database_url: str = "sqlite:///./data/app.db"

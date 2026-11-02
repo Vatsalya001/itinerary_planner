@@ -1,0 +1,119 @@
+# Per-city travel configuration for app.domain.travel.HeuristicTravel.
+#
+# Keys are lowercase city names; `aliases` lists other spellings. Lookup order: city name or alias
+# (lowercased) -> "default_IN" for other Indian cities -> "default" everywhere else.
+#
+# speeds_kmh:   average door-to-door speed per mode. Bangalore on a Saturday afternoon is slow.
+# pickup_min:   minutes to find/hail the vehicle before the ride starts.
+# motor_mode:   mode used for legs longer than the walking threshold ("auto" or "cab").
+# fares:        per mode, per vehicle: base fare covering `included_km`, then `per_km`.
+#               `source` says where the numbers came from; `as_of` is the date the tariff took effect
+#               (or the date of the estimate). Fares are always shown to users as estimates.
+#
+# Verification status (checked 2 November 2026 by web search only):
+#   * Bangalore, Mumbai and Delhi auto tariffs match multiple news reports of the notified fares. They were
+#     NOT checked against the official RTA/transport-department notification documents.
+#   * All cab fares and every default_* entry are estimates and are labelled "estimate (unverified)".
+
+bangalore:
+  aliases: [bengaluru, bangalore urban, bengaluru urban, blr]
+  speeds_kmh: {walk: 4.5, auto: 16, cab: 18}
+  pickup_min: {auto: 5, cab: 8}
+  motor_mode: auto
+  fares:
+    auto:
+      currency: INR
+      base: 36
+      included_km: 2.0
+      per_km: 18
+      source: "news reports of the Bengaluru Urban DTA revision (Deccan Herald, The South First, Jul-Aug 2025); not checked against the official notification"
+      as_of: "2025-08-01"
+    cab:
+      currency: INR
+      base: 100
+      included_km: 2.0
+      per_km: 24
+      source: "estimate (unverified)"
+      as_of: "2026-11-02"
+
+mumbai:
+  aliases: [bombay, greater mumbai, mumbai suburban]
+  speeds_kmh: {walk: 4.5, auto: 17, cab: 18}
+  pickup_min: {auto: 4, cab: 6}
+  motor_mode: auto
+  fares:
+    auto:
+      currency: INR
+      base: 27
+      included_km: 1.5
+      per_km: 18.22
+      source: "news reports of the MMRTA revision (Time Out Mumbai, ETV Bharat, Sep 2026); not checked against the official notification"
+      as_of: "2026-09-01"
+    cab:
+      currency: INR
+      base: 33
+      included_km: 1.5
+      per_km: 21.9
+      source: "news reports of the MMRTA black-and-yellow taxi revision (Sep 2026); not checked against the official notification"
+      as_of: "2026-09-01"
+
+delhi:
+  aliases: [new delhi, delhi ncr, nct of delhi]
+  speeds_kmh: {walk: 4.5, auto: 20, cab: 22}
+  pickup_min: {auto: 4, cab: 7}
+  motor_mode: auto
+  fares:
+    auto:
+      currency: INR
+      base: 30
+      included_km: 1.5
+      per_km: 11
+      source: "news reports of the Delhi transport department revision (Business Today, Oct 2022 / Jan 2023); not checked against the official notification"
+      as_of: "2023-01-11"
+    cab:
+      currency: INR
+      base: 100
+      included_km: 2.0
+      per_km: 20
+      source: "estimate (unverified)"
+      as_of: "2026-11-02"
+
+default_IN:
+  aliases: []
+  speeds_kmh: {walk: 4.5, auto: 18, cab: 20}
+  pickup_min: {auto: 5, cab: 8}
+  motor_mode: auto
+  fares:
+    auto:
+      currency: INR
+      base: 30
+      included_km: 1.5
+      per_km: 16
+      source: "estimate (unverified)"
+      as_of: "2026-11-02"
+    cab:
+      currency: INR
+      base: 100
+      included_km: 2.0
+      per_km: 22
+      source: "estimate (unverified)"
+      as_of: "2026-11-02"
+
+# Everywhere else: no auto-rickshaws, so motorised legs are cabs. Fares are keyed by the location's
+# currency; `fallback_currency` is used when the location's currency has no entry.
+default:
+  aliases: []
+  speeds_kmh: {walk: 4.5, cab: 22}
+  pickup_min: {cab: 6}
+  motor_mode: cab
+  fallback_currency: USD
+  fares_by_currency:
+    USD: {base: 4, included_km: 0.0, per_km: 2.0, source: "estimate (unverified)", as_of: "2026-11-02"}
+    GBP: {base: 4, included_km: 0.0, per_km: 2.2, source: "estimate (unverified)", as_of: "2026-11-02"}
+    EUR: {base: 4, included_km: 0.0, per_km: 2.0, source: "estimate (unverified)", as_of: "2026-11-02"}
+    AED: {base: 12, included_km: 0.0, per_km: 2.5, source: "estimate (unverified)", as_of: "2026-11-02"}
+    SGD: {base: 4, included_km: 1.0, per_km: 0.8, source: "estimate (unverified)", as_of: "2026-11-02"}
+    JPY: {base: 500, included_km: 1.0, per_km: 400, source: "estimate (unverified)", as_of: "2026-11-02"}
+    AUD: {base: 5, included_km: 0.0, per_km: 2.3, source: "estimate (unverified)", as_of: "2026-11-02"}
+    CAD: {base: 4, included_km: 0.0, per_km: 2.1, source: "estimate (unverified)", as_of: "2026-11-02"}
+    INR: {base: 100, included_km: 2.0, per_km: 22, source: "estimate (unverified)", as_of: "2026-11-02"}

@@ -1,0 +1,19 @@
+{
+  "run_id": "r_test_0005",
+  "status": "rejected",
+  "mode": null,
+  "model": null,
+  "plan": null,
+  "checks": [],
+  "questions": [],
+  "thread_id": null,
+  "preferences": null,
+  "violations": [],
+  "infeasible": null,
+  "degradations": [],
+  "assumptions": [],
+  "warnings": [],
+  "message": "I can only plan leisure outings. I can't book or pay for anything.",
+  "share_id": null,
+  "latency_ms": null
+}

@@ -3,7 +3,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.domain.timeutil import fmt_clock, fmt_duration, next_saturday, parse_clock, parse_duration, parse_time_range
+from app.domain.timeutil import (
+    fmt_clock,
+    fmt_duration,
+    next_saturday,
+    parse_clock,
+    parse_duration,
+    parse_time_range,
+)
 
 IST = "Asia/Kolkata"
 

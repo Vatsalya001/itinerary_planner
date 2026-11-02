@@ -73,7 +73,7 @@ def parse_duration(value: str | int | float | None) -> int | None:
         matched = True
         total += n * 60 if unit.startswith("h") else n
     if matched and total > 0:
-        return int(round(total))
+        return round(total)
     return None
 
 

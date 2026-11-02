@@ -29,8 +29,14 @@ MEAL_WINDOWS: list[MealWindow] = [
     MealWindow(name="dinner", start_min=19 * 60 + 30, end_min=22 * 60),
 ]
 
-_LOW = r"tired|exhausted|drained|sleepy|lazy|chill|relax|calm|slow|low[- ]energy|rest|quiet|easy|cosy|cozy|unwind|burnt? ?out|meh"
-_HIGH = r"energetic|energy to burn|full of energy|pack (a lot|it) in|adventur|excited|hyped|active|pumped|lots to do|go all out"
+_LOW = (
+    r"\b(?:tired|exhausted|drained|sleepy|lazy|chill(?:ed|ing|y)?|relax\w*|calm|slow|low[- ]energy"
+    r"|rest(?:ful|ing)?|quiet|easy|cosy|cozy|unwind\w*|burnt? ?out|meh)\b"
+)
+_HIGH = (
+    r"\b(?:energetic|energy to burn|full of energy|pack (?:a lot|it) in|adventur\w*|excited|hyped|active"
+    r"|pumped|lots to do|go all out)\b"
+)
 
 
 def profile_for(energy: Energy) -> PacingProfile:

@@ -1,0 +1,73 @@
+{
+  "run_id": "r_test_0004",
+  "status": "no_feasible_plan",
+  "mode": "deterministic",
+  "model": null,
+  "plan": null,
+  "checks": [],
+  "questions": [],
+  "thread_id": null,
+  "preferences": {
+    "city": "Bangalore",
+    "budget": 300,
+    "currency": "INR",
+    "start_min": 900,
+    "available_minutes": 240,
+    "date": "2026-11-07",
+    "mood": "tired but wants to do something fun",
+    "energy": "low",
+    "interests": [
+      "food",
+      "music",
+      "walks"
+    ],
+    "hard_constraints": [
+      {
+        "kind": "diet",
+        "value": "vegetarian",
+        "source_text": "vegetarian"
+      },
+      {
+        "kind": "crowd",
+        "value": "avoid",
+        "source_text": "avoid crowded places"
+      }
+    ],
+    "soft_preferences": [],
+    "neighbourhood": null,
+    "group_size": 1,
+    "assumptions": [
+      "Start time defaulted to 3:00 PM on the coming Saturday"
+    ]
+  },
+  "violations": [],
+  "infeasible": {
+    "reason": "Every plan that keeps you vegetarian and away from crowds costs more than ₹300.",
+    "binding_constraints": [
+      "budget",
+      "diet:vegetarian"
+    ],
+    "relaxations": [
+      {
+        "label": "Raise budget to ₹850",
+        "patch": {
+          "budget": 850
+        }
+      },
+      {
+        "label": "Allow 2 more hours",
+        "patch": {
+          "available_time": 360
+        }
+      }
+    ],
+    "cheapest_budget": 850,
+    "min_minutes": null
+  },
+  "degradations": [],
+  "assumptions": [],
+  "warnings": [],
+  "message": "No plan fits every constraint.",
+  "share_id": null,
+  "latency_ms": null
+}

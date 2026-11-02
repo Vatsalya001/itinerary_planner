@@ -1,0 +1,68 @@
+{
+  "generated_at": "2026-11-06T09:00:00Z",
+  "git_sha": "abc1234def5678",
+  "rows": [
+    {
+      "model": "baseline:deterministic",
+      "kind": "baseline",
+      "runs": 40,
+      "hard_pass_rate": 0.7,
+      "status_accuracy": 0.8,
+      "agent_success": null,
+      "first_submission_validity": null,
+      "tool_protocol_errors": 0,
+      "clarification_precision": 1.0,
+      "clarification_recall": 0.6,
+      "judge_quality": 2.9,
+      "latency_p50_ms": 900,
+      "latency_p95_ms": 1500,
+      "cost_per_plan_usd": null
+    },
+    {
+      "model": "anthropic:claude-opus-5-5",
+      "kind": "api",
+      "runs": 120,
+      "hard_pass_rate": 0.95,
+      "status_accuracy": 0.97,
+      "agent_success": 0.92,
+      "first_submission_validity": 0.81,
+      "tool_protocol_errors": 0.02,
+      "clarification_precision": 0.9,
+      "clarification_recall": 1.0,
+      "judge_quality": 4.3,
+      "latency_p50_ms": 17000,
+      "latency_p95_ms": 31000,
+      "cost_per_plan_usd": 0.19
+    },
+    {
+      "model": "ollama:qwen3.5:9b",
+      "kind": "local",
+      "runs": 40,
+      "hard_pass_rate": 0.6,
+      "status_accuracy": 0.7,
+      "agent_success": 0.4,
+      "first_submission_validity": 0.3,
+      "tool_protocol_errors": 0.8,
+      "clarification_precision": null,
+      "clarification_recall": null,
+      "judge_quality": null,
+      "latency_p50_ms": 95000,
+      "latency_p95_ms": 180000,
+      "cost_per_plan_usd": 0
+    },
+    {
+      "model": "ollama:gemma4:e4b",
+      "kind": "local"
+    }
+  ],
+  "categories": {
+    "feasible": {
+      "anthropic:claude-opus-5-5": 0.96,
+      "baseline:deterministic": 0.75
+    },
+    "security": {
+      "anthropic:claude-opus-5-5": 1.0,
+      "baseline:deterministic": 1.0
+    }
+  }
+}

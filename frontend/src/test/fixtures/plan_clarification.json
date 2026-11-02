@@ -1,0 +1,62 @@
+{
+  "run_id": "r_test_0003",
+  "status": "needs_clarification",
+  "mode": null,
+  "model": null,
+  "plan": null,
+  "checks": [],
+  "questions": [
+    {
+      "id": "city",
+      "question": "Which city are you in?",
+      "options": [
+        "Bangalore",
+        "Mumbai",
+        "Delhi"
+      ],
+      "field": "city"
+    }
+  ],
+  "thread_id": "th_test789",
+  "preferences": {
+    "city": null,
+    "budget": 2000,
+    "currency": "INR",
+    "start_min": 900,
+    "available_minutes": 240,
+    "date": "2026-11-07",
+    "mood": "tired but wants to do something fun",
+    "energy": "low",
+    "interests": [
+      "food",
+      "music",
+      "walks"
+    ],
+    "hard_constraints": [
+      {
+        "kind": "diet",
+        "value": "vegetarian",
+        "source_text": "vegetarian"
+      },
+      {
+        "kind": "crowd",
+        "value": "avoid",
+        "source_text": "avoid crowded places"
+      }
+    ],
+    "soft_preferences": [],
+    "neighbourhood": null,
+    "group_size": 1,
+    "assumptions": [
+      "Start time defaulted to 3:00 PM on the coming Saturday"
+    ]
+  },
+  "violations": [],
+  "infeasible": null,
+  "degradations": [],
+  "assumptions": [],
+  "warnings": [],
+  "message": "I need one detail before I can plan.",
+  "share_id": null,
+  "latency_ms": null
+}

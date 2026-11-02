@@ -1,0 +1,78 @@
+import type { CanonicalPlan } from '../types'
+import {
+  categoryLabel,
+  costBasisLabel,
+  fmtClockRange,
+  fmtDate,
+  fmtMoney,
+  fmtMoneyRange,
+  modeLabel,
+  weatherLine,
+} from './format'
+import { safeHttpsUrl } from './urls'
+
+export interface ShareTextOptions {
+  shareUrl?: string | null
+}
+
+/** The plan as plain text for copying or WhatsApp. Only data fields; no markup. */
+export function planToText(plan: CanonicalPlan, options: ShareTextOptions = {}): string {
+  const t = plan.totals
+  const lines: string[] = []
+  lines.push(`My Saturday in ${plan.city}`)
+  lines.push(`${fmtDate(plan.date)}, ${fmtClockRange(plan.start_min, plan.end_min)}`)
+  lines.push(`Weather: ${weatherLine(plan.weather)}`)
+  lines.push('')
+
+  plan.stops.forEach((stop, i) => {
+    const c = stop.candidate
+    lines.push(`${i + 1}. ${fmtClockRange(stop.start_min, stop.end_min)}  ${c.name} (${categoryLabel(c.category)})`)
+    lines.push(`   ${fmtMoneyRange(c.cost.min, c.cost.max, c.cost.currency)} per person, ${costBasisLabel(c.cost.basis)}`)
+    if (stop.why) lines.push(`   Why: ${stop.why}`)
+    if (stop.plan_b) lines.push(`   Plan B if it rains: ${stop.plan_b.name}`)
+    const leg = plan.legs[i]
+    if (i < plan.stops.length - 1 && leg) {
+      const fare = leg.fare.max > 0 ? `, ${fmtMoneyRange(leg.fare.min, leg.fare.max, leg.fare.currency)} estimate` : ''
+      lines.push(`   then ${modeLabel(leg.mode).toLowerCase()} about ${leg.minutes} min${fare}`)
+    }
+  })
+
+  lines.push('')
+  const budget = t.budget !== null && t.budget !== undefined ? ` of ${fmtMoney(t.budget, t.currency)} budget` : ''
+  lines.push(`Worst case per person: ${fmtMoney(t.worst_case, t.currency)}${budget} (includes 10% contingency)`)
+  const route = safeHttpsUrl(plan.maps_route_url)
+  if (route) lines.push(`Route: ${route}`)
+  const share = safeHttpsUrl(options.shareUrl)
+  if (share) lines.push(`Plan: ${share}`)
+  return lines.join('\n')
+}
+
+export function whatsappUrl(text: string): string {
+  return `https://wa.me/?text=${encodeURIComponent(text)}`
+}
+
+/** Copy text to the clipboard, falling back to a hidden textarea. Resolves true on success. */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // fall through to the legacy path
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    ta.remove()
+    return ok
+  } catch {
+    return false
+  }
+}

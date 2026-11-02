@@ -1,0 +1,20 @@
+{
+  "_about": "Synthetic daily weather for the frozen world, target Saturday 2026-11-07. Sunrise/sunset are local minutes since midnight and approximate the real values for that date (Bengaluru sunset about 17:50, Mumbai about 18:05). The summary line is rendered by app.providers.normalize.weather_summary from these fields. 'unavailable' is null: the provider returns Weather(status='unavailable').",
+  "version": 1,
+  "date": "2026-11-07",
+  "scenarios": {
+    "clear": {
+      "fixture:bangalore": {"weather_code": 1, "temp_max_c": 28.0, "temp_min_c": 18.5, "precip_prob_max": 10, "sunrise_min": 373, "sunset_min": 1070},
+      "fixture:mumbai": {"weather_code": 1, "temp_max_c": 33.0, "temp_min_c": 24.0, "precip_prob_max": 5, "sunrise_min": 404, "sunset_min": 1085},
+      "fixture:london": {"weather_code": 2, "temp_max_c": 11.0, "temp_min_c": 5.0, "precip_prob_max": 20, "sunrise_min": 427, "sunset_min": 982},
+      "fixture:jaipur": {"weather_code": 0, "temp_max_c": 29.0, "temp_min_c": 14.0, "precip_prob_max": 0, "sunrise_min": 406, "sunset_min": 1056}
+    },
+    "rain_85pct": {
+      "fixture:bangalore": {"weather_code": 63, "temp_max_c": 23.5, "temp_min_c": 18.0, "precip_prob_max": 85, "sunrise_min": 373, "sunset_min": 1070},
+      "fixture:mumbai": {"weather_code": 63, "temp_max_c": 29.0, "temp_min_c": 24.0, "precip_prob_max": 85, "sunrise_min": 404, "sunset_min": 1085},
+      "fixture:london": {"weather_code": 63, "temp_max_c": 10.0, "temp_min_c": 6.0, "precip_prob_max": 85, "sunrise_min": 427, "sunset_min": 982},
+      "fixture:jaipur": {"weather_code": 61, "temp_max_c": 25.0, "temp_min_c": 15.0, "precip_prob_max": 85, "sunrise_min": 406, "sunset_min": 1056}
+    },
+    "unavailable": null
+  }
+}

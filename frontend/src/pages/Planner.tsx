@@ -1,0 +1,226 @@
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { postPlan, resumePlan } from '../api/sse'
+import { ClarificationCard } from '../components/ClarificationCard'
+import { ErrorCard } from '../components/ErrorCard'
+import { InfeasibleCard } from '../components/InfeasibleCard'
+import { PlannerForm, type FormErrors } from '../components/PlannerForm'
+import { PlanView } from '../components/PlanView'
+import { PreferencesSummary } from '../components/PreferencesSummary'
+import { TracePanel } from '../components/TracePanel'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
+import { usePlanRun, type RunStarter } from '../hooks/usePlanRun'
+import { describeError } from '../lib/describeError'
+import {
+  buildRequest,
+  defaultFormState,
+  patchForm,
+  validateForm,
+  type DirtyFields,
+  type FieldKey,
+  type FormState,
+} from '../lib/form'
+import { applyPatch } from '../lib/plan'
+import { shareUrlFor } from '../lib/urls'
+import type { PlanRequest, PlanResult, Relaxation } from '../types'
+
+export default function Planner() {
+  useDocumentTitle('Perfect Saturday Planner')
+  const [form, setForm] = useState<FormState>(defaultFormState)
+  const [dirty, setDirty] = useState<DirtyFields>({})
+  const [errors, setErrors] = useState<FormErrors>({})
+  const { trace, phase, run, cancel } = usePlanRun()
+  const lastRequest = useRef<PlanRequest | null>(null)
+  const [submittedCurrency, setSubmittedCurrency] = useState<string | null>(null)
+  const lastStarter = useRef<{ starter: RunStarter; resetTrace: boolean } | null>(null)
+  const resultHeading = useRef<HTMLHeadingElement>(null)
+  const textarea = useRef<HTMLTextAreaElement>(null)
+  const busy = phase.kind === 'running'
+
+  const start = useCallback(
+    (starter: RunStarter, resetTrace = true) => {
+      lastStarter.current = { starter, resetTrace }
+      void run(starter, { resetTrace })
+    },
+    [run],
+  )
+
+  const submitRequest = useCallback(
+    (request: PlanRequest) => {
+      lastRequest.current = request
+      setSubmittedCurrency(request.currency ?? null)
+      start((onEvent, signal) => postPlan(request, onEvent, signal))
+    },
+    [start],
+  )
+
+  // Move focus to the outcome so keyboard and screen-reader users land on it.
+  useEffect(() => {
+    if (phase.kind === 'done' || phase.kind === 'error') resultHeading.current?.focus()
+  }, [phase])
+
+  const onChange = (next: FormState, field?: FieldKey) => {
+    setForm(next)
+    if (field) setDirty((d) => (d[field] ? d : { ...d, [field]: true }))
+  }
+
+  const onSubmit = () => {
+    const errs = validateForm(form)
+    setErrors(errs)
+    if (Object.keys(errs).length) return
+    submitRequest(buildRequest(form, dirty))
+  }
+
+  const onRelax = (relaxation: Relaxation) => {
+    const base = lastRequest.current ?? buildRequest(form, dirty)
+    const synced = patchForm(form, dirty, relaxation.patch)
+    setForm(synced.form)
+    setDirty(synced.dirty)
+    submitRequest(applyPatch(base, relaxation.patch))
+  }
+
+  const onAnswer = (threadId: string, answers: Record<string, string>) => {
+    start((onEvent, signal) => resumePlan(threadId, answers, onEvent, signal), false)
+  }
+
+  const onRetry = () => {
+    const last = lastStarter.current
+    if (last) start(last.starter, last.resetTrace)
+  }
+
+  const onPlanAgain = () => {
+    window.scrollTo({ top: 0, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+    textarea.current?.focus({ preventScroll: true })
+  }
+
+  const result: PlanResult | null = phase.kind === 'done' ? phase.result : null
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <h1 className="text-3xl font-bold tracking-tight text-stone-900 sm:text-4xl">Plan a Saturday that fits how you feel</h1>
+        <p className="max-w-2xl text-stone-700">
+          Tell me how you feel and what you've got. You get real places, real clock times and the weather, a reason for
+          every stop, and honesty about what couldn't be checked.
+        </p>
+      </div>
+
+      <PlannerForm
+        form={form}
+        dirty={dirty}
+        errors={errors}
+        busy={busy}
+        onChange={onChange}
+        onSubmit={onSubmit}
+        onCancel={cancel}
+        onReset={() => {
+          setForm(defaultFormState())
+          setDirty({})
+          setErrors({})
+        }}
+        textareaRef={textarea}
+      />
+
+      {result?.preferences && result.status !== 'rejected' ? <PreferencesSummary prefs={result.preferences} /> : null}
+
+      <TracePanel trace={trace} running={busy} startedAt={phase.kind === 'running' ? phase.startedAt : null} />
+
+      <div aria-live="polite" className="sr-only">
+        {phase.kind === 'done' ? 'Planning finished.' : ''}
+      </div>
+
+      {phase.kind === 'error' ? (
+        <ErrorCard {...describeError(phase.error)} onRetry={onRetry} headingRef={resultHeading} />
+      ) : null}
+
+      {result ? (
+        <ResultView
+          result={result}
+          busy={busy}
+          currency={result.preferences?.currency ?? submittedCurrency}
+          headingRef={resultHeading}
+          onAnswer={onAnswer}
+          onRelax={onRelax}
+          onPlanAgain={onPlanAgain}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function ResultView({
+  result,
+  busy,
+  currency,
+  headingRef,
+  onAnswer,
+  onRelax,
+  onPlanAgain,
+}: {
+  result: PlanResult
+  busy: boolean
+  currency: string | null
+  headingRef: RefObject<HTMLHeadingElement | null>
+  onAnswer: (threadId: string, answers: Record<string, string>) => void
+  onRelax: (r: Relaxation) => void
+  onPlanAgain: () => void
+}) {
+  switch (result.status) {
+    case 'complete':
+    case 'fallback':
+      return (
+        <PlanView
+          result={result}
+          shareUrl={result.share_id ? shareUrlFor(result.share_id) : null}
+          onPlanAgain={onPlanAgain}
+          headingRef={headingRef}
+        />
+      )
+    case 'needs_clarification': {
+      const threadId = result.thread_id
+      if (!threadId || !result.questions.length) {
+        return (
+          <ErrorCard
+            title="I need a bit more detail"
+            message={result.message || 'Please add the city and what you have in mind, then plan again.'}
+            headingRef={headingRef}
+          />
+        )
+      }
+      return (
+        <ClarificationCard
+          key={result.run_id || threadId}
+          questions={result.questions}
+          message={result.message}
+          busy={busy}
+          onSubmit={(answers) => onAnswer(threadId, answers)}
+          headingRef={headingRef}
+        />
+      )
+    }
+    case 'no_feasible_plan':
+      return (
+        <InfeasibleCard
+          report={result.infeasible}
+          message={result.message}
+          currency={currency}
+          busy={busy}
+          onApply={onRelax}
+          headingRef={headingRef}
+        />
+      )
+    case 'rejected':
+    default:
+      return (
+        <ErrorCard
+          title="I can't plan that"
+          message={
+            result.message ||
+            result.violations.find((v) => v.severity === 'error')?.message ||
+            'This request is outside what the planner can do.'
+          }
+          runId={result.run_id || null}
+          headingRef={headingRef}
+        />
+      )
+  }
+}

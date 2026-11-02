@@ -31,3 +31,11 @@ def test_energy_and_pacing():
     assert profile_for(Energy.LOW).min_seated_stops == 1
     names = [w.name for w in meal_windows_between(900, 1140)]
     assert names == ["snack"]
+
+
+def test_energy_words_need_word_boundaries():
+    # regression: "rest" inside "restaurant"/"interested", "chill" inside "chilli", "meh" inside "somehow"
+    assert energy_from_mood("interested in a restaurant with chilli paneer, somehow") == Energy.MEDIUM
+    assert energy_from_mood("need a restful, relaxing day") == Energy.LOW
+    assert energy_from_mood("feeling chilled") == Energy.LOW
+    assert energy_from_mood("adventurous and excited") == Energy.HIGH

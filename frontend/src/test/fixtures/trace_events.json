@@ -1,0 +1,577 @@
+[
+  {
+    "type": "run_started",
+    "run_id": "r_test_0001",
+    "seq": 1,
+    "ts": "2026-11-05T04:30:00.000Z",
+    "node": null,
+    "tool": null,
+    "reason": null,
+    "duration_ms": null,
+    "summary": null,
+    "data": null
+  },
+  {
+    "type": "node_started",
+    "run_id": "r_test_0001",
+    "seq": 2,
+    "ts": "2026-11-05T04:30:00.010Z",
+    "node": "parse_preferences",
+    "tool": null,
+    "reason": null,
+    "duration_ms": null,
+    "summary": null,
+    "data": null
+  },
+  {
+    "type": "node_completed",
+    "run_id": "r_test_0001",
+    "seq": 3,
+    "ts": "2026-11-05T04:30:01.210Z",
+    "node": "parse_preferences",
+    "tool": null,
+    "reason": null,
+    "duration_ms": 1200,
+    "summary": "Bangalore, ₹2,000, 4 h, low energy",
+    "data": null
+  },
+  {
+    "type": "tool_called",
+    "run_id": "r_test_0001",
+    "seq": 4,
+    "ts": "2026-11-05T04:30:02.000Z",
+    "node": "tools",
+    "tool": "search_places",
+    "reason": "Need a quiet vegetarian café for a seated first stop",
+    "duration_ms": null,
+    "summary": null,
+    "data": null
+  },
+  {
+    "type": "tool_completed",
+    "run_id": "r_test_0001",
+    "seq": 5,
+    "ts": "2026-11-05T04:30:02.612Z",
+    "node": "tools",
+    "tool": "search_places",
+    "reason": "Need a quiet vegetarian café for a seated first stop",
+    "duration_ms": 612,
+    "summary": "8 places, 5 with vegetarian evidence, 2 likely busy",
+    "data": null
+  },
+  {
+    "type": "tool_called",
+    "run_id": "r_test_0001",
+    "seq": 6,
+    "ts": "2026-11-05T04:30:03.000Z",
+    "node": "tools",
+    "tool": "search_events",
+    "reason": "Look for seated live music on Saturday",
+    "duration_ms": null,
+    "summary": null,
+    "data": null
+  },
+  {
+    "type": "tool_failed",
+    "run_id": "r_test_0001",
+    "seq": 7,
+    "ts": "2026-11-05T04:30:08.000Z",
+    "node": "tools",
+    "tool": "search_events",
+    "reason": null,
+    "duration_ms": 5000,
+    "summary": "Event search timed out",
+    "data": null
+  },
+  {
+    "type": "degraded",
+    "run_id": "r_test_0001",
+    "seq": 8,
+    "ts": "2026-11-05T04:30:08.001Z",
+    "node": null,
+    "tool": null,
+    "reason": null,
+    "duration_ms": null,
+    "summary": "Couldn't check events",
+    "data": null
+  },
+  {
+    "type": "validation",
+    "run_id": "r_test_0001",
+    "seq": 9,
+    "ts": "2026-11-05T04:30:10.000Z",
+    "node": "validate_plan",
+    "tool": null,
+    "reason": null,
+    "duration_ms": 8,
+    "summary": "1 problem found",
+    "data": {
+      "ok": false,
+      "violations": [
+        {
+          "code": "BUDGET_EXCEEDED",
+          "severity": "error",
+          "message": "Worst case is above the budget",
+          "stop_index": null,
+          "candidate_id": null
+        }
+      ]
+    }
+  },
+  {
+    "type": "validation",
+    "run_id": "r_test_0001",
+    "seq": 10,
+    "ts": "2026-11-05T04:30:12.000Z",
+    "node": "validate_plan",
+    "tool": null,
+    "reason": null,
+    "duration_ms": 7,
+    "summary": "All checks passed",
+    "data": {
+      "ok": true,
+      "violations": []
+    }
+  },
+  {
+    "type": "result",
+    "run_id": "r_test_0001",
+    "seq": 11,
+    "ts": "2026-11-05T04:30:12.100Z",
+    "node": null,
+    "tool": null,
+    "reason": null,
+    "duration_ms": null,
+    "summary": null,
+    "data": {
+      "run_id": "r_test_0001",
+      "status": "complete",
+      "mode": "agent",
+      "model": "anthropic:claude-opus-5-5",
+      "plan": {
+        "date": "2026-11-07",
+        "city": "Bangalore",
+        "timezone": "Asia/Kolkata",
+        "start_min": 900,
+        "end_min": 1115,
+        "stops": [
+          {
+            "candidate": {
+              "id": "gp:ChIJtest_courtyard_cafe",
+              "kind": "place",
+              "name": "Courtyard Filter Coffee House",
+              "category": "cafe",
+              "city_id": "fixture:bangalore",
+              "lat": 12.9719,
+              "lng": 77.5937,
+              "address": "12 Test Lane, Ashok Nagar, Bengaluru",
+              "neighbourhood": "Ashok Nagar",
+              "cost": {
+                "min": 250,
+                "max": 450,
+                "currency": "INR",
+                "basis": "listed_price_range"
+              },
+              "rating": 4.5,
+              "rating_count": 820,
+              "hours": {
+                "status": "known",
+                "periods": [
+                  [
+                    480,
+                    1320
+                  ]
+                ]
+              },
+              "diet": {
+                "vegetarian": "confirmed"
+              },
+              "wheelchair": "unknown",
+              "indoor": true,
+              "seated": true,
+              "effort": "low",
+              "serves_alcohol": false,
+              "live_music": false,
+              "popularity": "medium",
+              "busy_windows": [
+                [
+                  660,
+                  780
+                ]
+              ],
+              "tags": [
+                "food",
+                "coffee",
+                "relax"
+              ],
+              "duration_range": [
+                30,
+                50,
+                90
+              ],
+              "event_start_min": null,
+              "event_end_min": null,
+              "event_date": null,
+              "maps_url": "https://www.google.com/maps/search/?api=1&query=Courtyard%20Filter%20Coffee%20House&query_place_id=ChIJtest_courtyard_cafe",
+              "source": {
+                "provider": "google_places",
+                "url": "https://www.google.com/maps/search/?api=1&query=Courtyard%20Filter%20Coffee%20House&query_place_id=ChIJtest_courtyard_cafe",
+                "retrieved_at": "2026-11-05T10:00:03+05:30",
+                "last_checked": null,
+                "attribution": "Google Maps"
+              }
+            },
+            "start_min": 900,
+            "end_min": 960,
+            "duration_min": 60,
+            "why": "A quiet, seated start with a fully vegetarian menu, so you can recharge before anything active.",
+            "tradeoff": null,
+            "plan_b": null,
+            "warnings": []
+          },
+          {
+            "candidate": {
+              "id": "snap:cubbon_park_loop",
+              "kind": "place",
+              "name": "Cubbon Park loop",
+              "category": "park",
+              "city_id": "fixture:bangalore",
+              "lat": 12.9763,
+              "lng": 77.5929,
+              "address": "Kasturba Road, Bengaluru",
+              "neighbourhood": "Cubbon Park",
+              "cost": {
+                "min": 0,
+                "max": 0,
+                "currency": "INR",
+                "basis": "free"
+              },
+              "rating": null,
+              "rating_count": null,
+              "hours": {
+                "status": "known",
+                "periods": [
+                  [
+                    360,
+                    1080
+                  ]
+                ]
+              },
+              "diet": {},
+              "wheelchair": "unknown",
+              "indoor": false,
+              "seated": false,
+              "effort": "medium",
+              "serves_alcohol": false,
+              "live_music": null,
+              "popularity": "medium",
+              "busy_windows": [
+                [
+                  360,
+                  540
+                ]
+              ],
+              "tags": [
+                "walks",
+                "nature"
+              ],
+              "duration_range": [
+                20,
+                40,
+                90
+              ],
+              "event_start_min": null,
+              "event_end_min": null,
+              "event_date": null,
+              "maps_url": null,
+              "source": {
+                "provider": "curated_snapshot",
+                "url": "https://www.openstreetmap.org/way/24350890",
+                "retrieved_at": null,
+                "last_checked": "2026-10-28",
+                "attribution": "© OpenStreetMap contributors"
+              }
+            },
+            "start_min": 990,
+            "end_min": 1020,
+            "duration_min": 30,
+            "why": "A short, flat loop under the trees for your walk, before sunset and before the evening rush.",
+            "tradeoff": "Kept the walk short because you said you're tired.",
+            "plan_b": {
+              "id": "snap:venkatappa_art_gallery",
+              "kind": "place",
+              "name": "Venkatappa Art Gallery",
+              "category": "art_gallery",
+              "city_id": "fixture:bangalore",
+              "lat": 12.9752,
+              "lng": 77.596,
+              "address": "Kasturba Road, Bengaluru",
+              "neighbourhood": "Cubbon Park",
+              "cost": {
+                "min": 0,
+                "max": 50,
+                "currency": "INR",
+                "basis": "category_estimate"
+              },
+              "rating": null,
+              "rating_count": null,
+              "hours": {
+                "status": "unknown",
+                "periods": []
+              },
+              "diet": {},
+              "wheelchair": "unknown",
+              "indoor": true,
+              "seated": false,
+              "effort": "low",
+              "serves_alcohol": false,
+              "live_music": false,
+              "popularity": "low",
+              "busy_windows": [],
+              "tags": [
+                "art",
+                "culture"
+              ],
+              "duration_range": [
+                30,
+                45,
+                90
+              ],
+              "event_start_min": null,
+              "event_end_min": null,
+              "event_date": null,
+              "maps_url": null,
+              "source": {
+                "provider": "curated_snapshot",
+                "url": null,
+                "retrieved_at": null,
+                "last_checked": "2026-10-28",
+                "attribution": "© OpenStreetMap contributors"
+              }
+            },
+            "warnings": [
+              "Opening hours of the Plan B are unknown."
+            ]
+          },
+          {
+            "candidate": {
+              "id": "ev:sunset_acoustic_set",
+              "kind": "event",
+              "name": "Sunset Acoustic Set",
+              "category": "event",
+              "city_id": "fixture:bangalore",
+              "lat": 12.9784,
+              "lng": 77.6408,
+              "address": "Test Hall, 100 Feet Road, Indiranagar, Bengaluru",
+              "neighbourhood": "Indiranagar",
+              "cost": {
+                "min": 499,
+                "max": 499,
+                "currency": "INR",
+                "basis": "ticket_price"
+              },
+              "rating": null,
+              "rating_count": null,
+              "hours": {
+                "status": "unknown",
+                "periods": []
+              },
+              "diet": {},
+              "wheelchair": "unknown",
+              "indoor": true,
+              "seated": true,
+              "effort": "low",
+              "serves_alcohol": null,
+              "live_music": true,
+              "popularity": "medium",
+              "busy_windows": [],
+              "tags": [
+                "music",
+                "event"
+              ],
+              "duration_range": [
+                60,
+                60,
+                120
+              ],
+              "event_start_min": 1055,
+              "event_end_min": 1115,
+              "event_date": "2026-11-07",
+              "maps_url": null,
+              "source": {
+                "provider": "web_event",
+                "url": "https://www.district.in/events/sunset-acoustic-set-test",
+                "retrieved_at": "2026-11-05T10:00:05+05:30",
+                "last_checked": null,
+                "attribution": "district.in"
+              }
+            },
+            "start_min": 1055,
+            "end_min": 1115,
+            "duration_min": 60,
+            "why": "Live acoustic music in a seated hall gives you the fun part without a crowd on your feet.",
+            "tradeoff": "A ticketed set uses a good part of the budget, so the other stops stay cheap.",
+            "plan_b": null,
+            "warnings": []
+          }
+        ],
+        "legs": [
+          {
+            "from_id": "gp:ChIJtest_courtyard_cafe",
+            "to_id": "snap:cubbon_park_loop",
+            "mode": "walk",
+            "distance_km": 0.9,
+            "minutes": 12,
+            "minutes_max": 15,
+            "fare": {
+              "min": 0,
+              "max": 0,
+              "currency": "INR",
+              "basis": "free"
+            },
+            "basis": "estimate"
+          },
+          {
+            "from_id": "snap:cubbon_park_loop",
+            "to_id": "ev:sunset_acoustic_set",
+            "mode": "auto",
+            "distance_km": 5.2,
+            "minutes": 16,
+            "minutes_max": 20,
+            "fare": {
+              "min": 60,
+              "max": 90,
+              "currency": "INR",
+              "basis": "category_estimate"
+            },
+            "basis": "estimate"
+          }
+        ],
+        "totals": {
+          "currency": "INR",
+          "stops_cost_min": 749,
+          "stops_cost_max": 949,
+          "legs_cost_min": 60,
+          "legs_cost_max": 90,
+          "contingency": 104,
+          "worst_case": 1143,
+          "budget": 2000,
+          "budget_left": 857,
+          "elapsed_min": 215,
+          "available_minutes": 240,
+          "minutes_left": 25,
+          "walking_min": 42
+        },
+        "summary_note": "An easy-paced afternoon: coffee, a short green walk and seated live music.",
+        "omitted": [
+          {
+            "ref": "gp:ChIJtest_brewpub",
+            "reason": "Left out a brewpub with music because it serves alcohol and is likely busy on Saturday evenings."
+          },
+          {
+            "ref": "street food market",
+            "reason": "Skipped a street-food market because it is likely crowded at that hour."
+          }
+        ],
+        "weather": {
+          "status": "ok",
+          "summary": "Partly cloudy",
+          "precip_prob_max": 20,
+          "temp_max_c": 28.0,
+          "temp_min_c": 19.0,
+          "weather_code": 2,
+          "sunrise_min": 368,
+          "sunset_min": 1065
+        },
+        "maps_route_url": "https://www.google.com/maps/dir/?api=1&origin=12.9719,77.5937&destination=12.9784,77.6408&waypoints=12.9763,77.5929&travelmode=driving"
+      },
+      "checks": [
+        {
+          "name": "budget",
+          "status": "pass",
+          "detail": "Worst case ₹1,143 of ₹2,000 including contingency"
+        },
+        {
+          "name": "time",
+          "status": "pass",
+          "detail": "Finishes with 25 minutes to spare"
+        },
+        {
+          "name": "opening_hours",
+          "status": "pass",
+          "detail": "Every stop is open at its scheduled time"
+        },
+        {
+          "name": "diet",
+          "status": "pass",
+          "detail": "The café has vegetarian evidence from its listing"
+        },
+        {
+          "name": "crowds",
+          "status": "warn",
+          "detail": "Heuristic only: no live crowd data"
+        },
+        {
+          "name": "sources",
+          "status": "unverified",
+          "detail": "Event details come from a web page; check before you go"
+        }
+      ],
+      "questions": [],
+      "thread_id": null,
+      "preferences": {
+        "city": "Bangalore",
+        "budget": 2000,
+        "currency": "INR",
+        "start_min": 900,
+        "available_minutes": 240,
+        "date": "2026-11-07",
+        "mood": "tired but wants to do something fun",
+        "energy": "low",
+        "interests": [
+          "food",
+          "music",
+          "walks"
+        ],
+        "hard_constraints": [
+          {
+            "kind": "diet",
+            "value": "vegetarian",
+            "source_text": "vegetarian"
+          },
+          {
+            "kind": "crowd",
+            "value": "avoid",
+            "source_text": "avoid crowded places"
+          }
+        ],
+        "soft_preferences": [],
+        "neighbourhood": null,
+        "group_size": 1,
+        "assumptions": [
+          "Start time defaulted to 3:00 PM on the coming Saturday"
+        ]
+      },
+      "violations": [
+        {
+          "code": "WEATHER_RISK",
+          "severity": "warning",
+          "message": "Light rain is possible after sunset.",
+          "stop_index": null,
+          "candidate_id": null
+        }
+      ],
+      "infeasible": null,
+      "degradations": [],
+      "assumptions": [
+        "Prices are per person"
+      ],
+      "warnings": [
+        "Carry cash for the auto-rickshaw"
+      ],
+      "message": null,
+      "share_id": "sh_test123",
+      "latency_ms": 18450
+    }
+  }
+]

@@ -1,0 +1,96 @@
+# Per-person price bands for Google Places `priceLevel` values, per currency.
+#
+# THESE ARE ESTIMATES, not quoted prices. They turn a coarse price level into a [min, max] range in whole
+# currency units per person so the validator can compute a worst-case total. Every cost derived from this
+# table is labelled with basis "price_level_estimate" (or "category_estimate" for category defaults).
+# Bands were set by hand on 2026-11-02 from typical per-person spend for a casual visit; re-check them
+# before quoting any figure. Index order: FREE, INEXPENSIVE, MODERATE, EXPENSIVE, VERY_EXPENSIVE.
+
+estimate: true
+checked: 2026-11-02
+
+levels: [PRICE_LEVEL_FREE, PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_MODERATE, PRICE_LEVEL_EXPENSIVE, PRICE_LEVEL_VERY_EXPENSIVE]
+
+bands:
+  INR:
+    PRICE_LEVEL_FREE: [0, 0]
+    PRICE_LEVEL_INEXPENSIVE: [100, 400]
+    PRICE_LEVEL_MODERATE: [400, 1000]
+    PRICE_LEVEL_EXPENSIVE: [1000, 2000]
+    PRICE_LEVEL_VERY_EXPENSIVE: [2000, 4000]
+  GBP:
+    PRICE_LEVEL_FREE: [0, 0]
+    PRICE_LEVEL_INEXPENSIVE: [5, 15]
+    PRICE_LEVEL_MODERATE: [15, 35]
+    PRICE_LEVEL_EXPENSIVE: [35, 70]
+    PRICE_LEVEL_VERY_EXPENSIVE: [70, 150]
+  USD:
+    PRICE_LEVEL_FREE: [0, 0]
+    PRICE_LEVEL_INEXPENSIVE: [8, 20]
+    PRICE_LEVEL_MODERATE: [20, 45]
+    PRICE_LEVEL_EXPENSIVE: [45, 90]
+    PRICE_LEVEL_VERY_EXPENSIVE: [90, 200]
+  EUR:
+    PRICE_LEVEL_FREE: [0, 0]
+    PRICE_LEVEL_INEXPENSIVE: [7, 18]
+    PRICE_LEVEL_MODERATE: [18, 40]
+    PRICE_LEVEL_EXPENSIVE: [40, 80]
+    PRICE_LEVEL_VERY_EXPENSIVE: [80, 180]
+  # Other currencies listed in countries.yaml, so every default-currency city has a band (rough estimates).
+  AED:
+    PRICE_LEVEL_FREE: [0, 0]
+    PRICE_LEVEL_INEXPENSIVE: [25, 70]
+    PRICE_LEVEL_MODERATE: [70, 160]
+    PRICE_LEVEL_EXPENSIVE: [160, 330]
+    PRICE_LEVEL_VERY_EXPENSIVE: [330, 750]
+  SGD:
+    PRICE_LEVEL_FREE: [0, 0]
+    PRICE_LEVEL_INEXPENSIVE: [8, 25]
+    PRICE_LEVEL_MODERATE: [25, 60]
+    PRICE_LEVEL_EXPENSIVE: [60, 120]
+    PRICE_LEVEL_VERY_EXPENSIVE: [120, 260]
+  JPY:
+    PRICE_LEVEL_FREE: [0, 0]
+    PRICE_LEVEL_INEXPENSIVE: [800, 2500]
+    PRICE_LEVEL_MODERATE: [2500, 6000]
+    PRICE_LEVEL_EXPENSIVE: [6000, 13000]
+    PRICE_LEVEL_VERY_EXPENSIVE: [13000, 30000]
+  AUD:
+    PRICE_LEVEL_FREE: [0, 0]
+    PRICE_LEVEL_INEXPENSIVE: [10, 30]
+    PRICE_LEVEL_MODERATE: [30, 65]
+    PRICE_LEVEL_EXPENSIVE: [65, 130]
+    PRICE_LEVEL_VERY_EXPENSIVE: [130, 280]
+  CAD:
+    PRICE_LEVEL_FREE: [0, 0]
+    PRICE_LEVEL_INEXPENSIVE: [10, 28]
+    PRICE_LEVEL_MODERATE: [28, 60]
+    PRICE_LEVEL_EXPENSIVE: [60, 120]
+    PRICE_LEVEL_VERY_EXPENSIVE: [120, 260]
+
+# Category defaults for currencies other than INR (INR uses cost_inr in categories.yaml).
+# Each category maps to a [low level, high level] pair; the default range is [band(low).min, band(high).max].
+category_levels:
+  cafe: [PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_INEXPENSIVE]
+  restaurant: [PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_MODERATE]
+  street_food: [PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_INEXPENSIVE]
+  dessert: [PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_INEXPENSIVE]
+  bar: [PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_MODERATE]
+  brewery: [PRICE_LEVEL_MODERATE, PRICE_LEVEL_MODERATE]
+  live_music_venue: [PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_MODERATE]
+  theatre: [PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_EXPENSIVE]
+  cinema: [PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_INEXPENSIVE]
+  game_arcade: [PRICE_LEVEL_INEXPENSIVE, PRICE_LEVEL_MODERATE]
+  museum: [PRICE_LEVEL_FREE, PRICE_LEVEL_INEXPENSIVE]
+  art_gallery: [PRICE_LEVEL_FREE, PRICE_LEVEL_INEXPENSIVE]
+  bookstore: [PRICE_LEVEL_FREE, PRICE_LEVEL_INEXPENSIVE]
+  place_of_worship: [PRICE_LEVEL_FREE, PRICE_LEVEL_FREE]
+  park: [PRICE_LEVEL_FREE, PRICE_LEVEL_FREE]
+  garden: [PRICE_LEVEL_FREE, PRICE_LEVEL_INEXPENSIVE]
+  lake: [PRICE_LEVEL_FREE, PRICE_LEVEL_FREE]
+  heritage_walk: [PRICE_LEVEL_FREE, PRICE_LEVEL_FREE]
+  viewpoint: [PRICE_LEVEL_FREE, PRICE_LEVEL_INEXPENSIVE]
+  market: [PRICE_LEVEL_FREE, PRICE_LEVEL_MODERATE]
+  mall: [PRICE_LEVEL_FREE, PRICE_LEVEL_MODERATE]
+  spa: [PRICE_LEVEL_MODERATE, PRICE_LEVEL_EXPENSIVE]
+  event: [PRICE_LEVEL_FREE, PRICE_LEVEL_EXPENSIVE]

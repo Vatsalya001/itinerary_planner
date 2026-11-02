@@ -1,0 +1,287 @@
+# Offline gazetteer used by the rules parser (app/domain/parser_rules.py) to spot city and neighbourhood
+# names in free text and to bias baseline place searches towards a neighbourhood.
+#
+# It is NOT the geocoder: resolve_location still asks Open-Meteo (or the fixture geocoder) for the
+# authoritative Location. Coordinates are approximate centre points (public geographic facts, rounded to
+# 4 decimals), good enough for a search bias and a 40 km sanity check, not for routing.
+#
+# Format:
+#   <Canonical city name>:
+#     country_code: ISO 3166-1 alpha-2 (currency comes from countries.yaml)
+#     timezone:     IANA timezone
+#     lat, lng:     approximate city centre
+#     aliases:      other spellings. All-caps acronyms (BLR, NYC, SF, LA, HSR) only match when typed in
+#                   capitals, so "la" or "cp" in ordinary text never matches. Everything else is matched
+#                   case-insensitively on word boundaries.
+#     neighbourhoods:
+#       <Canonical neighbourhood>: {lat, lng, aliases: [...]}
+#
+# Deliberately left out: names that are common English words or brands (Nice, Reading, Bath, Phoenix,
+# Fort) because they would produce false matches in free text.
+
+cities:
+  # ------------------------------------------------------------------ India
+  Bangalore:
+    country_code: IN
+    timezone: Asia/Kolkata
+    lat: 12.9716
+    lng: 77.5946
+    aliases: [Bengaluru, Bengalooru, Bangaluru, Banglore, Bangalor, BLR]
+    neighbourhoods:
+      Indiranagar: {lat: 12.9784, lng: 77.6408, aliases: [Indira Nagar, Indiranagara]}
+      Koramangala: {lat: 12.9352, lng: 77.6245, aliases: [Kormangala]}
+      MG Road: {lat: 12.9756, lng: 77.6066, aliases: [M.G. Road, M G Road, Mahatma Gandhi Road]}
+      Brigade Road: {lat: 12.9716, lng: 77.6070, aliases: []}
+      Church Street: {lat: 12.9752, lng: 77.6036, aliases: []}
+      Lavelle Road: {lat: 12.9700, lng: 77.5970, aliases: []}
+      Cunningham Road: {lat: 12.9881, lng: 77.5950, aliases: []}
+      Cubbon Park: {lat: 12.9763, lng: 77.5929, aliases: []}
+      Lalbagh: {lat: 12.9507, lng: 77.5848, aliases: [Lal Bagh, Lalbagh Botanical Garden]}
+      Jayanagar: {lat: 12.9250, lng: 77.5938, aliases: [Jaya Nagar]}
+      JP Nagar: {lat: 12.9063, lng: 77.5857, aliases: [J.P. Nagar, J P Nagar]}
+      HSR Layout: {lat: 12.9116, lng: 77.6474, aliases: [HSR]}
+      BTM Layout: {lat: 12.9166, lng: 77.6101, aliases: [BTM]}
+      Whitefield: {lat: 12.9698, lng: 77.7500, aliases: []}
+      Malleshwaram: {lat: 13.0035, lng: 77.5709, aliases: [Malleswaram, Malleshwaram West]}
+      Basavanagudi: {lat: 12.9406, lng: 77.5738, aliases: []}
+      Ulsoor: {lat: 12.9817, lng: 77.6286, aliases: [Halasuru]}
+      Frazer Town: {lat: 12.9970, lng: 77.6136, aliases: [Pulikeshi Nagar]}
+      Richmond Town: {lat: 12.9610, lng: 77.6000, aliases: []}
+      Sadashivanagar: {lat: 13.0068, lng: 77.5813, aliases: []}
+      Rajajinagar: {lat: 12.9910, lng: 77.5525, aliases: []}
+      Banashankari: {lat: 12.9255, lng: 77.5468, aliases: []}
+      Hebbal: {lat: 13.0358, lng: 77.5970, aliases: []}
+      Yelahanka: {lat: 13.1007, lng: 77.5963, aliases: []}
+      Electronic City: {lat: 12.8452, lng: 77.6602, aliases: []}
+      Marathahalli: {lat: 12.9591, lng: 77.6974, aliases: []}
+      Bellandur: {lat: 12.9304, lng: 77.6784, aliases: []}
+      Domlur: {lat: 12.9610, lng: 77.6387, aliases: []}
+      Shivajinagar: {lat: 12.9857, lng: 77.6057, aliases: []}
+      Vasanth Nagar: {lat: 12.9922, lng: 77.5926, aliases: [Vasanthnagar]}
+  Mumbai:
+    country_code: IN
+    timezone: Asia/Kolkata
+    lat: 19.0760
+    lng: 72.8777
+    aliases: [Bombay]
+    neighbourhoods:
+      Bandra: {lat: 19.0596, lng: 72.8295, aliases: [Bandra West, Bandra East]}
+      Colaba: {lat: 18.9067, lng: 72.8147, aliases: []}
+      Andheri: {lat: 19.1136, lng: 72.8697, aliases: [Andheri West, Andheri East]}
+      Lower Parel: {lat: 18.9953, lng: 72.8300, aliases: []}
+      Juhu: {lat: 19.1075, lng: 72.8263, aliases: []}
+      Kala Ghoda: {lat: 18.9285, lng: 72.8320, aliases: []}
+      Churchgate: {lat: 18.9322, lng: 72.8264, aliases: []}
+      Marine Drive: {lat: 18.9440, lng: 72.8230, aliases: []}
+      Nariman Point: {lat: 18.9256, lng: 72.8242, aliases: []}
+      Worli: {lat: 19.0176, lng: 72.8170, aliases: []}
+      Prabhadevi: {lat: 19.0166, lng: 72.8295, aliases: []}
+      Dadar: {lat: 19.0178, lng: 72.8478, aliases: []}
+      Matunga: {lat: 19.0270, lng: 72.8553, aliases: []}
+      Mahalaxmi: {lat: 18.9827, lng: 72.8240, aliases: []}
+      Byculla: {lat: 18.9767, lng: 72.8327, aliases: []}
+      Girgaon: {lat: 18.9548, lng: 72.8131, aliases: [Girgaum]}
+      Malabar Hill: {lat: 18.9548, lng: 72.7985, aliases: []}
+      Breach Candy: {lat: 18.9690, lng: 72.8050, aliases: []}
+      Khar: {lat: 19.0717, lng: 72.8370, aliases: [Khar West]}
+      Santacruz: {lat: 19.0815, lng: 72.8410, aliases: [Santa Cruz]}
+      Vile Parle: {lat: 19.0990, lng: 72.8440, aliases: []}
+      Versova: {lat: 19.1351, lng: 72.8146, aliases: []}
+      Goregaon: {lat: 19.1663, lng: 72.8526, aliases: []}
+      Malad: {lat: 19.1874, lng: 72.8484, aliases: []}
+      Powai: {lat: 19.1176, lng: 72.9060, aliases: []}
+      Chembur: {lat: 19.0522, lng: 72.9005, aliases: []}
+  Delhi:
+    country_code: IN
+    timezone: Asia/Kolkata
+    lat: 28.6139
+    lng: 77.2090
+    aliases: [New Delhi, Dilli, NCR]
+    neighbourhoods:
+      Connaught Place: {lat: 28.6315, lng: 77.2167, aliases: [CP]}
+      Hauz Khas: {lat: 28.5494, lng: 77.2001, aliases: [Hauz Khas Village]}
+      Chandni Chowk: {lat: 28.6506, lng: 77.2303, aliases: []}
+      Lodhi Colony: {lat: 28.5880, lng: 77.2223, aliases: [Lodi Colony]}
+      Saket: {lat: 28.5245, lng: 77.2066, aliases: []}
+  Kolkata:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 22.5726, lng: 88.3639, aliases: [Calcutta]}
+  Chennai:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 13.0827, lng: 80.2707, aliases: [Madras]}
+  Hyderabad:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 17.3850, lng: 78.4867, aliases: [Secunderabad, Hyd]}
+  Pune:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 18.5204, lng: 73.8567, aliases: [Poona]}
+  Ahmedabad:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 23.0225, lng: 72.5714, aliases: [Amdavad]}
+  Jaipur:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 26.9124, lng: 75.7873, aliases: []}
+  Goa:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 15.4909, lng: 73.8278, aliases: [Panaji, Panjim]}
+  Kochi:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 9.9312, lng: 76.2673, aliases: [Cochin, Ernakulam]}
+  Chandigarh:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 30.7333, lng: 76.7794, aliases: []}
+  Lucknow:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 26.8467, lng: 80.9462, aliases: []}
+  Mysore:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 12.2958, lng: 76.6394, aliases: [Mysuru]}
+  Gurgaon:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 28.4595, lng: 77.0266, aliases: [Gurugram]}
+  Noida:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 28.5355, lng: 77.3910, aliases: []}
+  Navi Mumbai:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 19.0330, lng: 73.0297, aliases: []}
+  Thane:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 19.2183, lng: 72.9781, aliases: []}
+  Indore:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 22.7196, lng: 75.8577, aliases: []}
+  Bhopal:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 23.2599, lng: 77.4126, aliases: []}
+  Surat:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 21.1702, lng: 72.8311, aliases: []}
+  Nagpur:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 21.1458, lng: 79.0882, aliases: []}
+  Coimbatore:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 11.0168, lng: 76.9558, aliases: [Kovai]}
+  Visakhapatnam:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 17.6868, lng: 83.2185, aliases: [Vizag]}
+  Thiruvananthapuram:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 8.5241, lng: 76.9366, aliases: [Trivandrum]}
+  Udaipur:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 24.5854, lng: 73.7125, aliases: []}
+  Jodhpur:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 26.2389, lng: 73.0243, aliases: []}
+  Amritsar:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 31.6340, lng: 74.8723, aliases: []}
+  Varanasi:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 25.3176, lng: 82.9739, aliases: [Banaras, Benares]}
+  Agra:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 27.1767, lng: 78.0081, aliases: []}
+  Rishikesh:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 30.0869, lng: 78.2676, aliases: []}
+  Shimla:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 31.1048, lng: 77.1734, aliases: []}
+  Manali:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 32.2432, lng: 77.1892, aliases: []}
+  Puducherry:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 11.9416, lng: 79.8083, aliases: [Pondicherry, Pondy]}
+  Guwahati:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 26.1445, lng: 91.7362, aliases: []}
+  Bhubaneswar:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 20.2961, lng: 85.8245, aliases: []}
+  Patna:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 25.5941, lng: 85.1376, aliases: []}
+  Dehradun:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 30.3165, lng: 78.0322, aliases: []}
+  Mangalore:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 12.9141, lng: 74.8560, aliases: [Mangaluru]}
+  Vadodara:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 22.3072, lng: 73.1812, aliases: [Baroda]}
+  Madurai:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 9.9252, lng: 78.1198, aliases: []}
+  Ooty:
+    {country_code: IN, timezone: Asia/Kolkata, lat: 11.4102, lng: 76.6950, aliases: [Udhagamandalam]}
+
+  # ------------------------------------------------------------------ Rest of the world
+  London:
+    {country_code: GB, timezone: Europe/London, lat: 51.5074, lng: -0.1278, aliases: []}
+  Manchester:
+    {country_code: GB, timezone: Europe/London, lat: 53.4808, lng: -2.2426, aliases: []}
+  Edinburgh:
+    {country_code: GB, timezone: Europe/London, lat: 55.9533, lng: -3.1883, aliases: []}
+  Birmingham:
+    {country_code: GB, timezone: Europe/London, lat: 52.4862, lng: -1.8904, aliases: []}
+  Dublin:
+    {country_code: IE, timezone: Europe/Dublin, lat: 53.3498, lng: -6.2603, aliases: []}
+  Paris:
+    {country_code: FR, timezone: Europe/Paris, lat: 48.8566, lng: 2.3522, aliases: []}
+  Berlin:
+    {country_code: DE, timezone: Europe/Berlin, lat: 52.5200, lng: 13.4050, aliases: []}
+  Munich:
+    {country_code: DE, timezone: Europe/Berlin, lat: 48.1351, lng: 11.5820, aliases: [München, Muenchen]}
+  Amsterdam:
+    {country_code: NL, timezone: Europe/Amsterdam, lat: 52.3676, lng: 4.9041, aliases: []}
+  Barcelona:
+    {country_code: ES, timezone: Europe/Madrid, lat: 41.3874, lng: 2.1686, aliases: []}
+  Madrid:
+    {country_code: ES, timezone: Europe/Madrid, lat: 40.4168, lng: -3.7038, aliases: []}
+  Rome:
+    {country_code: IT, timezone: Europe/Rome, lat: 41.9028, lng: 12.4964, aliases: [Roma]}
+  Milan:
+    {country_code: IT, timezone: Europe/Rome, lat: 45.4642, lng: 9.1900, aliases: [Milano]}
+  Venice:
+    {country_code: IT, timezone: Europe/Rome, lat: 45.4408, lng: 12.3155, aliases: [Venezia]}
+  Lisbon:
+    {country_code: PT, timezone: Europe/Lisbon, lat: 38.7223, lng: -9.1393, aliases: [Lisboa]}
+  Vienna:
+    {country_code: AT, timezone: Europe/Vienna, lat: 48.2082, lng: 16.3738, aliases: [Wien]}
+  Prague:
+    {country_code: CZ, timezone: Europe/Prague, lat: 50.0755, lng: 14.4378, aliases: [Praha]}
+  Zurich:
+    {country_code: CH, timezone: Europe/Zurich, lat: 47.3769, lng: 8.5417, aliases: [Zürich]}
+  Copenhagen:
+    {country_code: DK, timezone: Europe/Copenhagen, lat: 55.6761, lng: 12.5683, aliases: []}
+  Stockholm:
+    {country_code: SE, timezone: Europe/Stockholm, lat: 59.3293, lng: 18.0686, aliases: []}
+  Istanbul:
+    {country_code: TR, timezone: Europe/Istanbul, lat: 41.0082, lng: 28.9784, aliases: []}
+  New York:
+    {country_code: US, timezone: America/New_York, lat: 40.7128, lng: -74.0060, aliases: [New York City, NYC, Manhattan]}
+  Boston:
+    {country_code: US, timezone: America/New_York, lat: 42.3601, lng: -71.0589, aliases: []}
+  Washington DC:
+    {country_code: US, timezone: America/New_York, lat: 38.9072, lng: -77.0369, aliases: [Washington D.C., DC]}
+  Chicago:
+    {country_code: US, timezone: America/Chicago, lat: 41.8781, lng: -87.6298, aliases: []}
+  San Francisco:
+    {country_code: US, timezone: America/Los_Angeles, lat: 37.7749, lng: -122.4194, aliases: [SF]}
+  Los Angeles:
+    {country_code: US, timezone: America/Los_Angeles, lat: 34.0522, lng: -118.2437, aliases: [LA]}
+  Seattle:
+    {country_code: US, timezone: America/Los_Angeles, lat: 47.6062, lng: -122.3321, aliases: []}
+  Toronto:
+    {country_code: CA, timezone: America/Toronto, lat: 43.6532, lng: -79.3832, aliases: []}
+  Vancouver:
+    {country_code: CA, timezone: America/Vancouver, lat: 49.2827, lng: -123.1207, aliases: []}
+  Mexico City:
+    {country_code: MX, timezone: America/Mexico_City, lat: 19.4326, lng: -99.1332, aliases: [CDMX]}
+  São Paulo:
+    {country_code: BR, timezone: America/Sao_Paulo, lat: -23.5505, lng: -46.6333, aliases: [Sao Paulo]}
+  Sydney:
+    {country_code: AU, timezone: Australia/Sydney, lat: -33.8688, lng: 151.2093, aliases: []}
+  Melbourne:
+    {country_code: AU, timezone: Australia/Melbourne, lat: -37.8136, lng: 144.9631, aliases: []}
+  Auckland:
+    {country_code: NZ, timezone: Pacific/Auckland, lat: -36.8485, lng: 174.7633, aliases: []}
+  Singapore:
+    {country_code: SG, timezone: Asia/Singapore, lat: 1.3521, lng: 103.8198, aliases: []}
+  Dubai:
+    {country_code: AE, timezone: Asia/Dubai, lat: 25.2048, lng: 55.2708, aliases: []}
+  Abu Dhabi:
+    {country_code: AE, timezone: Asia/Dubai, lat: 24.4539, lng: 54.3773, aliases: []}
+  Doha:
+    {country_code: QA, timezone: Asia/Qatar, lat: 25.2854, lng: 51.5310, aliases: []}
+  Tokyo:
+    {country_code: JP, timezone: Asia/Tokyo, lat: 35.6762, lng: 139.6503, aliases: []}
+  Osaka:
+    {country_code: JP, timezone: Asia/Tokyo, lat: 34.6937, lng: 135.5023, aliases: []}
+  Kyoto:
+    {country_code: JP, timezone: Asia/Tokyo, lat: 35.0116, lng: 135.7681, aliases: []}
+  Seoul:
+    {country_code: KR, timezone: Asia/Seoul, lat: 37.5665, lng: 126.9780, aliases: []}
+  Hong Kong:
+    {country_code: HK, timezone: Asia/Hong_Kong, lat: 22.3193, lng: 114.1694, aliases: []}
+  Bangkok:
+    {country_code: TH, timezone: Asia/Bangkok, lat: 13.7563, lng: 100.5018, aliases: []}
+  Kuala Lumpur:
+    {country_code: MY, timezone: Asia/Kuala_Lumpur, lat: 3.1390, lng: 101.6869, aliases: [KL]}
+  Bali:
+    {country_code: ID, timezone: Asia/Makassar, lat: -8.6705, lng: 115.2126, aliases: [Denpasar]}
+  Kathmandu:
+    {country_code: NP, timezone: Asia/Kathmandu, lat: 27.7172, lng: 85.3240, aliases: []}
+  Colombo:
+    {country_code: LK, timezone: Asia/Colombo, lat: 6.9271, lng: 79.8612, aliases: []}
+  Dhaka:
+    {country_code: BD, timezone: Asia/Dhaka, lat: 23.8103, lng: 90.4125, aliases: []}
+  Cape Town:
+    {country_code: ZA, timezone: Africa/Johannesburg, lat: -33.9249, lng: 18.4241, aliases: []}

@@ -1,6 +1,12 @@
 import pytest
 
-from app.domain.constraints import VOCABULARY, detect_conflicts, is_valid, map_constraint_text, merge_constraints
+from app.domain.constraints import (
+    VOCABULARY,
+    detect_conflicts,
+    is_valid,
+    map_constraint_text,
+    merge_constraints,
+)
 from app.domain.schemas import Constraint
 
 
