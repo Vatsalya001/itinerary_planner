@@ -1,22 +1,24 @@
 """Postgres implementation of the Store protocol (psycopg 3 async + psycopg_pool).
 
 Same tables and semantics as the SQLite store (sliding two-window rate limits, retention) with JSONB and
-TIMESTAMPTZ columns. Counters use single-statement upserts with ``RETURNING`` so concurrent hits are counted
-atomically; a denied hit is compensated with a decrement, so concurrent hits never admit more than the limit.
+TIMESTAMPTZ columns. Counters use upserts with ``RETURNING`` inside one transaction per request, so concurrent hits
+are counted atomically; a denied request is rolled back in every window, so concurrent hits never admit more than
+the limit and a refusal never uses up a hit.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.store.base import RunRecord
+from app.store.base import LimitDecision, RateWindow, RunRecord
 from app.store.sqlite import (
     DAILY_COUNTER_TTL_DAYS,
     JSON_RUN_COLUMNS,
     RATE_LIMIT_ROW_TTL_S,
     RUN_COLUMNS,
+    seconds_until_utc_midnight,
     sliding_estimate,
     sliding_retry_after,
     utc_now,
@@ -183,21 +185,50 @@ class PostgresStore:
         return RunRecord.model_validate(dict(zip(RUN_COLUMNS, rows[0], strict=True)))
 
     async def hit_rate_limit(self, key: str, window_s: int, limit: int) -> tuple[bool, int]:
-        start, prev_start, elapsed = window_bounds(self._now().timestamp(), window_s)
-        rows = await self._execute(
-            "INSERT INTO rate_limits (key, window_start, count) VALUES (%s, %s, 1) "
-            "ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limits.count + 1 RETURNING count",
-            (key, start),
-        )
-        current = int(rows[0][0])
-        prev_rows = await self._execute("SELECT count FROM rate_limits WHERE key = %s AND window_start = %s",
-                                        (key, prev_start))
-        previous = int(prev_rows[0][0]) if prev_rows else 0
-        if sliding_estimate(previous, current, elapsed, window_s) <= limit + 1e-9:
-            return True, 0
-        await self._execute("UPDATE rate_limits SET count = count - 1 WHERE key = %s AND window_start = %s",
-                            (key, start))
-        return False, sliding_retry_after(previous, current - 1, limit, elapsed, window_s)
+        allowed, retry_after, _ = await self.hit_limits([(key, window_s, limit)])
+        return allowed, retry_after
+
+    async def hit_limits(self, windows: Sequence[RateWindow], daily_key: str | None = None,
+                         daily_cap: int | None = None) -> LimitDecision:
+        """One transaction: count the hit in every window and the daily counter (the upserts lock those rows, so
+        concurrent requests for the same keys queue behind each other), then roll everything back if any limit
+        refuses it (see ``Store.hit_limits``). Rows are always locked in the same order, so there is no deadlock."""
+        import psycopg
+
+        if self._pool is None:
+            raise RuntimeError("PostgresStore.init() was not called")
+        now = self._now()
+        now_ts = now.timestamp()
+        planned = [(key, window_s, limit, *window_bounds(now_ts, window_s)) for key, window_s, limit in windows]
+        decision: LimitDecision = (True, 0, None)
+        async with self._pool.connection() as conn, conn.transaction() as tx, conn.cursor() as cur:
+            denials: list[tuple[int, str]] = []
+            for key, window_s, limit, start, prev_start, elapsed in planned:
+                await cur.execute(
+                    "INSERT INTO rate_limits (key, window_start, count) VALUES (%s, %s, 1) "
+                    "ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limits.count + 1 RETURNING count",
+                    (key, start),
+                )
+                current = int((await cur.fetchone())[0])
+                await cur.execute("SELECT count FROM rate_limits WHERE key = %s AND window_start = %s",
+                                  (key, prev_start))
+                row = await cur.fetchone()
+                previous = int(row[0]) if row else 0
+                if sliding_estimate(previous, current, elapsed, window_s) > limit + 1e-9:
+                    denials.append((sliding_retry_after(previous, current - 1, limit, elapsed, window_s), key))
+            if daily_key is not None and daily_cap is not None:
+                await cur.execute(
+                    "INSERT INTO daily_counters (key, day, count) VALUES (%s, %s, 1) "
+                    "ON CONFLICT (key, day) DO UPDATE SET count = daily_counters.count + 1 RETURNING count",
+                    (daily_key, now.astimezone(UTC).date()),
+                )
+                if int((await cur.fetchone())[0]) > daily_cap:
+                    denials.append((seconds_until_utc_midnight(now), daily_key))
+            if denials:
+                retry_after, denied_by = max(denials)
+                decision = (False, retry_after, denied_by)
+                raise psycopg.Rollback(tx)
+        return decision
 
     async def incr_daily(self, key: str) -> int:
         rows = await self._execute(

@@ -1,9 +1,13 @@
 # Offline gazetteer used by the rules parser (app/domain/parser_rules.py) to spot city and neighbourhood
 # names in free text and to bias baseline place searches towards a neighbourhood.
 #
-# It is NOT the geocoder: resolve_location still asks Open-Meteo (or the fixture geocoder) for the
-# authoritative Location. Coordinates are approximate centre points (public geographic facts, rounded to
-# 4 decimals), good enough for a search bias and a 40 km sanity check, not for routing.
+# The live geocoder consults it first (app/providers/open_meteo.OpenMeteoGeocoder): a gazetteer city (or a
+# neighbourhood, which resolves to its city) is looked up on Open-Meteo in gazetteer spelling and accepted only
+# within 50 km of the centre below; if Open-Meteo has no such match or fails, the Location is built from this
+# file (id "gazetteer:<slug>"), so gazetteer cities always resolve. Other names go to Open-Meteo alone. The
+# fixture geocoder does not read this file. Coordinates are approximate centre points (public geographic facts,
+# rounded to 4 decimals), good enough for a search bias and a 40 km sanity check, not for routing.
+# Every country_code used here has a currency in countries.yaml.
 #
 # Format:
 #   <Canonical city name>:

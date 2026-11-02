@@ -56,8 +56,9 @@ FREE_TEXT_EXPECT: dict[str, dict[str, Any]] = {
 }
 LOCATION_FOR_CITY = {"bangalore": BLR, "bengaluru": BLR, "mumbai": BOM}
 
-# Cases whose baseline result fails an assertion; each reason names a documented defect in
-# docs/verification/PHASE1.md. strict=True so a fix turns these into XPASS failures to be cleaned up.
+# Cases whose baseline result fails an assertion. Empty: every applicable case passes. A new entry must name a
+# documented defect in docs/verification/PHASE1.md; it is marked xfail(strict=True), so the fix shows up as an XPASS
+# failure and the entry must then be removed.
 KNOWN_FAILURES: dict[str, str] = {
 }
 

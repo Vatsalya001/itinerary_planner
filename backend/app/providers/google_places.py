@@ -1,8 +1,13 @@
-"""Google Places API (New): Text Search for live candidates, Place Details (Pro mask) for re-hydration.
+"""Google Places API (New): Text Search for live candidates, Place Details for share-link re-hydration.
 
 Terms (IMPLEMENTATION_PLAN.md section 6): only place IDs may be stored long-term; display fields are
 re-fetched. Results are shown with "Google Maps" attribution and link to ``googleMapsUri``. The API key is
 sent only in the ``X-Goog-Api-Key`` header and never logged or put into error messages.
+
+Health: each provider instance keeps the outcome of its last live call in ``status`` (``unknown`` before the
+first call, then ``ok``, ``auth_error`` or ``unavailable``), which ``/api/health`` reports. A rejected key
+(401, 403, or 400 with reason ``API_KEY_INVALID``) is logged at ERROR once per process with the status code
+only. Callers still fall back to the snapshot, so users get a plan and operators still see the misconfiguration.
 """
 
 from __future__ import annotations
@@ -10,7 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -55,13 +60,30 @@ PROVIDER = "google_places"
 SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
 TIMEOUT_S = 8.0
+CONNECT_TIMEOUT_S = 4.0
+# Passed per request. A bare float would replace the shared client's Timeout(8.0, connect=4.0) for every phase,
+# connect included, so the per-request value is a Timeout with its own connect limit.
+TIMEOUT = httpx.Timeout(TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
 SEARCH_FIELDS = (
     "id", "displayName", "formattedAddress", "location", "types", "primaryType", "googleMapsUri", "businessStatus",
     "accessibilityOptions", "priceLevel", "priceRange", "rating", "userRatingCount", "regularOpeningHours",
     "currentOpeningHours", "servesVegetarianFood", "liveMusic", "outdoorSeating",
 )
 SEARCH_FIELD_MASK = ",".join(f"places.{f}" for f in SEARCH_FIELDS)
-DETAILS_FIELD_MASK = "id,displayName,formattedAddress,location,types,googleMapsUri,businessStatus"  # Pro SKU
+# Place Details for share-link rehydration. Opening hours, rating, rating count and the price fields are billed at
+# the Place Details Enterprise SKU, which costs more per call than the Pro SKU the identity and display fields
+# alone need. Without them a re-opened Google stop shows unknown hours and no rating. Rehydration copies display
+# fields only (store.redact._restore); a stop's stored cost, category and schedule are never replaced.
+DETAILS_FIELDS = (
+    "id", "displayName", "formattedAddress", "location", "types", "primaryType", "googleMapsUri", "businessStatus",
+    "regularOpeningHours", "currentOpeningHours", "rating", "userRatingCount", "priceLevel", "priceRange",
+)
+DETAILS_FIELD_MASK = ",".join(DETAILS_FIELDS)
+# get() returns a place whose Google types map to none of our categories under this placeholder instead of
+# dropping it (a dropped place reads "Place details unavailable"). Rehydration keeps the stored category.
+DETAILS_PLACEHOLDER_CATEGORY = "event"
+PlacesStatus = Literal["unknown", "ok", "auth_error", "unavailable"]
+_auth_error_logged = False  # one ERROR line per process for a rejected key
 _FOOD_GROUPS = {"food", "drinks"}
 _PLACE_ID = re.compile(r"^[A-Za-z0-9_-]{4,300}$")
 
@@ -215,6 +237,8 @@ def _units(money: Any) -> int | None:
 
 
 def _cost(place: dict[str, Any], key: str, currency: str) -> CostRange:
+    """Listed ``priceRange`` when it is in the location currency (any currency, not only INR), else the
+    ``priceLevel`` band, else the category default."""
     pr = place.get("priceRange")
     if pr is not None and not isinstance(pr, dict):
         raise MalformedPlace("bad priceRange")
@@ -224,12 +248,14 @@ def _cost(place: dict[str, Any], key: str, currency: str) -> CostRange:
         cur = start.get("currencyCode") if isinstance(start, dict) else None
         if lo is not None and cur == currency:
             if hi is None or not isinstance(end, dict) or end.get("currencyCode") != currency:
-                # open-ended range ("2000+"): use the band or category upper bound, never below lo
+                # open-ended range ("2000+"): use the band or category upper bound, never below lo. A bound from
+                # another currency (no band table for this one) is never mixed in; the range is then unusable.
                 fallback = price_level_band(place.get("priceLevel"), currency) or category_default_cost(key, currency)
-                hi = max(lo, fallback.max)
-            if hi < lo:
-                raise MalformedPlace("inverted priceRange")
-            return CostRange(min=lo, max=hi, currency=currency, basis="listed_price_range")
+                hi = max(lo, fallback.max) if fallback.currency == currency else None
+            if hi is not None:
+                if hi < lo:
+                    raise MalformedPlace("inverted priceRange")
+                return CostRange(min=lo, max=hi, currency=currency, basis="listed_price_range")
     band = price_level_band(place.get("priceLevel"), currency)
     if band is not None and band.currency == currency:
         return band
@@ -297,10 +323,14 @@ def _check_shape(place: dict[str, Any]) -> None:
 
 
 def place_to_candidate(
-    place: dict[str, Any], ctx: WorldContext, wanted_category: str | None = None, now: datetime | None = None
+    place: dict[str, Any], ctx: WorldContext, wanted_category: str | None = None, now: datetime | None = None,
+    *, unmapped_category: str | None = None,
 ) -> Candidate | None:
     """One Places API (New) place -> Candidate, or None (not operational, no location, no category,
-    or more than 40 km from the city centre). Raises MalformedPlace for wrongly typed fields."""
+    or more than 40 km from the city centre). Raises MalformedPlace for wrongly typed fields.
+
+    ``unmapped_category`` (details lookups only) is used when the place's types map to no category, so the
+    place is returned rather than dropped."""
     if not isinstance(place, dict):
         raise MalformedPlace("place is not an object")
     _check_shape(place)
@@ -321,7 +351,7 @@ def place_to_candidate(
         return None
     if not within_city(lat, lng, ctx.location):
         return None
-    key = _choose_category(place, wanted_category)
+    key = _choose_category(place, wanted_category) or unmapped_category
     if key is None:
         return None
     info = category(key)
@@ -388,14 +418,43 @@ def text_query(intent: str, location: Location, neighbourhood: str | None = None
     return f"{intent} in {city}"
 
 
+def _is_key_rejected(resp: httpx.Response) -> bool:
+    """401/403, or Google's 400 for an invalid key (``error.details[].reason == "API_KEY_INVALID"``)."""
+    if resp.status_code in (401, 403):
+        return True
+    if resp.status_code != 400:
+        return False
+    try:
+        error = resp.json().get("error")
+        details = error.get("details") if isinstance(error, dict) else None
+    except Exception:  # an unreadable body is not evidence of a key problem
+        return False
+    return isinstance(details, list) and any(
+        isinstance(d, dict) and d.get("reason") == "API_KEY_INVALID" for d in details)
+
+
+def _log_rejected_key(status_code: int) -> None:
+    global _auth_error_logged
+    if _auth_error_logged:
+        log.warning("google places HTTP %s (API key rejected)", status_code)
+        return
+    _auth_error_logged = True
+    log.error("google places rejected the API key (HTTP %s); live place data is off and searches fall back to "
+              "the snapshot until GOOGLE_MAPS_API_KEY is fixed", status_code,
+              extra={"status_code": status_code, "provider": PROVIDER})
+
+
 class GooglePlaces:
-    """PlacesProvider over Google Places API (New). ``covers`` is always True (global coverage)."""
+    """PlacesProvider over Google Places API (New). ``covers`` is always True (global coverage).
+
+    ``status`` is the outcome of the last live call (``unknown`` before the first), reported by /api/health."""
 
     name = "google_places"
 
     def __init__(self, api_key: str, client: httpx.AsyncClient) -> None:
         self._api_key = api_key
         self._client = client
+        self.status: PlacesStatus = "unknown"
 
     def __repr__(self) -> str:  # never expose the key
         return "GooglePlaces()"
@@ -407,25 +466,36 @@ class GooglePlaces:
         headers = {"X-Goog-Api-Key": self._api_key, "X-Goog-FieldMask": field_mask}
         try:
             if method == "POST":
-                resp = await self._client.post(url, json=json_body, headers=headers, timeout=TIMEOUT_S)
+                resp = await self._client.post(url, json=json_body, headers=headers, timeout=TIMEOUT)
             else:
-                resp = await self._client.get(url, headers=headers, timeout=TIMEOUT_S)
+                resp = await self._client.get(url, headers=headers, timeout=TIMEOUT)
         except httpx.TimeoutException as exc:
+            self.status = "unavailable"
             raise ProviderError(PROVIDER, "timeout", "request timed out", retryable=True) from exc
         except httpx.HTTPError as exc:
+            self.status = "unavailable"
             raise ProviderError(PROVIDER, "network", type(exc).__name__, retryable=True) from exc
         if resp.status_code == 404 and method == "GET":
+            self.status = "ok"
             return None
         if resp.status_code != 200:
             code = {400: "bad_request", 401: "unauthorized", 403: "forbidden", 404: "not_found",
                     429: "rate_limited"}.get(resp.status_code, f"http_{resp.status_code}")
-            log.warning("google places HTTP %s", resp.status_code)
+            if _is_key_rejected(resp):
+                self.status = "auth_error"
+                _log_rejected_key(resp.status_code)
+            else:
+                self.status = "unavailable"
+                log.warning("google places HTTP %s", resp.status_code)
             raise ProviderError(PROVIDER, code, f"HTTP {resp.status_code}",
                                 retryable=resp.status_code == 429 or resp.status_code >= 500)
         try:
-            return resp.json()
+            data = resp.json()
         except ValueError as exc:
+            self.status = "unavailable"
             raise ProviderError(PROVIDER, "bad_response", "invalid JSON") from exc
+        self.status = "ok"
+        return data
 
     async def search(self, query: PlaceQuery, ctx: WorldContext) -> list[Candidate]:
         lat, lng = ctx.location.lat, ctx.location.lng
@@ -474,6 +544,8 @@ class GooglePlaces:
         return out
 
     async def get(self, candidate_id: str, ctx: WorldContext) -> Candidate | None:
+        """Place Details for share-link rehydration (display fields, hours and rating). A place whose types map
+        to no category is still returned (``DETAILS_PLACEHOLDER_CATEGORY``); the caller keeps its own category."""
         if not candidate_id.startswith("gp:"):
             return None
         pid = candidate_id[3:]
@@ -483,6 +555,6 @@ class GooglePlaces:
         if data is None:
             return None
         try:
-            return place_to_candidate(data, ctx)
+            return place_to_candidate(data, ctx, unmapped_category=DETAILS_PLACEHOLDER_CATEGORY)
         except Exception as exc:
             raise ProviderError(PROVIDER, "bad_response", "malformed place details") from exc

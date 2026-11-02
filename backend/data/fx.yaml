@@ -10,11 +10,20 @@
 #   AUD: XE and the RBA official rate for 2 Nov 2026 (0.7023 USD per AUD -> 1.424)
 #   CAD: XE (1.398-1.400)
 #   AED: pegged to the US dollar at 3.6725
+# Added the same day for the other countries in countries.yaml, from the X-Rates USD table of 2 Nov 2026 16:35 UTC
+# (its EUR 0.893, GBP 0.745, INR 94.74 and JPY 157.85 agree with the rows above), rounded:
+#   CHF 0.819, CZK 21.72, DKK 6.674, HKD 7.847, IDR 18113, KRW 1345, LKR 332.3, MXN 18.53, MYR 4.071, NPR 151.6,
+#   NZD 1.776, QAR 3.64, SEK 9.787, THB 33.70, TRY 49.97, ZAR 16.58, BRL 5.436
+#   Cross-checks: the ECB reference rates of 30 Oct 2026 (via EUR/USD 1.1172: CHF 0.823, KRW 1335, THB 33.73,
+#   TRY 49.95, BRL 5.43, ZAR 16.69) and exchangerates.org.uk on 2 Nov (CHF 0.821, ZAR 16.62, TRY 49.97).
+#   Pegs and bands: QAR is pegged at 3.64, HKD trades in its 7.75-7.85 band, NPR is pegged to INR at 1.6
+#   (94.74 x 1.6 = 151.6), DKK sits in ERM II near 7.46 per EUR.
+#   BDT: XE 124.40, Wise 124.4 and Pluang 124.45 on 2 Nov 2026 (not on the X-Rates table)
 # Refresh these by hand before relying on them; never present a converted amount as exact.
 
 label: approximate reference rates, not live
 as_of: 2026-11-02
-source: "Mid-market quotes from Trading Economics, OFX, X-Rates, XE, Bloomberg and the RBA, checked 2026-11-02; AED is the official USD peg"
+source: "Mid-market quotes from Trading Economics, OFX, X-Rates, XE, Wise, Bloomberg, the RBA and the ECB (30 Oct reference rates), checked 2026-11-02; AED, QAR and NPR are official pegs"
 units_per_usd:
   USD: 1.0
   INR: 95.0
@@ -25,3 +34,21 @@ units_per_usd:
   SGD: 1.279
   AUD: 1.424
   CAD: 1.399
+  BDT: 124.4
+  BRL: 5.436
+  CHF: 0.819
+  CZK: 21.72
+  DKK: 6.674
+  HKD: 7.847
+  IDR: 18113.0
+  KRW: 1345.0
+  LKR: 332.3
+  MXN: 18.53
+  MYR: 4.071
+  NPR: 151.6
+  NZD: 1.776
+  QAR: 3.64
+  SEK: 9.787
+  THB: 33.70
+  TRY: 49.97
+  ZAR: 16.58

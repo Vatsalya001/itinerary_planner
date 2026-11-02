@@ -1,14 +1,23 @@
 """Storage interface (plans for share links, run log, feedback, rate limits, eval results).
 
 OWNER: API agent (Phase 2) implements SQLite and Postgres versions. Contract only.
+
+Rate limits are sliding two-window estimates (``previous * (1 - elapsed/window) + current`` over windows aligned to
+multiples of ``window_s``), not fixed windows. A request that is refused is never counted.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
+
+# (key, window_s, limit) for one sliding rate-limit window
+RateWindow = tuple[str, int, int]
+# (allowed, retry_after_seconds, key of the limit that refused: a window key or the daily key; None when allowed)
+LimitDecision = tuple[bool, int, str | None]
 
 
 class RunRecord(BaseModel):
@@ -41,7 +50,15 @@ class Store(Protocol):
     async def record_run(self, run: RunRecord) -> None: ...
 
     async def hit_rate_limit(self, key: str, window_s: int, limit: int) -> tuple[bool, int]:
-        """Count one hit; return (allowed, retry_after_seconds). Fixed window."""
+        """Count one hit if it fits; return (allowed, retry_after_seconds). Sliding two-window estimate; a denied
+        hit is not counted."""
+        ...
+
+    async def hit_limits(self, windows: Sequence[RateWindow], daily_key: str | None = None,
+                         daily_cap: int | None = None) -> LimitDecision:
+        """Check every window (and the UTC-day counter ``daily_key`` against ``daily_cap``) first, then count the
+        request in all of them only if all allow it, atomically. When several refuse, ``retry_after`` is the
+        longest wait and the key is that limit's; the daily cap's wait is the time to UTC midnight."""
         ...
 
     async def incr_daily(self, key: str) -> int:

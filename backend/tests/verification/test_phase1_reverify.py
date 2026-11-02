@@ -1,9 +1,9 @@
 """Phase 1 re-verification (after the D-01..D-27 fixes): regressions and residual defects.
 
-``xfail(strict=True)`` tests reproduce a defect confirmed during re-verification and documented in
-docs/verification/PHASE1.md (section "Re-verification"); the reason starts with the defect ID (R-n for new
-regressions/residuals). They assert the correct behaviour, so a fix turns them into XPASS failures that must then
-be un-marked. Passing tests pin behaviour the fixes established. Synthetic data only; no network.
+Tests named after an R-n defect reproduced a regression or residual confirmed during re-verification and
+documented in docs/verification/PHASE1.md (section "Re-verification"). They assert the correct behaviour and pass
+now that every R-n defect is fixed (no xfail markers remain). The other tests pin behaviour the fixes established.
+Synthetic data only; no network.
 """
 
 from __future__ import annotations

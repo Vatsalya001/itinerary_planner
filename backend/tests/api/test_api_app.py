@@ -38,19 +38,77 @@ async def test_health_reports_status_without_secrets(make_client: Any) -> None:
         body = resp.json()
         assert body == {
             "status": "ok", "version": "abc1234", "env": "test", "primary_model": "ollama:qwen3.5:9b",
-            "places_provider": "google", "events_provider": "tavily", "db": "ok",
+            "places_provider": "google", "events_provider": "tavily", "db": "ok", "places": "ok",
         }
         assert SENTINEL not in resp.text
 
 
-async def test_health_degraded_when_db_fails(make_client: Any) -> None:
+async def test_health_is_503_when_db_fails(make_client: Any) -> None:
     async with make_client() as (client, _app, deps):
         async def broken() -> bool:
             raise RuntimeError("db down")
 
         deps.store.ping = broken
-        body = (await client.get("/api/health")).json()
+        resp = await client.get("/api/health")
+        assert resp.status_code == 503  # Docker HEALTHCHECK and Render read the status code
+        body = resp.json()
         assert body["status"] == "degraded" and body["db"] == "error"
+        assert resp.headers["cache-control"] == "no-store"
+
+        async def false_ping() -> bool:
+            return False
+
+        deps.store.ping = false_ping
+        assert (await client.get("/api/health")).status_code == 503
+
+
+async def test_health_reports_the_live_places_status(make_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import contextlib
+
+    import respx
+
+    from app.domain.schemas import PlaceQuery
+    from app.providers import google_places as gp_module
+    from app.providers.base import ProviderError
+    from app.providers.google_places import SEARCH_URL, GooglePlaces
+    from tests.providers.conftest import make_ctx
+
+    monkeypatch.setattr(gp_module, "_auth_error_logged", False)  # restored after the test
+    async with httpx.AsyncClient() as http:
+        live = GooglePlaces(SENTINEL, http)
+        async with make_client(places=live) as (client, _app, _deps):
+            assert (await client.get("/api/health")).json()["places"] == "unknown"  # no live call yet
+            for status, expected in ((403, "auth_error"), (503, "unavailable"), (200, "ok")):
+                with respx.mock() as mock, contextlib.suppress(ProviderError):
+                    mock.post(SEARCH_URL).mock(return_value=httpx.Response(status, json={"places": []}))
+                    await live.search(PlaceQuery(intent="cafe"), make_ctx())
+                resp = await client.get("/api/health")
+                assert resp.status_code == 200, status  # a places problem never fails the health check
+                assert resp.json()["places"] == expected, status
+                assert resp.json()["status"] == "ok"
+
+
+async def test_eval_summary_prefers_the_newer_generated_at(make_client: Any, monkeypatch: pytest.MonkeyPatch,
+                                                           tmp_path: Path) -> None:
+    summary_file = tmp_path / "summary.json"
+    summary_file.write_text(json.dumps({"source": "file", "generated_at": "2026-11-02T15:53:14+00:00"}))
+    monkeypatch.setattr(routes, "EVALS_SUMMARY_PATH", summary_file)
+    async with make_client() as (client, _app, deps):
+        await deps.store.save_eval_summary({"source": "store", "generated_at": "2026-11-01T09:00:00+00:00"})
+        assert (await client.get("/api/evals/summary")).json()["source"] == "file"  # bundled file is newer
+        await deps.store.save_eval_summary({"source": "store", "generated_at": "2026-11-03T09:00:00Z"})
+        assert (await client.get("/api/evals/summary")).json()["source"] == "store"
+        await deps.store.save_eval_summary({"source": "store", "generated_at": "not a date"})
+        assert (await client.get("/api/evals/summary")).json()["source"] == "file"  # unreadable sorts oldest
+
+
+def test_newest_summary_rules() -> None:
+    old, new = {"generated_at": "2026-11-01T00:00:00"}, {"generated_at": "2026-11-02T00:00:00+05:30"}
+    assert routes.newest_summary(None, None) is None
+    assert routes.newest_summary(old, None) is old and routes.newest_summary(None, new) is new
+    assert routes.newest_summary(old, new) is new and routes.newest_summary(new, old) is new
+    same = dict(new)
+    assert routes.newest_summary(new, same) is new  # tie: the published (store) copy
 
 
 async def test_security_headers_on_every_kind_of_response(make_client: Any, fake_runner: FakeRunner) -> None:

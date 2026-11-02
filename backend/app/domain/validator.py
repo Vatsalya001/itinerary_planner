@@ -1,7 +1,9 @@
 """Authoritative plan validation (see IMPLEMENTATION_PLAN.md section 7). OWNER: domain agent.
 
-Severity: everything is an error except HOURS_UNVERIFIED, WEATHER_RISK, CONSTRAINT_DROPPED and
-ALCOHOL_SERVED, which are warnings. ``ValidationReport.ok`` is True when there are no errors.
+Severity: everything is an error except the seven ``WARNING_CODES``: HOURS_UNVERIFIED, WEATHER_RISK,
+CONSTRAINT_DROPPED, ALCOHOL_SERVED, PACING_RELAXED, LOCATION_APPROXIMATE and IDLE_WAIT (HOURS_UNVERIFIED is
+raised as an error for concert halls, theatres and cinemas, below). ``ValidationReport.ok`` is True when there are
+no errors.
 
 Codes added beyond the original list:
 
@@ -72,7 +74,7 @@ from app.domain.sun import effective_sunset
 from app.domain.travel import coords_valid, haversine_km
 from app.providers.base import TravelEstimator
 
-# code -> one-line meaning. Severity is decided per check; WEATHER_RISK and CONSTRAINT_DROPPED are warnings.
+# code -> one-line meaning. Codes in WARNING_CODES default to warnings; a check may override the severity.
 CODES: dict[str, str] = {
     "SCHEMA_INVALID": "Draft failed schema validation",
     "UNKNOWN_ID": "Candidate ID not in this run's ledger",

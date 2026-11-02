@@ -31,7 +31,6 @@ from app.graph import runner as graph_runner
 from app.observability import request_id_var, run_id_var
 from app.store import redact
 from app.store.base import RunRecord
-from app.store.sqlite import seconds_until_utc_midnight
 from app.trace import new_run_id
 
 log = logging.getLogger("app.api")
@@ -49,6 +48,7 @@ READS_PER_10MIN = 60
 # count toward the per-IP plan limits or the global daily plan cap.
 RESUMES_PER_10MIN = 30
 RESUME_EXPIRED_DETAIL = "This plan can no longer be resumed"
+DAILY_PLANS_KEY = "plans"  # global per-UTC-day counter behind DAILY_PLAN_CAP
 
 
 def new_share_id() -> str:
@@ -129,30 +129,33 @@ async def check_resume_limit(request: Request, deps: Deps) -> SafeJSONResponse |
 
 
 async def check_limits(request: Request, deps: Deps) -> SafeJSONResponse | None:
-    """New plans: per-IP sliding windows (10 min, day), then the global daily plan cap. Fails open (logged)."""
+    """New plans: per-IP sliding windows (10 min, day) and the global daily plan cap, checked together.
+
+    ``store.hit_limits`` checks every limit first and counts the request in all of them only when all allow it
+    (atomically per store), so a request refused by the day window or the daily cap never uses up a 10-minute
+    hit. Fails open (logged) if the store errors."""
     settings = deps.settings
     store = deps.store
     if store is None:
         return None
     subject = _subject(request, deps)
     try:
-        windows = ((f"ip:{subject}:10m", 600, settings.rate_limit_per_10min),
-                   (f"ip:{subject}:day", 86400, settings.rate_limit_per_day))
-        for key, window_s, limit in windows:
-            allowed, retry_after = await store.hit_rate_limit(key, window_s, limit)
-            if not allowed:
-                log.info("rate limited", extra={"limit_window_s": window_s})
-                return rejected(429, f"Too many plans; try again in {retry_after} seconds",
-                                headers={"Retry-After": str(retry_after)})
-        count = await store.incr_daily("plans")
-        if count > settings.daily_plan_cap:
-            retry_after = seconds_until_utc_midnight(datetime.now(UTC))
-            log.warning("daily plan cap reached", extra={"daily_plan_cap": settings.daily_plan_cap})
-            return rejected(429, "The planner has reached today's limit. Please try again tomorrow.",
-                            headers={"Retry-After": str(retry_after)})
+        windows = [(f"ip:{subject}:10m", 600, settings.rate_limit_per_10min),
+                   (f"ip:{subject}:day", 86400, settings.rate_limit_per_day)]
+        allowed, retry_after, denied_by = await store.hit_limits(windows, daily_key=DAILY_PLANS_KEY,
+                                                                 daily_cap=settings.daily_plan_cap)
     except Exception as exc:
         log.error("rate limit check failed; allowing request", extra={"error_type": type(exc).__name__})
-    return None
+        return None
+    if allowed:
+        return None
+    if denied_by == DAILY_PLANS_KEY:
+        log.warning("daily plan cap reached", extra={"daily_plan_cap": settings.daily_plan_cap})
+        return rejected(429, "The planner has reached today's limit. Please try again tomorrow.",
+                        headers={"Retry-After": str(retry_after)})
+    log.info("rate limited", extra={"limit_key": (denied_by or "").rsplit(":", 1)[-1]})
+    return rejected(429, f"Too many plans; try again in {retry_after} seconds",
+                    headers={"Retry-After": str(retry_after)})
 
 
 def _int(value: Any) -> int:
@@ -403,28 +406,64 @@ async def plan_feedback(request: Request, share_id: str, body: FeedbackRequest) 
     return Response(status_code=204)
 
 
+def _generated_at(summary: dict[str, Any]) -> datetime:
+    """The summary's ``generated_at`` as an aware datetime; missing or unreadable values sort oldest."""
+    raw = summary.get("generated_at")
+    try:
+        parsed = datetime.fromisoformat(str(raw)) if raw else None
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def newest_summary(stored: dict[str, Any] | None, bundled: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Whichever summary has the newer ``generated_at``; the published (store) copy wins a tie."""
+    if stored is None or bundled is None:
+        return stored if stored is not None else bundled
+    return bundled if _generated_at(bundled) > _generated_at(stored) else stored
+
+
 @router.get("/evals/summary", response_model=None)
 async def evals_summary(request: Request) -> Response:
+    """The newest eval summary: the store's latest published row or the bundled ``summary.json``, by
+    ``generated_at`` (a redeploy with a newer bundled file must not be hidden by an older published row)."""
     deps = get_deps(request)
-    summary: dict[str, Any] | None = None
+    stored: dict[str, Any] | None = None
     if deps.store is not None:
         try:
-            summary = await deps.store.get_eval_summary()
+            stored = await deps.store.get_eval_summary()
         except Exception as exc:
             log.error("reading eval summary failed", extra={"error_type": type(exc).__name__})
+    bundled: dict[str, Any] | None = None
     path = EVALS_SUMMARY_PATH
-    if summary is None and path.is_file():
+    if path.is_file():
         try:
-            summary = json.loads(path.read_text(encoding="utf-8"))
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            bundled = loaded if isinstance(loaded, dict) else None
         except (OSError, ValueError) as exc:
             log.error("eval summary file unreadable", extra={"error_type": type(exc).__name__})
+    summary = newest_summary(stored, bundled)
     if summary is None:
         return SafeJSONResponse({"detail": "No eval summary yet"}, status_code=404)
     return SafeJSONResponse(summary)
 
 
+def places_status(deps: Deps | None) -> str:
+    """``ok`` | ``auth_error`` | ``unavailable`` from the live places provider's last call (``unknown`` before
+    the first one). Keyless providers (snapshot, fixture) have no live calls and report ``ok``."""
+    if deps is None:
+        return "unknown"
+    status = getattr(deps.places, "status", "ok")
+    return status if isinstance(status, str) else "unknown"
+
+
 @router.get("/health", response_model=None)
 async def health(request: Request) -> Response:
+    """200 when the database answers, else 503 with ``status: "degraded"`` (Docker and Render health checks
+    read the status code). ``places`` is informational: a rejected Maps key or a Places outage falls back to the
+    snapshot for users, so it never fails the health check."""
     deps = getattr(request.app.state, "deps", None)
     db = "error"
     if deps is not None and deps.store is not None:
@@ -443,5 +482,6 @@ async def health(request: Request) -> Response:
         "places_provider": settings.resolved_places_provider(),
         "events_provider": settings.resolved_events_provider(),
         "db": db,
+        "places": places_status(deps),
     }
-    return SafeJSONResponse(body, headers={"Cache-Control": "no-store"})
+    return SafeJSONResponse(body, status_code=200 if db == "ok" else 503, headers={"Cache-Control": "no-store"})

@@ -3,6 +3,7 @@ Places API (New) reference); nothing is copied from real Google responses."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from datetime import date
@@ -12,10 +13,11 @@ import httpx
 import pytest
 import respx
 
-from app.domain.schemas import Evidence, Location, PlaceQuery, WorldContext
+from app.domain.schemas import CostRange, Evidence, Location, PlaceQuery, WorldContext
 from app.providers.base import PlacesProvider, ProviderError
 from app.providers.google_places import (
     DETAILS_FIELD_MASK,
+    DETAILS_PLACEHOLDER_CATEGORY,
     SEARCH_FIELD_MASK,
     SEARCH_URL,
     GooglePlaces,
@@ -272,8 +274,9 @@ async def test_timeout_and_network_errors(blr_ctx: WorldContext) -> None:
         assert KEY not in str(info.value)
 
 
-async def test_get_uses_pro_field_mask(blr_ctx: WorldContext) -> None:
-    detail = {k: v for k, v in place("DETAIL").items()}
+async def test_get_uses_the_details_field_mask(blr_ctx: WorldContext) -> None:
+    detail = place("DETAIL", rating=4.3, userRatingCount=950,
+                   regularOpeningHours={"periods": [{"open": _p(SAT, 9), "close": _p(SAT, 21)}]})
     with respx.mock(assert_all_called=True) as mock:
         route = mock.get("https://places.googleapis.com/v1/places/DETAIL").mock(
             return_value=httpx.Response(200, json=detail))
@@ -285,9 +288,112 @@ async def test_get_uses_pro_field_mask(blr_ctx: WorldContext) -> None:
             assert await gp.get("fx:blr-cubbon-park", blr_ctx) is None
             assert await gp.get("gp:../../etc", blr_ctx) is None
     assert c is not None and c.id == "gp:DETAIL" and c.category == "cafe"
+    # share-link rehydration shows hours and rating, so the details mask must ask for them
+    assert (c.rating, c.rating_count) == (4.3, 950)
+    assert c.hours.status == "known" and c.hours.periods == [(540, 1260)]
     req = route.calls.last.request
     assert req.headers["X-Goog-FieldMask"] == DETAILS_FIELD_MASK and req.headers["X-Goog-Api-Key"] == KEY
+    mask = set(DETAILS_FIELD_MASK.split(","))
+    assert {"regularOpeningHours", "currentOpeningHours", "rating", "userRatingCount", "priceLevel",
+            "priceRange", "displayName", "formattedAddress", "googleMapsUri"} <= mask
     assert missing.called
+
+
+async def test_get_keeps_a_place_whose_types_do_not_map(blr_ctx: WorldContext) -> None:
+    odd = place("ODDTYPES", types=["point_of_interest", "establishment"], primaryType="point_of_interest")
+    with respx.mock() as mock:
+        mock.get("https://places.googleapis.com/v1/places/ODDTYPES").mock(return_value=httpx.Response(200, json=odd))
+        async with httpx.AsyncClient() as client:
+            c = await GooglePlaces(KEY, client).get("gp:ODDTYPES", blr_ctx)
+            # a text search for the same place without a category still drops it (nothing to plan it as)
+            res, _ = await run_search([odd], blr_ctx)
+    assert c is not None and c.name == "Synthetic ODDTYPES" and c.category == DETAILS_PLACEHOLDER_CATEGORY
+    assert res == []
+
+
+async def test_requests_use_a_timeout_with_a_connect_limit(blr_ctx: WorldContext) -> None:
+    _, route = await run_search([place()], blr_ctx)
+    timeout = route.calls.last.request.extensions["timeout"]
+    assert timeout == {"connect": 4.0, "read": 8.0, "write": 8.0, "pool": 8.0}
+
+
+@pytest.mark.parametrize(("status", "body"), [
+    (401, {"error": {"status": "UNAUTHENTICATED"}}),
+    (403, {"error": {"status": "PERMISSION_DENIED"}}),
+    (400, {"error": {"status": "INVALID_ARGUMENT", "details": [{"reason": "API_KEY_INVALID"}]}}),
+])
+async def test_rejected_key_is_an_auth_error_logged_once(blr_ctx: WorldContext, caplog: pytest.LogCaptureFixture,
+                                                         monkeypatch: pytest.MonkeyPatch, status: int,
+                                                         body: dict[str, Any]) -> None:
+    import app.providers.google_places as gp_module
+
+    monkeypatch.setattr(gp_module, "_auth_error_logged", False)
+    caplog.set_level("WARNING", logger="app.providers.google_places")
+    with respx.mock() as mock:
+        mock.post(SEARCH_URL).mock(return_value=httpx.Response(status, json=body))
+        async with httpx.AsyncClient() as client:
+            gp = GooglePlaces(KEY, client)
+            assert gp.status == "unknown"
+            for _ in range(3):
+                with pytest.raises(ProviderError):
+                    await gp.search(PlaceQuery(intent="cafe"), blr_ctx)
+    assert gp.status == "auth_error"
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1 and f"HTTP {status}" in errors[0].getMessage()
+    assert all(KEY not in r.getMessage() for r in caplog.records)
+
+
+async def test_status_tracks_the_last_live_call(blr_ctx: WorldContext, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level("WARNING", logger="app.providers.google_places")
+    async with httpx.AsyncClient() as client:
+        gp = GooglePlaces(KEY, client)
+        for response, expected in (
+            (httpx.Response(400, json={"error": {"status": "INVALID_ARGUMENT"}}), "unavailable"),
+            (httpx.Response(429), "unavailable"),
+            (httpx.ConnectError("down"), "unavailable"),
+            (httpx.Response(200, json={"places": []}), "ok"),
+            (httpx.Response(503), "unavailable"),
+            (httpx.Response(200, text="not json"), "unavailable"),
+        ):
+            with respx.mock() as mock:
+                route = mock.post(SEARCH_URL)
+                if isinstance(response, Exception):
+                    route.mock(side_effect=response)
+                else:
+                    route.mock(return_value=response)
+                with contextlib.suppress(ProviderError):
+                    await gp.search(PlaceQuery(intent="cafe"), blr_ctx)
+            assert gp.status == expected, response
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]  # only a rejected key is an ERROR
+
+
+async def test_price_range_in_a_non_inr_local_currency(ctx_factory: Any) -> None:
+    bangkok = Location(id="gazetteer:bangkok", name="Bangkok", country_code="TH", lat=13.7563, lng=100.5018,
+                       timezone="Asia/Bangkok", currency=None)  # currency from countries.yaml
+    ctx = ctx_factory(bangkok)
+    near = {"latitude": 13.7565, "longitude": 100.5020}
+    listed = place("THB", location=near, priceRange={"startPrice": {"currencyCode": "THB", "units": "150"},
+                                                     "endPrice": {"currencyCode": "THB", "units": "400"}})
+    open_ended = place("THB_OPEN", location=near, priceLevel="PRICE_LEVEL_MODERATE",
+                       priceRange={"startPrice": {"currencyCode": "THB", "units": "300"}})
+    usd = place("USD", location=near, priceLevel="PRICE_LEVEL_INEXPENSIVE",
+                priceRange={"startPrice": {"currencyCode": "USD", "units": "5"},
+                            "endPrice": {"currencyCode": "USD", "units": "10"}})
+    res, _ = await run_search([listed, open_ended, usd], ctx)
+    by_id = {c.id: c.cost for c in res}
+    assert by_id["gp:THB"] == CostRange(min=150, max=400, currency="THB", basis="listed_price_range")
+    assert by_id["gp:THB_OPEN"] == CostRange(min=300, max=700, currency="THB", basis="listed_price_range")
+    assert by_id["gp:USD"] == CostRange(min=80, max=250, currency="THB", basis="price_level_estimate")
+
+
+async def test_open_ended_range_never_borrows_a_bound_from_another_currency(ctx_factory: Any) -> None:
+    # ISK has no band table, so an open-ended ISK range has no ISK upper bound to use
+    reykjavik = Location(id="x:rkv", name="Reykjavik", country_code="IS", lat=64.1466, lng=-21.9426,
+                         timezone="Atlantic/Reykjavik", currency="ISK")
+    p = place("ISK", location={"latitude": 64.1470, "longitude": -21.9430}, priceLevel="PRICE_LEVEL_MODERATE",
+              priceRange={"startPrice": {"currencyCode": "ISK", "units": "3000"}})
+    [c], _ = await run_search([p], ctx_factory(reykjavik))
+    assert c.cost.basis != "listed_price_range" and c.cost.currency == "USD"  # unpriced here: CURRENCY_MISMATCH
 
 
 def test_text_query() -> None:

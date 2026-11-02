@@ -808,11 +808,12 @@ def test_explicit_foreign_budget_is_converted_to_the_local_currency():
 
 
 def test_unconvertible_budget_stays_in_its_currency_with_a_clear_assumption():
-    zurich = Location(id="x:zrh", name="Zurich", country_code="CH", lat=47.37, lng=8.54, timezone="Europe/Zurich",
-                      currency="CHF")
-    prefs = apply_defaults(parse(city="Zurich", budget=2000, currency="INR", available_time="3 hours"), zurich)
+    # ISK (Iceland) has no reference rate in data/fx.yaml
+    reykjavik = Location(id="x:rkv", name="Reykjavik", country_code="IS", lat=64.15, lng=-21.94,
+                         timezone="Atlantic/Reykjavik", currency="ISK")
+    prefs = apply_defaults(parse(city="Reykjavik", budget=2000, currency="INR", available_time="3 hours"), reykjavik)
     assert (prefs.budget, prefs.currency) == (2000, "INR")
-    assert any(a.startswith("Couldn't convert ₹2,000 to CHF") for a in prefs.assumptions)
+    assert any(a.startswith("Couldn't convert ₹2,000 to ISK") for a in prefs.assumptions)
     no_local = apply_defaults(parse(city="Nowhere", budget=500, currency="INR", available_time="3 hours"), NOWHERE)
     assert (no_local.budget, no_local.currency) == (500, "INR")
     assert any("No local currency is known for Nowhere" in a for a in no_local.assumptions)

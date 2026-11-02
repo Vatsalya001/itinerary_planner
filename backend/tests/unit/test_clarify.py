@@ -46,8 +46,9 @@ LONDON = Location(id="fixture:london", name="London", country_code="GB", lat=51.
                   timezone="Europe/London", currency="GBP")
 MUMBAI = Location(id="fixture:mumbai", name="Mumbai", country_code="IN", lat=19.076, lng=72.8777,
                   timezone="Asia/Kolkata", currency="INR")
-HONG_KONG = Location(id="geo:hk", name="Hong Kong", country_code="HK", lat=22.32, lng=114.17,
-                     timezone="Asia/Hong_Kong")
+# Iceland is in neither the gazetteer nor countries.yaml, so it has no default currency.
+REYKJAVIK = Location(id="geo:rkv", name="Reykjavik", country_code="IS", lat=64.15, lng=-21.94,
+                     timezone="Atlantic/Reykjavik")
 
 
 def questions_for(request: PlanRequest, matches: list[Location] | None = None, asked_before: bool = False):
@@ -95,9 +96,21 @@ def test_explicit_currency_abroad_is_not_asked():
 
 
 def test_country_without_default_currency_asks_which_currency():
-    qs = questions_for(PlanRequest(city="Hong Kong", budget=500, available_time="3 hours"), [HONG_KONG])
+    qs = questions_for(PlanRequest(city="Reykjavik", budget=500, available_time="3 hours"), [REYKJAVIK])
     assert ids(qs) == ["currency"]
     assert qs[0].options == ["INR", "USD"]
+
+
+def test_gazetteer_countries_have_a_local_currency():
+    # Hong Kong used to get the generic INR/USD question; every gazetteer country now has a currency in
+    # countries.yaml, so a bare number abroad offers the local currency (HKD) against INR.
+    hong_kong = Location(id="geo:hk", name="Hong Kong", country_code="HK", lat=22.32, lng=114.17,
+                         timezone="Asia/Hong_Kong")
+    qs = questions_for(PlanRequest(city="Hong Kong", budget=500, available_time="3 hours"), [hong_kong])
+    assert ids(qs) == ["currency"] and qs[0].options == ["HKD", "INR"]
+    qs = questions_for(PlanRequest(city="Bangkok", budget=500, available_time="3 hours"))  # gazetteer only
+    assert ids(qs) == ["currency"] and qs[0].options == ["THB", "INR"]
+    assert questions_for(PlanRequest(city="Bangkok", budget=500, currency="THB", available_time="3 hours")) == []
 
 
 def test_unknown_city_says_not_found():
