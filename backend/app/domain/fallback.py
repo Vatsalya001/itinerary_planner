@@ -75,6 +75,7 @@ from app.domain.sun import effective_sunset
 from app.domain.travel import coords_valid, haversine_km
 from app.domain.validator import (
     CITY_RADIUS_KM,
+    IDLE_WAIT_MIN,
     duration_bounds,
     numeric_claims,
     plan_b_problems,
@@ -244,6 +245,7 @@ class _Node:
     order_next: int = 0  # index of the next stated-order item still to be met
     order_score: float = 0.0
     early_meals: int = 0  # sit-down meals starting shortly before their window (an early lunch/dinner)
+    long_waits: int = 0  # waits over IDLE_WAIT_MIN before a stop (validator warns IDLE_WAIT)
     outdoor: int = 0  # outdoor stops (penalised when rain is likely)
 
 
@@ -457,6 +459,7 @@ class Planner:
             order_next=order_next,
             order_score=order_score,
             early_meals=early_meals,
+            long_waits=(node.long_waits if node else 0) + (1 if wait > IDLE_WAIT_MIN else 0),
             outdoor=(node.outdoor if node else 0) + (1 if is_outdoor(c) else 0),
         )
 
@@ -546,6 +549,7 @@ class Planner:
         for name in n.meal_credit:
             s += 1.5 if name == "snack" else self.main_meal_weight.get(name, 3.0)
         s -= 2.0 * n.early_meals  # an early lunch/dinner is fine, an on-time one is better
+        s -= 4.0 * n.long_waits  # avoid standing around before an event when another plan exists
         s -= 4.0 * sum(1 for name in n.full_meals if not name)  # a required meal at an odd time
         used = self._used(n)
         s += 4.0 * min(1.0, used / MIN_USE) + 3.0 * min(1.0, max(0.0, used - MIN_USE) / 0.25)
@@ -798,7 +802,7 @@ class Planner:
             if text in seen_reasons:
                 continue  # one line per reason, not three identical ones
             seen_reasons.add(text)
-            out.append(Omission(ref=cid[:120], reason=text))
+            out.append(Omission(ref=cid[:120], reason=text, name=self.ledger[cid].name[:120]))
             if len(out) >= 4:
                 break
         return out

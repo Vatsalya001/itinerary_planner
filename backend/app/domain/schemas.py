@@ -73,6 +73,37 @@ class PlanRequest(StrictModel):
     constraints: list[str] = Field(default_factory=list, max_length=10)
     neighbourhood: str | None = Field(default=None, max_length=80)
     group_size: int = Field(default=1, ge=1, le=20)
+    # Constraint keys the user chose to drop via a one-tap relaxation, e.g. ["access:wheelchair"].
+    # Parsers must not re-derive these from free text or fields.
+    relaxed_constraints: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("available_time")
+    @classmethod
+    def _bounded_time(cls, v: str | int | None) -> str | int | None:
+        """Numeric minutes must be 30-720. Text is parsed later and clamped to the same range."""
+        if v is None:
+            return v
+        if isinstance(v, int) or (isinstance(v, str) and v.strip().isdigit()):
+            if len(str(v).strip()) > 4 or not 30 <= int(v) <= 720:
+                raise ValueError("available_time must be between 30 and 720 minutes")
+            return int(v)
+        if len(v) > 60:
+            raise ValueError("available_time text is too long")
+        return v
+
+    @field_validator("relaxed_constraints")
+    @classmethod
+    def _relaxed_keys(cls, v: list[str]) -> list[str]:
+        from app.domain.constraints import VOCABULARY
+
+        out: list[str] = []
+        for key in v:
+            kind, _, value = key.partition(":")
+            if value not in VOCABULARY.get(kind, set()):
+                raise ValueError(f"unknown constraint key: {key[:40]}")
+            if key not in out:
+                out.append(key)
+        return out
 
     @field_validator("interests")
     @classmethod
@@ -297,6 +328,7 @@ class DraftStop(StrictModel):
 class Omission(StrictModel):
     ref: str = Field(max_length=120)  # candidate ID or short idea
     reason: str = Field(max_length=240)
+    name: str | None = Field(default=None, max_length=120)  # display name, filled server-side from the ledger
 
 
 class PlanDraft(StrictModel):

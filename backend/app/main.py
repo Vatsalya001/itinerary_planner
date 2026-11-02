@@ -6,6 +6,7 @@ Run with ``uv run uvicorn app.main:app`` from ``backend/``. Tests call ``create_
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -24,6 +25,7 @@ from app.config import Settings, get_settings
 from app.deps import Deps, build_deps
 from app.observability import setup_observability
 from app.store.factory import create_store
+from app.store.retention import retention_loop
 
 log = logging.getLogger("app")
 
@@ -86,9 +88,15 @@ def create_app(settings: Settings | None = None, deps: Deps | None = None) -> Fa
             log.info("startup", extra={"env": settings.app_env, "version": settings.git_sha,
                                        "places_provider": settings.resolved_places_provider(),
                                        "events_provider": settings.resolved_events_provider()})
+            # Retention: sweep now, then hourly; cancelled before the store and checkpointer close.
+            sweeper = asyncio.create_task(retention_loop(d.store, d.checkpointer), name="retention")
+            app.state.retention_task = sweeper
             try:
                 yield
             finally:
+                sweeper.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await sweeper
                 await _drain(app.state.background_tasks, timeout=settings.run_deadline_s + SHUTDOWN_GRACE_S)
                 app.state.deps = None
                 if not owned:  # hand injected deps back as we found them
@@ -109,6 +117,7 @@ def create_app(settings: Settings | None = None, deps: Deps | None = None) -> Fa
     app.state.settings = settings
     app.state.deps = None
     app.state.background_tasks = set()
+    app.state.retention_task = None
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Request, exc: RequestValidationError) -> Response:

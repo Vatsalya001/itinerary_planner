@@ -12,6 +12,7 @@ from app.domain.schemas import (
     Candidate,
     CanonicalPlan,
     Leg,
+    Omission,
     PlanDraft,
     Preferences,
     ScheduledStop,
@@ -62,6 +63,16 @@ def directions_url(stops: Sequence[Candidate]) -> str | None:
             params["waypoints"] = "|".join(_point(c) for c in stops[1:-1])
     params["travelmode"] = "driving"
     return MAPS_DIR_URL + "?" + urlencode(params)
+
+
+def named_omissions(omitted: Sequence[Omission], ledger: Mapping[str, Candidate]) -> list[Omission]:
+    """Omissions with ``name`` filled server-side from the ledger when ``ref`` is a candidate ID (never trusts a
+    model-supplied name for a known ID)."""
+    out = []
+    for o in omitted:
+        cand = ledger.get(o.ref)
+        out.append(o.model_copy(update={"name": cand.name[:120]}) if cand is not None else o)
+    return out
 
 
 def build_schedule(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: WorldContext, prefs: Preferences,
@@ -159,7 +170,7 @@ def build_schedule(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: World
     plan = CanonicalPlan(
         date=ctx.date, city=ctx.location.name, timezone=ctx.location.timezone,
         start_min=ctx.start_min, end_min=prev_end, stops=stops, legs=legs, totals=totals,
-        summary_note=draft.summary_note, omitted=list(draft.omitted), weather=ctx.weather,
+        summary_note=draft.summary_note, omitted=named_omissions(draft.omitted, ledger), weather=ctx.weather,
         maps_route_url=directions_url(candidates),
     )
     return plan, violations

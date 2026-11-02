@@ -19,16 +19,35 @@ export function providersIn(plan: CanonicalPlan): Set<ProviderName> {
   return out
 }
 
+/** Keys whose patch values are unioned with the request's existing list instead of replacing it. */
+const UNION_KEYS = new Set<string>(['relaxed_constraints'])
+
+/** Ordered union of string lists without duplicates. */
+export function unionStrings(...lists: Array<readonly unknown[] | null | undefined>): string[] {
+  const out: string[] = []
+  for (const list of lists) {
+    for (const item of list ?? []) {
+      if (typeof item === 'string' && item && !out.includes(item)) out.push(item)
+    }
+  }
+  return out
+}
+
 /**
  * Apply a relaxation patch (PlanRequest fields) to a request. Unknown keys are dropped because the API
- * forbids extra fields; null removes a field.
+ * forbids extra fields; null removes a field. `relaxed_constraints` accumulates: dropping a second constraint
+ * keeps the first one dropped. Every other key replaces the previous value.
  */
 export function applyPatch(request: PlanRequest, patch: Record<string, unknown>): PlanRequest {
   const next: Record<string, unknown> = { ...request }
   for (const [key, value] of Object.entries(patch)) {
     if (!(PLAN_REQUEST_KEYS as ReadonlyArray<string>).includes(key)) continue
     if (value === null || value === undefined) delete next[key]
-    else next[key] = value
+    else if (UNION_KEYS.has(key) && Array.isArray(value)) {
+      const merged = unionStrings(next[key] as unknown[] | undefined, value)
+      if (merged.length) next[key] = merged
+      else delete next[key]
+    } else next[key] = value
   }
   return next as PlanRequest
 }

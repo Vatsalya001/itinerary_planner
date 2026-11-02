@@ -5,12 +5,15 @@ import {
   DURATION_OPTIONS,
   INTEREST_PRESETS,
   LIMITS,
+  restoreConstraint,
+  toggleConstraint as toggledConstraint,
   type DirtyFields,
   type FieldKey,
   type FormState,
   type ToggleId,
 } from '../lib/form'
 import { fmtDuration, humanize } from '../lib/format'
+import { constraintName } from '../lib/labels'
 import { Icon } from './Icon'
 import { btnPrimary, btnSecondary, inputClass } from './ui'
 
@@ -97,8 +100,7 @@ export function PlannerForm({
     setCustomInterest('')
   }
 
-  const toggleConstraint = (tid: ToggleId) =>
-    onChange({ ...form, toggles: { ...form.toggles, [tid]: !form.toggles[tid] } }, 'constraints')
+  const toggleConstraint = (tid: ToggleId) => onChange(toggledConstraint(form, tid), 'constraints')
 
   const interestChoices = [...INTEREST_PRESETS, ...form.interests.filter((i) => !INTEREST_PRESETS.includes(i))]
   const durationChoices = DURATION_OPTIONS.some((d) => String(d.minutes) === form.availableMinutes)
@@ -373,6 +375,27 @@ export function PlannerForm({
           </button>
         </div>
       </div>
+
+      {form.relaxed.length ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+          <p className="font-medium">Dropped to find a plan (kept for your next plans):</p>
+          <ul className="mt-1 flex flex-wrap gap-2">
+            {form.relaxed.map((key) => (
+              <li key={key} className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-white py-0.5 pl-3 pr-1">
+                <span>{constraintName(key)}</span>
+                <button
+                  type="button"
+                  className="rounded-full px-2 py-0.5 text-xs font-semibold text-orange-800 hover:bg-orange-50"
+                  aria-label={`Bring back ${constraintName(key)}`}
+                  onClick={() => onChange(restoreConstraint(form, key))}
+                >
+                  Bring back
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {errors.form ? (
         <p role="alert" className="text-sm font-medium text-red-800">

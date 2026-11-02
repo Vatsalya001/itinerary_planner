@@ -503,3 +503,22 @@ def test_kids_places_are_not_adult_defaults_and_rain_goes_indoors():
     rainy, _ = plan_and_validate([garden, cafe, museum], make_ctx(energy="medium", weather="rain"),
                                  make_prefs(energy="medium", constraints=[], interests=["walks", "food"]))
     assert rainy is not None and "fx:garden" not in {s.candidate_id for s in rainy.stops}
+
+
+def test_planner_omissions_carry_names_and_avoid_long_waits():
+    prefs = make_prefs(constraints=["vegetarian", "avoid crowded places"])
+    draft, _ = plan_and_validate(WORLD, make_ctx(energy="low"), prefs)
+    assert draft is not None
+    ledger = make_ledger(*WORLD)
+    for o in draft.omitted:
+        if o.ref in ledger:
+            assert o.name == ledger[o.ref].name
+    # an event an hour after the window opens: the planner fills the gap rather than waiting
+    gig = make_candidate("ev:gig", "event", offset_km=(0.3, 0.0), event_start_min=960, event_end_min=1080,
+                         tags=["music"])
+    cafe = make_candidate("fx:cafe", "cafe", cost=(100, 300))
+    ctx = make_ctx(energy="medium", available=300)
+    _, report = plan_and_validate([gig, cafe], ctx, make_prefs(energy="medium", available=300, constraints=[],
+                                                               interests=["music", "food"]))
+    assert report is not None and report.ok
+    assert "IDLE_WAIT" not in {v.code for v in report.violations}

@@ -1,7 +1,12 @@
 """SQLite implementation of the Store protocol (stdlib ``sqlite3``, run in a worker thread).
 
 One connection guarded by a lock; WAL mode for file databases. Timestamps are stored as UTC epoch seconds.
-Rate limits use fixed windows aligned to multiples of ``window_s`` since the epoch.
+
+Rate limits use a two-window sliding estimate (``previous * (1 - elapsed/window) + current``) over windows aligned
+to multiples of ``window_s``. That avoids the 2x burst a plain fixed window allows across a boundary. Denied hits
+are not counted, so a client retrying after a 429 doesn't extend its own lockout.
+
+Retention (``purge_expired``, ``stale_paused_threads``) is driven by ``app.store.retention``.
 """
 
 from __future__ import annotations
@@ -52,6 +57,7 @@ CREATE TABLE IF NOT EXISTS runs (
     submit_attempts INTEGER NOT NULL DEFAULT 0,
     degradations    TEXT NOT NULL DEFAULT '[]'
 );
+CREATE INDEX IF NOT EXISTS runs_created_at ON runs (created_at);
 CREATE TABLE IF NOT EXISTS rate_limits (
     key          TEXT NOT NULL,
     window_start INTEGER NOT NULL,
@@ -69,6 +75,10 @@ CREATE TABLE IF NOT EXISTS eval_summary (
     summary    TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS paused_threads (
+    thread_id  TEXT PRIMARY KEY,
+    created_at REAL NOT NULL
+);
 """
 
 RUN_COLUMNS = (
@@ -76,17 +86,37 @@ RUN_COLUMNS = (
     "cost_usd", "tool_calls", "violation_codes", "submit_attempts", "degradations",
 )
 JSON_RUN_COLUMNS = {"tool_calls", "violation_codes", "degradations"}
-CLEANUP_EVERY = 200  # opportunistic cleanup of old rate-limit windows and expired plans
+RATE_LIMIT_ROW_TTL_S = 2 * 86400  # longest window is a day; the previous window is still needed
+DAILY_COUNTER_TTL_DAYS = 7
 
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def fixed_window(now_ts: float, window_s: int) -> tuple[int, int]:
-    """(window_start, seconds until the window resets, at least 1)."""
+def window_bounds(now_ts: float, window_s: int) -> tuple[int, int, float]:
+    """(current window start, previous window start, seconds elapsed in the current window)."""
     start = int(now_ts // window_s) * window_s
-    return start, max(1, math.ceil(start + window_s - now_ts))
+    return start, start - window_s, now_ts - start
+
+
+def sliding_estimate(previous: int, current: int, elapsed: float, window_s: int) -> float:
+    return previous * max(0.0, 1.0 - elapsed / window_s) + current
+
+
+def sliding_retry_after(previous: int, current: int, limit: int, elapsed: float, window_s: int) -> int:
+    """Seconds until one more hit fits, assuming no other hits. ``current`` excludes the denied hit."""
+    remaining = window_s - elapsed
+    if current + 1 <= limit and previous > 0:
+        # Wait inside this window until the previous window's weight has decayed enough.
+        wait = window_s * (1.0 - (limit - current - 1) / previous) - elapsed
+        if wait <= remaining:
+            return max(1, math.ceil(wait))
+    if current == 0:
+        return max(1, math.ceil(remaining))
+    # Otherwise wait into the next window, where this window's hits become the decaying "previous".
+    into_next = min(float(window_s), max(0.0, window_s * (1.0 - (limit - 1) / current)))
+    return max(1, math.ceil(remaining + into_next))
 
 
 def utc_day(now: datetime) -> str:
@@ -116,7 +146,6 @@ class SQLiteStore:
         self._clock: Clock = clock or utc_now
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
-        self._ops = 0
 
     @property
     def is_memory(self) -> bool:
@@ -142,30 +171,30 @@ class SQLiteStore:
         self._conn = await asyncio.to_thread(_open)
 
     async def close(self) -> None:
-        conn, self._conn = self._conn, None
-        if conn is not None:
-            await asyncio.to_thread(conn.close)
+        # Under the lock: a cancelled caller's worker thread may still be mid-query on this connection.
+        def _close() -> None:
+            with self._lock:
+                conn, self._conn = self._conn, None
+                if conn is not None:
+                    conn.close()
+
+        await asyncio.to_thread(_close)
 
     async def _run(self, fn: Callable[[sqlite3.Connection], T]) -> T:
-        conn = self._conn
-        if conn is None:
-            raise RuntimeError("SQLiteStore.init() was not called")
+        if self._conn is None:
+            raise RuntimeError("SQLiteStore is not open (init() not called, or closed)")
 
         def call() -> T:
             with self._lock:
+                conn = self._conn
+                if conn is None:
+                    raise RuntimeError("SQLiteStore was closed")
                 return fn(conn)
 
         return await asyncio.to_thread(call)
 
     def _now(self) -> datetime:
         return self._clock()
-
-    def _maybe_cleanup(self, conn: sqlite3.Connection, now_ts: float) -> None:
-        self._ops += 1
-        if self._ops % CLEANUP_EVERY:
-            return
-        conn.execute("DELETE FROM rate_limits WHERE window_start < ?", (int(now_ts) - 2 * 86400,))
-        conn.execute("DELETE FROM plans WHERE expires_at <= ?", (now_ts,))
 
     async def ping(self) -> bool:
         return await self._run(lambda c: c.execute("SELECT 1").fetchone()[0] == 1)
@@ -176,17 +205,12 @@ class SQLiteStore:
         now = self._now()
         payload = json.dumps(record, ensure_ascii=False)
         created, expires = now.timestamp(), (now + timedelta(days=ttl_days)).timestamp()
-
-        def op(c: sqlite3.Connection) -> None:
-            c.execute(
-                "INSERT INTO plans (share_id, record, created_at, expires_at) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT (share_id) DO UPDATE SET record = excluded.record, created_at = excluded.created_at, "
-                "expires_at = excluded.expires_at",
-                (share_id, payload, created, expires),
-            )
-            self._maybe_cleanup(c, created)
-
-        await self._run(op)
+        await self._run(lambda c: c.execute(
+            "INSERT INTO plans (share_id, record, created_at, expires_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (share_id) DO UPDATE SET record = excluded.record, created_at = excluded.created_at, "
+            "expires_at = excluded.expires_at",
+            (share_id, payload, created, expires),
+        ))
 
     async def get_plan(self, share_id: str) -> dict[str, Any] | None:
         now_ts = self._now().timestamp()
@@ -245,20 +269,23 @@ class SQLiteStore:
 
     async def hit_rate_limit(self, key: str, window_s: int, limit: int) -> tuple[bool, int]:
         now_ts = self._now().timestamp()
-        start, retry_after = fixed_window(now_ts, window_s)
+        start, prev_start, elapsed = window_bounds(now_ts, window_s)
 
-        def op(c: sqlite3.Connection) -> int:
-            row = c.execute(
+        def op(c: sqlite3.Connection) -> tuple[bool, int]:
+            current = int(c.execute(
                 "INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1) "
                 "ON CONFLICT (key, window_start) DO UPDATE SET count = count + 1 RETURNING count",
                 (key, start),
-            ).fetchone()
-            self._maybe_cleanup(c, now_ts)
-            return int(row[0])
+            ).fetchone()[0])
+            row = c.execute("SELECT count FROM rate_limits WHERE key = ? AND window_start = ?",
+                            (key, prev_start)).fetchone()
+            previous = int(row[0]) if row else 0
+            if sliding_estimate(previous, current, elapsed, window_s) <= limit + 1e-9:
+                return True, 0
+            c.execute("UPDATE rate_limits SET count = count - 1 WHERE key = ? AND window_start = ?", (key, start))
+            return False, sliding_retry_after(previous, current - 1, limit, elapsed, window_s)
 
-        count = await self._run(op)
-        allowed = count <= limit
-        return allowed, (0 if allowed else retry_after)
+        return await self._run(op)
 
     async def incr_daily(self, key: str) -> int:
         day = utc_day(self._now())
@@ -288,3 +315,47 @@ class SQLiteStore:
 
         raw = await self._run(op)
         return None if raw is None else dict(json.loads(raw))
+
+    # -- retention ----------------------------------------------------------------------------------------
+
+    async def record_paused_thread(self, thread_id: str) -> None:
+        """Remember a thread paused at a clarification so its checkpoint can be expired if abandoned."""
+        now_ts = self._now().timestamp()
+        await self._run(lambda c: c.execute(
+            "INSERT INTO paused_threads (thread_id, created_at) VALUES (?, ?) "
+            "ON CONFLICT (thread_id) DO UPDATE SET created_at = excluded.created_at",
+            (thread_id, now_ts),
+        ))
+
+    async def forget_paused_thread(self, thread_id: str) -> None:
+        await self._run(lambda c: c.execute("DELETE FROM paused_threads WHERE thread_id = ?", (thread_id,)))
+
+    async def stale_paused_threads(self, max_age_s: int) -> list[str]:
+        cutoff = self._now().timestamp() - max_age_s
+
+        def op(c: sqlite3.Connection) -> list[str]:
+            rows = c.execute("SELECT thread_id FROM paused_threads WHERE created_at < ? ORDER BY created_at",
+                             (cutoff,)).fetchall()
+            return [str(r[0]) for r in rows]
+
+        return await self._run(op)
+
+    async def purge_expired(self, run_retention_days: int, feedback_retention_days: int) -> dict[str, int]:
+        """Delete expired plans, old runs and feedback, stale rate-limit windows and day counters."""
+        now = self._now()
+        now_ts = now.timestamp()
+        runs_cutoff = (now - timedelta(days=run_retention_days)).timestamp()
+        feedback_cutoff = (now - timedelta(days=feedback_retention_days)).timestamp()
+        day_cutoff = utc_day(now - timedelta(days=DAILY_COUNTER_TTL_DAYS))
+
+        def op(c: sqlite3.Connection) -> dict[str, int]:
+            return {
+                "plans": c.execute("DELETE FROM plans WHERE expires_at <= ?", (now_ts,)).rowcount,
+                "runs": c.execute("DELETE FROM runs WHERE created_at < ?", (runs_cutoff,)).rowcount,
+                "feedback": c.execute("DELETE FROM feedback WHERE created_at < ?", (feedback_cutoff,)).rowcount,
+                "rate_limits": c.execute("DELETE FROM rate_limits WHERE window_start < ?",
+                                         (int(now_ts) - RATE_LIMIT_ROW_TTL_S,)).rowcount,
+                "daily_counters": c.execute("DELETE FROM daily_counters WHERE day < ?", (day_cutoff,)).rowcount,
+            }
+
+        return await self._run(op)

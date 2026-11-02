@@ -115,6 +115,86 @@ describe('Planner', () => {
     expect(screen.getByLabelText(/Budget per person/)).toHaveValue(850)
   })
 
+  it('drops constraints cumulatively and keeps them dropped for later plans (D-P2-02)', async () => {
+    const secondInfeasible = fixtures.infeasible()
+    secondInfeasible.infeasible!.relaxations = [{ label: "Drop 'jain'", patch: { relaxed_constraints: ['diet:jain'] } }]
+    mockedPost
+      .mockResolvedValueOnce(fixtures.infeasible())
+      .mockResolvedValueOnce(secondInfeasible)
+      .mockResolvedValueOnce(fixtures.complete())
+      .mockResolvedValueOnce(fixtures.complete())
+      .mockResolvedValueOnce(fixtures.complete())
+    renderPlanner()
+    fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: "Drop 'need wheelchair access'" }))
+    fireEvent.click(await screen.findByRole('button', { name: "Drop 'jain'" }))
+    expect(await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })).toBeInTheDocument()
+    expect(mockedPost.mock.calls[1][0]).toEqual({ free_text: DEFAULT_FREE_TEXT, relaxed_constraints: ['access:wheelchair'] })
+    expect(mockedPost.mock.calls[2][0]).toEqual({
+      free_text: DEFAULT_FREE_TEXT,
+      relaxed_constraints: ['access:wheelchair', 'diet:jain'],
+    })
+
+    // The form remembers the drops; a fresh plan keeps them, and they can be brought back.
+    expect(screen.getByText('Dropped to find a plan (kept for your next plans):')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
+    await waitFor(() => expect(mockedPost).toHaveBeenCalledTimes(4))
+    expect(mockedPost.mock.calls[3][0].relaxed_constraints).toEqual(['access:wheelchair', 'diet:jain'])
+    await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })
+    fireEvent.click(screen.getByRole('button', { name: 'Bring back Wheelchair access' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
+    await waitFor(() => expect(mockedPost).toHaveBeenCalledTimes(5))
+    expect(mockedPost.mock.calls[4][0].relaxed_constraints).toEqual(['diet:jain'])
+  })
+
+  it('announces milestones in one polite status region, not every trace step (D-P2-17)', async () => {
+    let finish: (r: ReturnType<typeof fixtures.complete>) => void = () => {}
+    mockedPost.mockImplementationOnce(async (_req, onEvent) => {
+      for (const ev of (traceEvents as unknown as TraceEvent[]).slice(0, 5)) onEvent(ev)
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    mockedPost.mockResolvedValueOnce(fixtures.clarification())
+    renderPlanner()
+    const status = screen.getByTestId('run-status')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    expect(status).toHaveTextContent('')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
+    await waitFor(() => expect(status).toHaveTextContent('Planning started.'))
+    // The step list itself is not a live region.
+    const list = screen.getByText('Searched for places').closest('ol')!
+    expect(list).not.toHaveAttribute('aria-live')
+    expect(screen.getByRole('region', { name: 'How I planned this' }).querySelector('[aria-live]')).toBeNull()
+
+    finish(fixtures.complete())
+    await waitFor(() => expect(status).toHaveTextContent('Plan ready.'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
+    await waitFor(() => expect(status).toHaveTextContent('Waiting for your answer.'))
+  })
+
+  it('separates a model timeout from missing data in the trace', async () => {
+    mockedPost.mockImplementationOnce(async (_req, onEvent) => {
+      const base = { run_id: 'r9', ts: '2026-11-05T04:30:00Z' }
+      onEvent({ ...base, type: 'run_started', seq: 1 })
+      onEvent({ ...base, type: 'degraded', seq: 2, node: 'plan_agent', summary: 'The AI planner timed out; used the deterministic planner' })
+      onEvent({ ...base, type: 'degraded', seq: 3, node: 'get_weather', summary: 'Weather not checked; planning without a forecast' })
+      return fixtures.fallback()
+    })
+    renderPlanner()
+    fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
+    await screen.findByText('This is a backup plan')
+    const trace = screen.getByRole('region', { name: 'How I planned this' })
+    expect(within(trace).getByText('The rule-based planner took over')).toBeInTheDocument()
+    expect(within(trace).getByText('Running with reduced data')).toBeInTheDocument()
+    const dataNotice = within(trace).getByText('Running with reduced data').parentElement!
+    expect(dataNotice).toHaveTextContent('Weather not checked; planning without a forecast')
+    expect(dataNotice).not.toHaveTextContent('timed out')
+  })
+
   it('shows a friendly rate-limit message with the retry time', async () => {
     mockedPost.mockRejectedValueOnce(new ApiError(429, 'Too many plans from this address.', 12))
     renderPlanner()

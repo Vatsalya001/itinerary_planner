@@ -228,3 +228,17 @@ def client_ip(request: Request, trust_proxy_headers: bool) -> str:
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
+
+
+def rate_limit_subject(ip: str) -> str:
+    """Key material for per-client limits. IPv6 clients are keyed by their /64 (one subscriber usually holds a
+    whole /64 and could otherwise rotate addresses freely); IPv4-mapped IPv6 addresses use the IPv4 address."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.IPv6Network((addr, 64), strict=False))
+    return str(addr)

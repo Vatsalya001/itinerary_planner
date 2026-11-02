@@ -20,6 +20,7 @@ import {
   type FormState,
 } from '../lib/form'
 import { applyPatch } from '../lib/plan'
+import { runStatusText } from '../lib/runStatus'
 import { shareUrlFor } from '../lib/urls'
 import type { PlanRequest, PlanResult, Relaxation } from '../types'
 
@@ -31,6 +32,7 @@ export default function Planner() {
   const { trace, phase, run, cancel } = usePlanRun()
   const lastRequest = useRef<PlanRequest | null>(null)
   const [submittedCurrency, setSubmittedCurrency] = useState<string | null>(null)
+  const [resumed, setResumed] = useState(false)
   const lastStarter = useRef<{ starter: RunStarter; resetTrace: boolean } | null>(null)
   const resultHeading = useRef<HTMLHeadingElement>(null)
   const textarea = useRef<HTMLTextAreaElement>(null)
@@ -39,6 +41,7 @@ export default function Planner() {
   const start = useCallback(
     (starter: RunStarter, resetTrace = true) => {
       lastStarter.current = { starter, resetTrace }
+      setResumed(!resetTrace)
       void run(starter, { resetTrace })
     },
     [run],
@@ -96,6 +99,10 @@ export default function Planner() {
 
   return (
     <div className="space-y-6">
+      {/* Always mounted so assistive tech registers it before the first announcement. */}
+      <p role="status" aria-live="polite" aria-atomic="true" className="sr-only" data-testid="run-status">
+        {runStatusText(phase, resumed, trace.steps.length > 0)}
+      </p>
       <div className="space-y-2">
         <h1 className="text-3xl font-bold tracking-tight text-stone-900 sm:text-4xl">Plan a Saturday that fits how you feel</h1>
         <p className="max-w-2xl text-stone-700">
@@ -124,9 +131,6 @@ export default function Planner() {
 
       <TracePanel trace={trace} running={busy} startedAt={phase.kind === 'running' ? phase.startedAt : null} />
 
-      <div aria-live="polite" className="sr-only">
-        {phase.kind === 'done' ? 'Planning finished.' : ''}
-      </div>
 
       {phase.kind === 'error' ? (
         <ErrorCard {...describeError(phase.error)} onRetry={onRetry} headingRef={resultHeading} />

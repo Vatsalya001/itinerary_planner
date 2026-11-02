@@ -77,9 +77,15 @@ describe('PlanView', () => {
     )
 
     // trade-offs, checks, assumptions and warnings
-    expect(screen.getByText(/Left out a brewpub/)).toBeInTheDocument()
-    expect(screen.queryByText(/gp:ChIJtest_brewpub/)).not.toBeInTheDocument()
-    expect(screen.getByText('street food market:', { exact: false })).toBeInTheDocument()
+    // omissions say what was left out: server name, else the idea, else a neutral label, never a raw ID
+    const omitted = screen.getByRole('region', { name: 'Trade-offs and what I left out' })
+    const items = within(omitted).getAllByRole('listitem').map((li) => li.textContent)
+    expect(items).toEqual([
+      'Hoppy Yard Brewpub — Serves alcohol and is likely busy on Saturday evenings.',
+      'street food market — Likely crowded at that hour.',
+      'Another option — Not open long enough during your window.',
+    ])
+    expect(screen.queryByText(/gp:ChIJtest_brewpub|fx:unknown_place/)).not.toBeInTheDocument()
     const checks = screen.getByRole('region', { name: 'Checks' })
     expect(within(checks).getAllByText('Pass')).toHaveLength(4)
     expect(within(checks).getByText('Warning')).toBeInTheDocument()
@@ -100,9 +106,15 @@ describe('PlanView', () => {
   })
 
   it('shows the fallback banner with the degradation reason', () => {
-    render(<PlanView result={fixtures.fallback()} />)
+    const result = fixtures.fallback()
+    result.degradations = ['The AI planner timed out; used the deterministic planner', 'Weather not checked']
+    render(<PlanView result={result} />)
     expect(screen.getByText('This is a backup plan')).toBeInTheDocument()
-    expect(screen.getByText('The AI model timed out, so the backup planner built this plan.')).toBeInTheDocument()
+    expect(screen.getByText('The AI planner timed out; used the deterministic planner')).toBeInTheDocument()
+    // data problems get their own notice; the model timeout is not called "reduced data"
+    expect(screen.getByText('Running with reduced data')).toBeInTheDocument()
+    expect(screen.getByText('Weather not checked')).toBeInTheDocument()
+    expect(screen.queryByText('The rule-based planner took over')).not.toBeInTheDocument()
     expect(screen.getByText('Built by the backup planner (no AI model) and checked by the validator.')).toBeInTheDocument()
     expect(screen.getAllByRole('article')).toHaveLength(2)
   })

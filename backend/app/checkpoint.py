@@ -1,8 +1,9 @@
 """LangGraph checkpointer factory, chosen from ``DATABASE_URL``.
 
 * ``sqlite:///:memory:`` (tests) -> ``InMemorySaver``
-* ``sqlite:///path/app.db`` -> ``AsyncSqliteSaver`` on a separate file next to the app DB (``checkpoints.db``),
-  so checkpoint writes never contend with the app store's connection
+* ``sqlite:///path/app.db`` -> ``AsyncSqliteSaver`` on a separate file derived from the app DB's name
+  (``path/app.checkpoints.db``), so checkpoint writes never contend with the app store's connection and two app
+  databases in one directory never share checkpoints
 * ``postgresql://...`` -> ``AsyncPostgresSaver`` on a small psycopg pool, with ``setup()`` run once
 
 ``open_checkpointer`` is an async context manager: the saver's connections close when the context exits.
@@ -21,7 +22,7 @@ from app.store.factory import is_postgres_url
 from app.store.postgres import normalize_pg_url
 from app.store.sqlite import sqlite_path_from_url
 
-CHECKPOINT_FILENAME = "checkpoints.db"
+CHECKPOINT_SUFFIX = ".checkpoints.db"
 
 
 def checkpoint_path_for(database_url: str) -> str | None:
@@ -31,7 +32,9 @@ def checkpoint_path_for(database_url: str) -> str | None:
     path = sqlite_path_from_url(database_url)
     if path in (":memory:", "") or path.startswith("file::memory:"):
         return None
-    return str(Path(path).expanduser().parent / CHECKPOINT_FILENAME)
+    db = Path(path).expanduser()
+    stem = db.stem if db.suffix else db.name  # "app.db" -> "app", "app" -> "app"
+    return str(db.with_name(stem + CHECKPOINT_SUFFIX))
 
 
 @asynccontextmanager

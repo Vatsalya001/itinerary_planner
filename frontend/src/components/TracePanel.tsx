@@ -1,8 +1,8 @@
 import { useEffect, useId, useState } from 'react'
 import { fmtMs } from '../lib/format'
 import type { StepStatus, TraceState, TraceStep } from '../lib/trace'
+import { DegradationNotices } from './DegradationNotices'
 import { Icon } from './Icon'
-import { Notice } from './ui'
 
 const STATUS_TEXT: Record<StepStatus, string> = {
   running: 'In progress',
@@ -62,7 +62,7 @@ function Step({ step }: { step: TraceStep }) {
           ) : null}
           {step.durationMs !== null ? <span className="text-xs text-stone-600">{fmtMs(step.durationMs)}</span> : null}
         </div>
-        {step.reason ? (
+        {step.reason && step.kind === 'tool' && step.node === 'tools' ? (
           <p className="mt-0.5 text-sm text-stone-700">
             <span className="text-stone-600">Agent's note: </span>
             {step.reason}
@@ -135,17 +135,14 @@ export function TracePanel({ trace, running, startedAt }: { trace: TraceState; r
       </div>
 
       {trace.degraded.length ? (
-        <div className="space-y-2 px-4 pb-3 sm:px-5">
-          {trace.degraded.map((d) => (
-            <Notice key={d} tone="warn" title="Running with reduced data">
-              <p>{d}</p>
-            </Notice>
-          ))}
+        <div className="px-4 pb-3 sm:px-5">
+          <DegradationNotices items={trace.degraded} />
         </div>
       ) : null}
 
       <div id={listId} hidden={!open} className="border-t border-stone-100 px-4 pb-3 sm:px-5">
-        <ol aria-live="polite" aria-relevant="additions text" aria-busy={running} className="divide-y divide-stone-100">
+        {/* Not a live region: milestones are announced by RunStatus, not every step (D-P2-17). */}
+        <ol className="divide-y divide-stone-100">
           {visible.map((s) => (
             <Step key={s.key} step={s} />
           ))}

@@ -672,7 +672,7 @@ def _extract_interests(sentences: list[str]) -> list[str]:
 
 def normalize_interest(raw: str) -> list[str]:
     """Map one user interest to canonical tags ("bookshops" -> ["books"]); unknown text is kept lower-cased."""
-    low = re.sub(r"\s+", " ", raw).strip().lower()
+    low = re.sub(r"[\s_]+", " ", raw).strip().lower()  # "outdoor_walk" -> "outdoor walk"
     if not low:
         return []
     if low in CANONICAL_INTERESTS:
@@ -820,10 +820,26 @@ def _blank_places(text: str) -> str:
 
 def original_constraints(request: PlanRequest) -> list[Constraint]:
     """Constraints mapped directly from the raw request (fields + free text). Enforced even if a parser
-    (LLM or rules) drops them."""
+    (LLM or rules) drops them. Keys in ``request.relaxed_constraints`` (dropped by the user via a one-tap
+    relaxation) are excluded from every source."""
     groups = [map_constraint_text(entry) for entry in request.constraints]
     groups += [_map_sentence(s) for s in _sentences(_normalize_text(request.free_text))]
-    return merge_constraints(*groups)
+    return _without_relaxed(merge_constraints(*groups), request)
+
+
+def _without_relaxed(constraints: list[Constraint], request: PlanRequest) -> list[Constraint]:
+    relaxed = set(request.relaxed_constraints)
+    return [c for c in constraints if c.key not in relaxed] if relaxed else list(constraints)
+
+
+def _relaxed_assumptions(request: PlanRequest) -> list[str]:
+    """"Dropped: wheelchair accessible (as you chose)" for each relaxed constraint key."""
+    out: list[str] = []
+    for key in request.relaxed_constraints:
+        kind, _, value = key.partition(":")
+        label = constraint_label(Constraint.model_validate({"kind": kind, "value": value}))
+        out.append(f"Dropped: {label[0].lower()}{label[1:]} (as you chose)")
+    return out
 
 
 def _map_sentence(sentence: str) -> list[Constraint]:
@@ -1091,6 +1107,7 @@ def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
         _extract_group(" ".join([clean, request.mood or ""])) or 1)
 
     hard = original_constraints(request)
+    assumptions.extend(_relaxed_assumptions(request))
     unmapped, soft = _unmapped_and_soft(request)
     order = _order_hint(sentences)
     if order:
@@ -1145,7 +1162,7 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     rules_start_found = not any(a.startswith(START_ASSUMPTION) for a in r.assumptions)
     rules_minutes_found = "available_time" not in rules.missing
     if llm is None:
-        hard = merge_constraints(r.hard_constraints, original_constraints(request))
+        hard = _without_relaxed(merge_constraints(r.hard_constraints, original_constraints(request)), request)
         return rules.model_copy(update={
             "preferences": r.model_copy(update={"hard_constraints": hard}),
             "conflicts": detect_conflicts(hard),
@@ -1195,9 +1212,12 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
         start = LONG_DAY_START_MIN if minutes_found and minutes > LONG_WINDOW_MIN else DEFAULT_START_MIN
 
     mood = r.mood if (request.mood or "").strip() else (m.mood.strip() or r.mood)
-    interests = r.interests if request.interests else (_normalize_interests(m.interests) or r.interests)
+    if request.interests:
+        interests = r.interests
+    else:  # the model may only name interests the user's own words support
+        interests = _grounded_interests(m.interests, r.interests, request) or r.interests
     llm_hard = [c for c in m.hard_constraints if is_valid(c)]
-    hard = merge_constraints(r.hard_constraints, original_constraints(request), llm_hard)
+    hard = _without_relaxed(merge_constraints(r.hard_constraints, original_constraints(request), llm_hard), request)
     if request.group_size != 1:
         group = request.group_size
     else:
@@ -1220,6 +1240,24 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
         unmapped_constraints=_dedupe([*rules.unmapped_constraints, *llm.unmapped_constraints]),
         conflicts=detect_conflicts(hard), budget_currency_explicit=explicit, source="llm",
     )
+
+
+def _grounded_interests(llm_interests: list[str], rules_interests: list[str], request: PlanRequest) -> list[str]:
+    """LLM interests kept only when the rules parser found them or a word for them appears (un-negated) in the
+    free text; invented interests ("shopping" for "plan something fun") are dropped."""
+    sentences = [s for s in _sentences(_normalize_text(request.free_text)) if not _is_instruction_like(s)]
+    text_tags = set(_extract_interests(sentences)) | set(rules_interests)
+    low = " ".join(sentences).lower()
+    out: list[str] = []
+    for tag in _normalize_interests(llm_interests):
+        if tag in CANONICAL_INTERESTS:
+            grounded = tag in text_tags
+        else:  # free-form interest ("pottery"): its word must appear in the text
+            stem = re.escape(tag.rstrip("s"))
+            grounded = bool(stem) and re.search(rf"\b{stem}", low) is not None
+        if grounded and tag not in out:
+            out.append(tag)
+    return out
 
 
 def _text_evidence(request: PlanRequest) -> tuple[bool, bool]:

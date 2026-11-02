@@ -141,6 +141,6 @@ async def test_share_views_and_feedback_are_rate_limited(make_client: Any, fake_
         assert (await client.post(f"/api/plans/{share_id}/feedback", json={"rating": "up"})).status_code == 204
         calls_before = len(places.get_calls)
         resp = await client.get(f"/api/plans/{share_id}")
-        assert resp.status_code == 429 and resp.headers["retry-after"] == "300"
+        assert resp.status_code == 429 and resp.headers["retry-after"] == "600"
         assert len(places.get_calls) == calls_before  # no Place Details calls once limited
         assert (await client.post("/api/plan", json=BRIEF)).status_code == 200  # plan limits are separate

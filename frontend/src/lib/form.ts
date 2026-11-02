@@ -1,14 +1,15 @@
 import type { PlanRequest } from '../types'
+import { unionStrings } from './plan'
 
 /** Constraint toggles; each maps to text the backend's constraint vocabulary understands. */
 export const CONSTRAINT_TOGGLES = [
-  { id: 'vegetarian', label: 'Vegetarian', text: 'vegetarian' },
-  { id: 'vegan', label: 'Vegan', text: 'vegan' },
-  { id: 'jain', label: 'Jain', text: 'jain' },
-  { id: 'no_alcohol', label: 'No alcohol venues', text: 'no alcohol' },
-  { id: 'wheelchair', label: 'Wheelchair accessible', text: 'wheelchair accessible' },
-  { id: 'avoid_crowds', label: 'Avoid crowded places', text: 'avoid crowded places' },
-  { id: 'indoors_only', label: 'Indoors only', text: 'indoors only' },
+  { id: 'vegetarian', label: 'Vegetarian', text: 'vegetarian', key: 'diet:vegetarian' },
+  { id: 'vegan', label: 'Vegan', text: 'vegan', key: 'diet:vegan' },
+  { id: 'jain', label: 'Jain', text: 'jain', key: 'diet:jain' },
+  { id: 'no_alcohol', label: 'No alcohol venues', text: 'no alcohol', key: 'alcohol:avoid' },
+  { id: 'wheelchair', label: 'Wheelchair accessible', text: 'wheelchair accessible', key: 'access:wheelchair' },
+  { id: 'avoid_crowds', label: 'Avoid crowded places', text: 'avoid crowded places', key: 'crowd:avoid' },
+  { id: 'indoors_only', label: 'Indoors only', text: 'indoors only', key: 'setting:indoors_only' },
 ] as const
 
 export type ToggleId = (typeof CONSTRAINT_TOGGLES)[number]['id']
@@ -82,6 +83,8 @@ export interface FormState {
   extraConstraints: string
   neighbourhood: string
   groupSize: string
+  /** Constraint keys dropped via "no plan fits" relaxations; sent as relaxed_constraints until brought back. */
+  relaxed: string[]
 }
 
 export type DirtyFields = Partial<Record<FieldKey, boolean>>
@@ -116,6 +119,7 @@ export function defaultFormState(): FormState {
     extraConstraints: '',
     neighbourhood: '',
     groupSize: '1',
+    relaxed: [],
   }
 }
 
@@ -181,7 +185,29 @@ export function buildRequest(form: FormState, dirty: DirtyFields): PlanRequest {
   if (include('neighbourhood') && form.neighbourhood.trim()) req.neighbourhood = form.neighbourhood.trim()
   const group = Number(form.groupSize)
   if (Number.isInteger(group) && (dirty.groupSize || (structured && group !== 1))) req.group_size = group
+  if (form.relaxed.length) req.relaxed_constraints = form.relaxed.slice(0, LIMITS.maxItems)
   return req
+}
+
+/** Toggle a constraint; switching one on also brings it back if it had been dropped. */
+export function toggleConstraint(form: FormState, id: ToggleId): FormState {
+  const on = !form.toggles[id]
+  const key = CONSTRAINT_TOGGLES.find((t) => t.id === id)?.key
+  return {
+    ...form,
+    toggles: { ...form.toggles, [id]: on },
+    relaxed: on && key ? form.relaxed.filter((k) => k !== key) : form.relaxed,
+  }
+}
+
+/** Undo a dropped constraint. */
+export function restoreConstraint(form: FormState, key: string): FormState {
+  const toggle = CONSTRAINT_TOGGLES.find((t) => t.key === key)
+  return {
+    ...form,
+    relaxed: form.relaxed.filter((k) => k !== key),
+    toggles: toggle ? { ...form.toggles, [toggle.id]: true } : form.toggles,
+  }
 }
 
 /** Reflect a relaxation patch in the form so what you see matches what was sent. */
@@ -263,6 +289,14 @@ export function patchForm(
         break
       case 'free_text':
         next.freeText = typeof value === 'string' ? value : ''
+        break
+      case 'relaxed_constraints':
+        if (Array.isArray(value)) {
+          next.relaxed = unionStrings(next.relaxed, value)
+          // Untick matching toggles. Not marked as edited: in description mode the toggles stay unsent and the
+          // drop travels as relaxed_constraints; in form-only mode the toggles are sent and now omit it.
+          for (const t of CONSTRAINT_TOGGLES) if (next.relaxed.includes(t.key)) next.toggles[t.id] = false
+        }
         break
       default:
         break

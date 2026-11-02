@@ -1,0 +1,591 @@
+"""Agent tools: JSON schemas shown to the model, strict argument models, and the executors.
+
+Tools are read-only. Every returned candidate is added to the run's ledger by the tools node; the model
+can only reference ledger IDs. Tool results are compact JSON (``ToolMessage.content``) with the full
+Candidate records in ``ToolMessage.artifact["candidates"]``.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from itertools import pairwise
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from app.deps import Deps
+from app.domain.categories import currency_symbol, is_category, load_categories
+from app.domain.evidence import event_window, likely_busy
+from app.domain.parser_rules import default_queries
+from app.domain.schemas import (
+    Candidate,
+    Constraint,
+    CostRange,
+    PlaceQuery,
+    Preferences,
+    Violation,
+    WorldContext,
+)
+from app.domain.travel import haversine_km
+from app.domain.validator import draft_from_payload, duration_bounds, validate_plan
+from app.graph.prompts import hhmm, parse_hhmm
+from app.pipeline import EVENTS_UNAVAILABLE, PLACES_UNAVAILABLE, SNAPSHOT_USED
+from app.providers.base import ProviderError
+
+SEARCH_PLACES = "search_places"
+SEARCH_EVENTS = "search_events"
+ESTIMATE_TRAVEL = "estimate_travel"
+CHECK_PLAN = "check_plan"
+SUBMIT_PLAN = "submit_plan"
+TOOL_NAMES = (SEARCH_PLACES, SEARCH_EVENTS, ESTIMATE_TRAVEL, CHECK_PLAN, SUBMIT_PLAN)
+
+# Per-run caps (submit_plan's cap is settings.max_submit_attempts).
+TOOL_CAPS: dict[str, int] = {SEARCH_PLACES: 6, SEARCH_EVENTS: 2, ESTIMATE_TRAVEL: 4, CHECK_PLAN: 4}
+
+MAX_RESULTS = 8
+REASON_MAX = 140
+NAME_MAX = 120
+NEAR_RADIUS_M = 2500
+NEIGHBOURHOOD_RADIUS_M = 3000
+CITY_RADIUS_M = 8000
+
+# ---------------------------------------------------------------------------------------------------
+# JSON schemas shown to the model (OpenAI function format; every provider adapter accepts it)
+# ---------------------------------------------------------------------------------------------------
+
+_REASON = {"type": "string", "description": "Why you are making this call, under 140 characters. Shown to the user."}
+
+
+def _stop_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "candidate_id": {"type": "string", "description": "An ID returned by search_places or search_events"},
+            "duration_min": {"type": "integer", "description": "Minutes at this stop, within its duration range"},
+            "why": {"type": "string", "description": "Why it fits this person. No prices, durations or times."},
+            "tradeoff": {"type": "string", "description": "Optional: what was compromised. No numbers."},
+            "plan_b_candidate_id": {"type": "string",
+                                    "description": "Optional indoor alternative (a returned ID) if it rains"},
+        },
+        "required": ["candidate_id", "duration_min", "why"],
+    }
+
+
+def _plan_schema(description: str) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": description,
+        "properties": {
+            "stops": {"type": "array", "items": _stop_schema(), "minItems": 1, "maxItems": 8,
+                      "description": "Stops in visit order"},
+            "omitted": {
+                "type": "array", "maxItems": 10,
+                "items": {"type": "object", "properties": {
+                    "ref": {"type": "string", "description": "Candidate ID or a short idea that was left out"},
+                    "reason": {"type": "string", "description": "Why it was left out. No numbers."},
+                }, "required": ["ref", "reason"]},
+            },
+            "summary_note": {"type": "string", "description": "One or two sentences on the day. No numbers."},
+            "reason": _REASON,
+        },
+        "required": ["stops", "summary_note"],
+    }
+
+
+def tool_schemas() -> list[dict[str, Any]]:
+    """The five tools in OpenAI function format (bind_tools converts them per provider)."""
+    categories = sorted(load_categories())
+    return [
+        {"type": "function", "function": {
+            "name": SEARCH_PLACES,
+            "description": (
+                "Search real places in the plan's city. Returns up to 8 candidates with ID, name, category, "
+                "distance, price with its basis, rating, hours on the target day, diet and wheelchair evidence, "
+                "indoor/seated/effort, likely-busy windows and the allowed visit length. "
+                f"At most {TOOL_CAPS[SEARCH_PLACES]} calls per run."),
+            "parameters": {"type": "object", "properties": {
+                "intent": {"type": "string", "description": "What to look for, e.g. 'quiet vegetarian cafe'"},
+                "category": {"type": "string", "enum": categories, "description": "Optional canonical category"},
+                "near_candidate_id": {"type": "string",
+                                      "description": "Optional: search around this previously returned candidate"},
+                "max_price_level": {"type": "integer", "minimum": 0, "maximum": 4,
+                                    "description": "Optional: 0 free .. 4 very expensive"},
+                "open_at": {"type": "string", "description": "Optional local time HH:MM the place must be open"},
+                "reason": _REASON,
+            }, "required": ["intent", "reason"]},
+        }},
+        {"type": "function", "function": {
+            "name": SEARCH_EVENTS,
+            "description": (
+                "Find events on the plan's date in the city (title, start and end time, venue area, listed "
+                f"price). At most {TOOL_CAPS[SEARCH_EVENTS]} calls per run."),
+            "parameters": {"type": "object", "properties": {
+                "interests": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+                "max_price": {"type": "integer", "minimum": 0, "description": "Optional per-person ticket cap"},
+                "reason": _REASON,
+            }, "required": ["interests", "reason"]},
+        }},
+        {"type": "function", "function": {
+            "name": ESTIMATE_TRAVEL,
+            "description": (
+                "Estimate travel legs (mode, minutes, fare range) between consecutive candidate IDs in the "
+                f"given order. At most {TOOL_CAPS[ESTIMATE_TRAVEL]} calls per run."),
+            "parameters": {"type": "object", "properties": {
+                "candidate_ids": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 8},
+                "reason": _REASON,
+            }, "required": ["candidate_ids", "reason"]},
+        }},
+        {"type": "function", "function": {
+            "name": CHECK_PLAN,
+            "description": (
+                "Dry-run validation of a draft plan: returns the computed schedule, totals and every violation, "
+                f"with no side effects. At most {TOOL_CAPS[CHECK_PLAN]} calls per run."),
+            "parameters": _plan_schema("A draft plan, same shape as submit_plan"),
+        }},
+        {"type": "function", "function": {
+            "name": SUBMIT_PLAN,
+            "description": (
+                "Submit the final plan. It is validated by code; if it fails you get the violation codes back "
+                "and may fix and resubmit a limited number of times."),
+            "parameters": _plan_schema("The final plan"),
+        }},
+    ]
+
+
+# ---------------------------------------------------------------------------------------------------
+# Argument models (validation of what the model actually sent)
+# ---------------------------------------------------------------------------------------------------
+
+_NULLISH = {"", "null", "none", "n/a"}
+
+
+def _nullish(v: Any) -> Any:
+    if isinstance(v, str) and v.strip().lower() in _NULLISH:
+        return None
+    return v
+
+
+def clip_reason(v: Any) -> str:
+    text = " ".join(str(v or "").split())
+    return text[:REASON_MAX]
+
+
+class _Args(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    reason: str = ""
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _reason(cls, v: Any) -> str:
+        return clip_reason(v)
+
+
+class SearchPlacesArgs(_Args):
+    intent: str = Field(min_length=1, max_length=200)
+    category: str | None = None
+    near_candidate_id: str | None = Field(default=None, max_length=120)
+    max_price_level: int | None = Field(default=None, ge=0, le=4)
+    open_at: str | None = None
+
+    @field_validator("category", "near_candidate_id", "open_at", "max_price_level", mode="before")
+    @classmethod
+    def _optional(cls, v: Any) -> Any:
+        return _nullish(v)
+
+    @field_validator("category")
+    @classmethod
+    def _category(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        key = v.strip().lower().replace(" ", "_")
+        if not is_category(key):
+            raise ValueError(f"unknown category '{v[:40]}'; use one of: {', '.join(sorted(load_categories()))}")
+        return key
+
+    @field_validator("open_at")
+    @classmethod
+    def _open_at(cls, v: str | None) -> str | None:
+        if v is not None and parse_hhmm(v) is None:
+            raise ValueError("open_at must be a local time like 16:30")
+        return v
+
+
+class SearchEventsArgs(_Args):
+    interests: list[str] = Field(default_factory=list, max_length=10)
+    max_price: int | None = Field(default=None, ge=0)
+
+    @field_validator("interests", mode="before")
+    @classmethod
+    def _interests(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = [part.strip() for part in v.split(",")]
+        if isinstance(v, list):
+            return [str(i)[:40] for i in v if str(i).strip()]
+        return v
+
+    @field_validator("max_price", mode="before")
+    @classmethod
+    def _max_price(cls, v: Any) -> Any:
+        return _nullish(v)
+
+
+class EstimateTravelArgs(_Args):
+    candidate_ids: list[str] = Field(min_length=2, max_length=8)
+
+
+ARG_MODELS: dict[str, type[_Args]] = {
+    SEARCH_PLACES: SearchPlacesArgs, SEARCH_EVENTS: SearchEventsArgs, ESTIMATE_TRAVEL: EstimateTravelArgs,
+}
+
+_STOP_KEYS = ("candidate_id", "duration_min", "why", "tradeoff", "plan_b_candidate_id")
+
+
+def _maybe_json(v: Any) -> Any:
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except ValueError:
+            return v
+    return v
+
+
+def normalize_plan_payload(args: Any) -> Any:
+    """Map check_plan/submit_plan arguments onto PlanDraft fields. Unknown keys are dropped; values are
+    not coerced beyond JSON-decoding stringified arrays, so malformed input still fails SCHEMA_INVALID."""
+    if not isinstance(args, Mapping):
+        return args
+    stops = _maybe_json(args.get("stops"))
+    if isinstance(stops, list):
+        stops = [{k: _nullish(s[k]) for k in _STOP_KEYS if k in s} if isinstance(s, Mapping) else s for s in stops]
+        stops = [{k: v for k, v in s.items() if v is not None} if isinstance(s, dict) else s for s in stops]
+    omitted = _maybe_json(args.get("omitted")) or []
+    if isinstance(omitted, list):
+        normalized = []
+        for o in omitted:
+            if isinstance(o, Mapping):
+                ref = o.get("ref") or o.get("candidate_id") or o.get("idea") or ""
+                normalized.append({"ref": str(ref)[:120], "reason": str(o.get("reason") or "")[:240]})
+            elif isinstance(o, str):
+                normalized.append({"ref": o[:120], "reason": ""})
+        omitted = [o for o in normalized if o["ref"]]
+    payload: dict[str, Any] = {"stops": stops, "omitted": omitted}
+    note = args.get("summary_note")
+    payload["summary_note"] = "" if note is None else note
+    return payload
+
+
+def validation_errors_text(exc: ValidationError) -> str:
+    parts = []
+    for err in exc.errors()[:4]:
+        loc = ".".join(str(p) for p in err["loc"]) or "arguments"
+        parts.append(f"{loc}: {err['msg']}")
+    return "; ".join(parts)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Compact JSON for the model
+# ---------------------------------------------------------------------------------------------------
+
+_BASIS = {"listed_price_range": "listed price range", "price_level_estimate": "price-level estimate",
+          "ticket_price": "ticket price", "free": "free", "category_estimate": "category estimate"}
+
+
+def price_text(cost: CostRange) -> str:
+    if cost.max == 0:
+        return "free"
+    sym = currency_symbol(cost.currency).strip()
+    amount = f"{sym}{cost.min}" if cost.min == cost.max else f"{sym}{cost.min}-{cost.max}"
+    return f"{amount} per person ({_BASIS.get(cost.basis, cost.basis)})"
+
+
+def fare_text(fare: CostRange) -> str:
+    if fare.max == 0:
+        return "free"
+    sym = currency_symbol(fare.currency).strip()
+    amount = f"{sym}{fare.min}" if fare.min == fare.max else f"{sym}{fare.min}-{fare.max}"
+    return f"{amount} (estimate)"
+
+
+def with_turns_left(content: str, turns_left: int) -> str:
+    """Add ``turns_left`` to a JSON tool result so the model can budget its remaining turns."""
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return content
+    if not isinstance(data, dict):
+        return content
+    data["turns_left"] = max(0, turns_left)
+    return dumps(data)
+
+
+def hours_text(c: Candidate) -> str:
+    if c.hours.status != "known":
+        return "unknown"
+    if not c.hours.periods:
+        return "closed"
+    return ", ".join(f"{hhmm(a)}-{hhmm(b)}" for a, b in c.hours.periods)
+
+
+def compact_candidate(c: Candidate, centre: tuple[float, float] | None = None) -> dict[str, Any]:
+    out: dict[str, Any] = {"id": c.id, "name": c.name[:NAME_MAX], "category": c.category}
+    if c.kind == "event":
+        out["kind"] = "event"
+    if c.neighbourhood:
+        out["neighbourhood"] = c.neighbourhood[:60]
+    if centre is not None:
+        out["distance_km"] = round(haversine_km(centre[0], centre[1], c.lat, c.lng), 1)
+    out["price"] = price_text(c.cost)
+    if c.rating is not None:
+        out["rating"] = c.rating
+        if c.rating_count is not None:
+            out["rating_count"] = c.rating_count
+    if c.kind == "event":
+        window = event_window(c)
+        out["event_date"] = c.event_date.isoformat() if c.event_date else "unknown"
+        out["event_time"] = f"{hhmm(window[0])}-{hhmm(window[1])}" if window else "unknown"
+    else:
+        out["hours_today"] = hours_text(c)
+    if c.diet:
+        out["diet"] = {k: v.value for k, v in c.diet.items()}
+    out["wheelchair"] = c.wheelchair.value
+    out["indoor"] = "unknown" if c.indoor is None else c.indoor
+    out["seated"] = c.seated
+    out["effort"] = c.effort
+    if c.serves_alcohol:
+        out["serves_alcohol"] = True
+    if c.popularity == "high" and c.busy_windows:
+        out["likely_busy"] = [f"{hhmm(a)}-{hhmm(b)}" for a, b in c.busy_windows]
+    lo, hi = duration_bounds(c)
+    out["visit_minutes"] = {"min": lo, "typical": max(lo, min(hi, c.duration_range[1])), "max": hi}
+    if c.tags:
+        out["tags"] = [t[:30] for t in c.tags[:8]]
+    out["source"] = c.source.provider
+    return out
+
+
+def violation_dicts(violations: list[Violation], *, include_ids: bool = True) -> list[dict[str, Any]]:
+    """Violations as plain dicts. ``include_ids=False`` drops model-provided IDs that were not in the ledger
+    (UNKNOWN_ID), so invented IDs never reach the trace."""
+    out = []
+    for v in violations:
+        item: dict[str, Any] = {"code": v.code, "severity": v.severity, "message": v.message}
+        if v.stop_index is not None:
+            item["stop_index"] = v.stop_index
+        if v.candidate_id and (include_ids or v.code != "UNKNOWN_ID"):
+            item["candidate_id"] = v.candidate_id[:120]
+        out.append(item)
+    return out
+
+
+def dumps(data: Any) -> str:
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+# ---------------------------------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------------------------------
+
+PlacesMode = Literal["live", "snapshot", "unavailable"]
+
+
+@dataclass
+class ToolEnv:
+    deps: Deps
+    ctx: WorldContext
+    prefs: Preferences
+    enforced: list[Constraint]
+    original: list[Constraint]
+    ledger: dict[str, Candidate]
+    places_mode: PlacesMode = "live"
+    events_failed: bool = False
+
+
+@dataclass
+class ToolOutcome:
+    content: str
+    status: Literal["success", "error"] = "success"
+    candidates: list[Candidate] = field(default_factory=list)
+    summary: str = ""
+    protocol_kind: str | None = None  # "schema_invalid" | "unknown_id" (see finalize.run_metrics)
+    provider_failed: bool = False  # emit tool_failed (with recovered flag) instead of tool_completed
+    recovered: bool = False
+    degradations: list[str] = field(default_factory=list)
+    data: dict[str, Any] | None = None
+    checked_draft: dict[str, Any] | None = None  # check_plan only: the draft, when it had no errors
+
+    @property
+    def protocol_error(self) -> bool:
+        return self.protocol_kind is not None
+
+    @property
+    def executed(self) -> bool:
+        """False when the call was rejected before running (it doesn't use up the tool's cap)."""
+        return not (self.protocol_kind is not None and self.status == "error")
+
+    @property
+    def artifact(self) -> dict[str, Any] | None:
+        if not self.candidates:
+            return None
+        return {"candidates": [c.model_dump(mode="json") for c in self.candidates]}
+
+
+def error_outcome(message: str, *, protocol: bool = False, code: str = "TOOL_ERROR") -> ToolOutcome:
+    """Error result for the model. ``protocol=True`` counts it as a protocol error of kind ``code.lower()``."""
+    return ToolOutcome(content=dumps({"error": message}), status="error", summary=message[:200],
+                       protocol_kind=code.lower() if protocol else None, data={"code": code})
+
+
+def search_bias(prefs: Preferences, ctx: WorldContext) -> tuple[float | None, float | None, int]:
+    """(lat, lng, radius) for agent searches: the neighbourhood when one was named, else the whole city
+    (lat/lng None, so a neighbourhood named in the intent can still re-centre the search)."""
+    if prefs.neighbourhood:
+        queries = default_queries(prefs, ctx)
+        if queries and queries[0].radius_m <= NEIGHBOURHOOD_RADIUS_M:
+            return queries[0].near_lat, queries[0].near_lng, queries[0].radius_m
+    return None, None, CITY_RADIUS_M
+
+
+def _open_at_min(text: str | None, ctx: WorldContext) -> int | None:
+    value = parse_hhmm(text)
+    if value is None:
+        return None
+    if value < 1440 and ctx.end_min > 1440 and value < ctx.start_min:
+        value += 1440  # the window crosses midnight
+    return value
+
+
+async def run_search_places(args: SearchPlacesArgs, env: ToolEnv) -> ToolOutcome:
+    ctx = env.ctx
+    lat, lng, radius = search_bias(env.prefs, ctx)
+    if args.near_candidate_id:
+        anchor = env.ledger.get(args.near_candidate_id)
+        if anchor is None:
+            return error_outcome(f"near_candidate_id '{args.near_candidate_id[:60]}' was not returned by a tool "
+                                 "in this run; use an ID from earlier results or omit it",
+                                 protocol=True, code="UNKNOWN_ID")
+        lat, lng, radius = anchor.lat, anchor.lng, NEAR_RADIUS_M
+    extra: dict[str, Any] = {}
+    if env.prefs.neighbourhood and "neighbourhood" in PlaceQuery.model_fields and not args.near_candidate_id:
+        extra["neighbourhood"] = env.prefs.neighbourhood[:80]  # providers that support it bias to the area
+    query = PlaceQuery(intent=args.intent, category=args.category, near_lat=lat, near_lng=lng, radius_m=radius,
+                       max_price_level=args.max_price_level, open_at_min=_open_at_min(args.open_at, ctx),
+                       limit=MAX_RESULTS, **extra)
+    if env.places_mode == "unavailable":
+        return ToolOutcome(content=dumps({"error": PLACES_UNAVAILABLE}), status="error",
+                           summary=PLACES_UNAVAILABLE, provider_failed=True, data={"code": "PLACES_UNAVAILABLE"})
+    degradations: list[str] = []
+    provider = env.deps.places if env.places_mode == "live" else env.deps.snapshot
+    recovered = False
+    found: list[Candidate] = []
+    try:
+        assert provider is not None
+        found = await provider.search(query, ctx)
+    except ProviderError:
+        snapshot = env.deps.snapshot
+        if env.places_mode == "live" and snapshot is not None and snapshot.covers(ctx.location):
+            env.places_mode = "snapshot"
+            degradations.append(SNAPSHOT_USED)
+            recovered = True
+            try:
+                found = await snapshot.search(query, ctx)
+                provider = snapshot
+            except ProviderError:
+                env.places_mode = "unavailable"
+        else:
+            env.places_mode = "unavailable"
+        if env.places_mode == "unavailable":
+            return ToolOutcome(content=dumps({"error": PLACES_UNAVAILABLE + ". Do not invent places."}),
+                               status="error", summary=PLACES_UNAVAILABLE, provider_failed=True,
+                               degradations=[PLACES_UNAVAILABLE], data={"code": "PLACES_UNAVAILABLE"})
+    found = [c for c in found if c.kind == "place" or c.event_date == ctx.date][:MAX_RESULTS]
+    centre = (lat, lng) if lat is not None and lng is not None else (ctx.location.lat, ctx.location.lng)
+    body: dict[str, Any] = {"count": len(found), "candidates": [compact_candidate(c, centre) for c in found]}
+    if env.places_mode == "snapshot":
+        body["note"] = "Live place data is unavailable; these come from a curated snapshot. Hours may be unknown."
+    diet = next((c.value for c in env.enforced if c.kind == "diet"), None)
+    bits = [f"{len(found)} places for '{args.intent[:60]}' ({getattr(provider, 'name', 'places')})"]
+    if diet:
+        confirmed = sum(1 for c in found if c.diet.get(diet) is not None and c.diet[diet].value == "confirmed")
+        bits.append(f"{confirmed} with {diet} evidence")
+    busy = sum(1 for c in found if likely_busy(c, ctx.start_min, ctx.end_min))
+    if busy:
+        bits.append(f"{busy} likely busy")
+    return ToolOutcome(content=dumps(body), candidates=found, summary=", ".join(bits), recovered=recovered,
+                       degradations=degradations, data={"count": len(found), "recovered": recovered} if recovered
+                       else {"count": len(found)})
+
+
+async def run_search_events(args: SearchEventsArgs, env: ToolEnv) -> ToolOutcome:
+    ctx = env.ctx
+    events_provider = env.deps.events
+    if events_provider is None:
+        return ToolOutcome(content=dumps({"count": 0, "events": [], "note": "Event search is not enabled"}),
+                           summary="event search not enabled", data={"count": 0})
+    interests = args.interests or env.prefs.interests
+    max_price = args.max_price if args.max_price is not None else env.prefs.budget
+    try:
+        found = await events_provider.search(interests, ctx, max_price=max_price)
+    except ProviderError:
+        env.events_failed = True
+        return ToolOutcome(content=dumps({"error": EVENTS_UNAVAILABLE + "; plan without events"}), status="error",
+                           summary=EVENTS_UNAVAILABLE, provider_failed=True, recovered=True,
+                           degradations=[EVENTS_UNAVAILABLE], data={"code": "EVENTS_UNAVAILABLE"})
+    found = [c for c in found if c.event_date == ctx.date][:MAX_RESULTS]
+    centre = (ctx.location.lat, ctx.location.lng)
+    body = {"count": len(found), "date": ctx.date.isoformat(),
+            "events": [compact_candidate(c, centre) for c in found]}
+    return ToolOutcome(content=dumps(body), candidates=found,
+                       summary=f"{len(found)} event(s) on {ctx.date.isoformat()}", data={"count": len(found)})
+
+
+def run_estimate_travel(args: EstimateTravelArgs, env: ToolEnv) -> ToolOutcome:
+    missing = [cid for cid in args.candidate_ids if cid not in env.ledger]
+    if missing:
+        return error_outcome(f"unknown candidate ID(s): {', '.join(m[:60] for m in missing[:3])}; use IDs returned "
+                             "by search_places or search_events", protocol=True, code="UNKNOWN_ID")
+    cands = [env.ledger[cid] for cid in args.candidate_ids]
+    legs = []
+    total = 0
+    for a, b in pairwise(cands):
+        try:
+            leg = env.deps.travel.leg(a, b, env.ctx)
+        except ValueError:
+            return error_outcome(f"travel from {a.id} to {b.id} could not be estimated", code="TRANSFER_UNKNOWN")
+        total += leg.minutes_max
+        legs.append({"from": a.id, "to": b.id, "mode": leg.mode, "distance_km": round(leg.distance_km, 1),
+                     "minutes": leg.minutes, "minutes_max": leg.minutes_max, "fare": fare_text(leg.fare)})
+    body = {"legs": legs, "total_minutes_max": total,
+            "note": f"Estimates. The schedule adds a {env.ctx.pacing.buffer_minutes} minute buffer per transfer."}
+    return ToolOutcome(content=dumps(body), summary=f"{len(legs)} leg(s), {total} min worst case",
+                       data={"legs": len(legs)})
+
+
+def run_check_plan(args: Any, env: ToolEnv) -> ToolOutcome:
+    draft, schema_errors = draft_from_payload(normalize_plan_payload(args))
+    if draft is None:
+        message = schema_errors[0].message if schema_errors else "draft failed schema validation"
+        return error_outcome(f"{message}. Expected stops: [{{candidate_id, duration_min, why, tradeoff?, "
+                             "plan_b_candidate_id?}], omitted, summary_note", protocol=True, code="SCHEMA_INVALID")
+    report = validate_plan(draft, env.ledger, env.ctx, env.prefs, env.original, env.deps.travel)
+    body: dict[str, Any] = {"ok": report.ok}
+    if report.plan is not None:
+        plan = report.plan
+        t = plan.totals
+        body["schedule"] = [{"id": s.candidate.id, "name": s.candidate.name[:NAME_MAX], "start": hhmm(s.start_min),
+                             "end": hhmm(s.end_min), "duration_min": s.duration_min} for s in plan.stops]
+        body["legs"] = [{"from": leg.from_id, "to": leg.to_id, "mode": leg.mode, "minutes_max": leg.minutes_max}
+                        for leg in plan.legs]
+        body["totals"] = {"currency": t.currency, "worst_case_cost": t.worst_case, "budget": t.budget,
+                          "budget_left": t.budget_left, "elapsed_min": t.elapsed_min,
+                          "available_minutes": t.available_minutes, "minutes_left": t.minutes_left,
+                          "walking_min": t.walking_min}
+    body["errors"] = violation_dicts(report.errors)
+    body["warnings"] = violation_dicts(report.warnings)
+    codes = sorted({v.code for v in report.errors})
+    summary = "draft valid" if report.ok else f"{len(report.errors)} error(s): {', '.join(codes)}"
+    return ToolOutcome(content=dumps(body), summary=summary, data={"ok": report.ok, "codes": codes},
+                       protocol_kind="unknown_id" if "UNKNOWN_ID" in codes else None,
+                       checked_draft=draft.model_dump(mode="json") if report.ok else None)

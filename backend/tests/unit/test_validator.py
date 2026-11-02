@@ -517,8 +517,11 @@ def _scenarios() -> dict[str, Callable[[], set[str]]]:
             CAFE.model_copy(update={"id": "fx:x", "cost": CAFE.cost.model_copy(update={"currency": "GBP"})})])),
         "PACING_RELAXED": lambda: codes(run(make_draft(("fx:p", 40)), [park],
                                             prefs=make_prefs(constraints=["outdoors only"]))),
+        "IDLE_WAIT": lambda: codes(run(make_draft(("ev:w", 60)), [
+            make_candidate("ev:w", "event", event_start_min=1020, event_end_min=1140)], prefs=make_prefs(budget=None))),
         "LOCATION_APPROXIMATE": lambda: codes(run(make_draft(("ev:a", 90)), [
-            make_candidate("ev:a", "event", tags=["approx_location"])], prefs=make_prefs(budget=None))),
+            make_candidate("ev:a", "event", tags=["approx_location"], event_start_min=900, event_end_min=1020)],
+            prefs=make_prefs(budget=None))),
     }
 
 
@@ -669,7 +672,8 @@ def test_location_approximate_warns_for_stop_and_plan_b():
 
     assert (APPROX_LOCATION_TAG, APPROX_ADDRESS_PREFIX) == (events_web.APPROX_LOCATION_TAG,
                                                               events_web.APPROX_ADDRESS_PREFIX)
-    ev = make_candidate("ev:approx", "event", tags=["events", APPROX_LOCATION_TAG])
+    ev = make_candidate("ev:approx", "event", tags=["events", APPROX_LOCATION_TAG], event_start_min=900,
+                        event_end_min=1020)
     report = run(make_draft(("ev:approx", 90)), [ev], prefs=make_prefs(budget=None))
     assert report.ok
     assert [(v.code, v.severity) for v in report.violations] == [("LOCATION_APPROXIMATE", "warning")]
@@ -727,3 +731,35 @@ def test_programme_venue_with_unknown_hours_is_an_error():
     assert run(make_draft(("fx:m", 60)), [museum], ctx=make_ctx(energy="medium")).ok
     gig = make_candidate("ev:gig", "event", event_start_min=900, event_end_min=1020)
     assert run(make_draft(("ev:gig", 90)), [gig], ctx=make_ctx(energy="medium")).ok
+
+
+# --- Phase 2 follow-ups (IDLE_WAIT, omission names) -------------------------------------------------------
+
+
+def test_idle_wait_before_an_event_warns():
+    gig = make_candidate("ev:gig", "event", offset_km=(0.3, 0.0), event_start_min=1080, event_end_min=1200)
+    cafe = make_candidate("fx:c", "cafe")
+    ctx = make_ctx(energy="medium", available=360)
+    prefs = make_prefs(energy="medium", available=360, budget=None)
+    long_wait = run(make_draft(("fx:c", 40), ("ev:gig", 90)), [cafe, gig], ctx=ctx, prefs=prefs)
+    idle = [v for v in long_wait.violations if v.code == "IDLE_WAIT"]
+    assert long_wait.ok and idle and idle[0].severity == "warning" and idle[0].stop_index == 1
+    time_check = next(i for i in summarize_checks(long_wait, ctx, prefs, []) if i.name == "time")
+    assert time_check.status == "warn" and "wait" in time_check.detail
+    soon = gig.model_copy(update={"id": "ev:soon", "event_start_min": 1010, "event_end_min": 1130})
+    short = run(make_draft(("fx:c", 90), ("ev:soon", 90)), [cafe, soon], ctx=ctx, prefs=prefs)
+    assert short.ok and "IDLE_WAIT" not in codes(short)
+    first = run(make_draft(("ev:gig", 90)), [gig], ctx=ctx, prefs=prefs)  # three hours before the first stop
+    assert "IDLE_WAIT" in codes(first)
+
+
+def test_omission_names_are_filled_from_the_ledger():
+    other = make_candidate("fx:other", "museum", name="Real Museum Name")
+    draft = PlanDraft(stops=[stop("fx:cafe", 50)], omitted=[
+        Omission(ref="fx:other", reason="Too far for today.", name="A name the model made up"),
+        Omission(ref="a rooftop bar", reason="Not open in the afternoon."),
+    ])
+    report = run(draft, [CAFE, other])
+    assert report.plan is not None
+    named = {o.ref: o.name for o in report.plan.omitted}
+    assert named == {"fx:other": "Real Museum Name", "a rooftop bar": None}

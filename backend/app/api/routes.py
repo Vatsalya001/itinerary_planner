@@ -23,7 +23,7 @@ from fastapi import Path as PathParam
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from starlette.responses import Response, StreamingResponse
 
-from app.api.security import client_ip
+from app.api.security import client_ip, rate_limit_subject
 from app.api.sse import SSE_HEADERS, STREAM_END, SafeJSONResponse, StreamEnd, event_stream
 from app.deps import Deps
 from app.domain.schemas import PlanRequest, PlanResult, TraceEvent
@@ -45,6 +45,10 @@ EVALS_SUMMARY_PATH = Path(__file__).resolve().parents[2] / "evals" / "results" /
 GENERIC_ERROR = "Something went wrong"
 # Share-link views re-fetch Google display fields (paid Place Details calls), so reads are limited per IP too.
 READS_PER_10MIN = 60
+# Clarification resumes continue a run that was already counted, so they have their own (generous) limit and never
+# count toward the per-IP plan limits or the global daily plan cap.
+RESUMES_PER_10MIN = 30
+RESUME_EXPIRED_DETAIL = "This plan can no longer be resumed"
 
 
 def new_share_id() -> str:
@@ -93,32 +97,47 @@ def _track(request: Request, task: asyncio.Task[Any]) -> None:
     task.add_done_callback(tasks.discard)
 
 
-async def check_read_limit(request: Request, deps: Deps) -> SafeJSONResponse | None:
-    """Per-IP limit for share views and feedback. Fails open (logged) if the store errors."""
+def _subject(request: Request, deps: Deps) -> str:
+    """Rate-limit key material: the client IP (IPv6 by /64)."""
+    return rate_limit_subject(client_ip(request, deps.settings.trust_proxy_headers))
+
+
+async def _simple_limit(request: Request, deps: Deps, bucket: str, limit: int, noun: str) -> SafeJSONResponse | None:
+    """One per-IP 10-minute sliding limit. Fails open (logged) if the store errors."""
     if deps.store is None:
         return None
-    ip = client_ip(request, deps.settings.trust_proxy_headers)
     try:
-        allowed, retry_after = await deps.store.hit_rate_limit(f"ip:{ip}:reads", 600, READS_PER_10MIN)
+        allowed, retry_after = await deps.store.hit_rate_limit(f"ip:{_subject(request, deps)}:{bucket}", 600, limit)
     except Exception as exc:
-        log.error("read rate limit check failed; allowing request", extra={"error_type": type(exc).__name__})
+        log.error("rate limit check failed; allowing request", extra={"error_type": type(exc).__name__})
         return None
     if allowed:
         return None
-    return rejected(429, f"Too many requests; try again in {retry_after} seconds",
+    log.info("rate limited", extra={"bucket": bucket})
+    return rejected(429, f"Too many {noun}; try again in {retry_after} seconds",
                     headers={"Retry-After": str(retry_after)})
 
 
+async def check_read_limit(request: Request, deps: Deps) -> SafeJSONResponse | None:
+    """Per-IP limit for share views and feedback."""
+    return await _simple_limit(request, deps, "reads", READS_PER_10MIN, "requests")
+
+
+async def check_resume_limit(request: Request, deps: Deps) -> SafeJSONResponse | None:
+    """Per-IP limit for clarification resumes (separate from the plan limits and the daily cap)."""
+    return await _simple_limit(request, deps, "resume", RESUMES_PER_10MIN, "answers")
+
+
 async def check_limits(request: Request, deps: Deps) -> SafeJSONResponse | None:
-    """Per-IP fixed windows, then the global daily plan cap. Fails open (logged) if the store errors."""
+    """New plans: per-IP sliding windows (10 min, day), then the global daily plan cap. Fails open (logged)."""
     settings = deps.settings
     store = deps.store
     if store is None:
         return None
-    ip = client_ip(request, settings.trust_proxy_headers)
+    subject = _subject(request, deps)
     try:
-        windows = ((f"ip:{ip}:10m", 600, settings.rate_limit_per_10min),
-                   (f"ip:{ip}:day", 86400, settings.rate_limit_per_day))
+        windows = ((f"ip:{subject}:10m", 600, settings.rate_limit_per_10min),
+                   (f"ip:{subject}:day", 86400, settings.rate_limit_per_day))
         for key, window_s, limit in windows:
             allowed, retry_after = await store.hit_rate_limit(key, window_s, limit)
             if not allowed:
@@ -175,8 +194,11 @@ def build_run_record(result: PlanResult, finalize: dict[str, Any] | None, deps: 
 
 
 async def persist_result(result: PlanResult, finalize: dict[str, Any] | None, deps: Deps,
-                         started: float) -> PlanResult:
-    """Share link (complete/fallback) + run log. Returns the result with share_id/latency set when available."""
+                         started: float, resumed_thread: str | None = None) -> PlanResult:
+    """Share link (complete/fallback) + run log + paused-thread bookkeeping (for checkpoint retention).
+
+    Returns the result with share_id/latency set when available.
+    """
     if result.latency_ms is None:
         result = result.model_copy(update={"latency_ms": int((time.perf_counter() - started) * 1000)})
     store = deps.store
@@ -193,11 +215,31 @@ async def persist_result(result: PlanResult, finalize: dict[str, Any] | None, de
             await store.record_run(build_run_record(result, finalize, deps))
         except Exception as exc:
             log.error("recording run failed", extra={"error_type": type(exc).__name__})
+    await _track_paused_thread(store, result, resumed_thread)
     log.info("plan finished", extra={
         "status": result.status, "mode": result.mode, "model": result.model, "latency_ms": result.latency_ms,
         "shared": result.share_id is not None, "degradations": len(result.degradations),
     })
     return result
+
+
+async def _track_paused_thread(store: Any, result: PlanResult, resumed_thread: str | None) -> None:
+    """Remember threads paused at a clarification; forget them once a resume ends the thread."""
+    if store is None or not hasattr(store, "record_paused_thread"):
+        return
+    try:
+        if result.status == "needs_clarification" and result.thread_id:
+            await store.record_paused_thread(result.thread_id)
+        elif resumed_thread:
+            await store.forget_paused_thread(resumed_thread)
+    except Exception as exc:
+        log.error("paused-thread bookkeeping failed", extra={"error_type": type(exc).__name__})
+
+
+def is_expired_resume(result: PlanResult) -> bool:
+    """The runner's answer to a resume of an unknown, finished or expired thread."""
+    expired = getattr(graph_runner, "EXPIRED", None)
+    return result.status == "rejected" and expired is not None and result.message == expired
 
 
 def _crash_result(run_id: str) -> PlanResult:
@@ -226,7 +268,7 @@ async def produce_events(queue: asyncio.Queue[TraceEvent | StreamEnd], deps: Dep
                     continue  # contract: exactly one result per run
                 result = PlanResult.model_validate(event.data or {})
                 got_result = True
-                result = await persist_result(result, finalize, deps, started)
+                result = await persist_result(result, finalize, deps, started, resumed_thread=thread_id)
                 event = event.model_copy(update={"data": result.model_dump(mode="json")})
             queue.put_nowait(event)
     except Exception as exc:
@@ -265,7 +307,7 @@ async def run_json(deps: Deps, run_id: str, plan_request: PlanRequest | None, th
             return None
         finalize = next((e.data for e in reversed(events) if e.type == "node_completed" and e.node == "finalize"),
                         None)
-        return await persist_result(result, finalize, deps, started)
+        return await persist_result(result, finalize, deps, started, resumed_thread=thread_id)
     finally:
         run_id_var.reset(token)
 
@@ -286,7 +328,7 @@ async def start_run(request: Request, deps: Deps, plan_request: PlanRequest | No
         queue: asyncio.Queue[TraceEvent | StreamEnd] = asyncio.Queue()
         task = asyncio.create_task(produce_events(queue, deps, run_id, plan_request, thread_id, answers))
         _track(request, task)
-        return StreamingResponse(event_stream(queue, run_id), media_type="text/event-stream", headers=SSE_HEADERS)
+        return StreamingResponse(event_stream(queue), media_type="text/event-stream", headers=SSE_HEADERS)
 
     job = asyncio.create_task(run_json(deps, run_id, plan_request, thread_id, answers))
     _track(request, job)
@@ -294,6 +336,10 @@ async def start_run(request: Request, deps: Deps, plan_request: PlanRequest | No
     if result is None:
         return SafeJSONResponse({"status": "rejected", "detail": GENERIC_ERROR, "run_id": run_id,
                                  "request_id": request_id_var.get()}, status_code=500)
+    if thread_id is not None and is_expired_resume(result):
+        # SSE keeps the in-stream rejected result (status is already 200); JSON clients get a status code.
+        return SafeJSONResponse({"status": "rejected", "detail": RESUME_EXPIRED_DETAIL, "message": result.message,
+                                 "run_id": result.run_id}, status_code=404)
     return SafeJSONResponse(result.model_dump(mode="json"))
 
 
@@ -315,7 +361,7 @@ async def create_plan(request: Request, body: PlanRequest) -> Response:
 async def resume_plan(request: Request, body: ResumeRequest,
                       thread_id: Annotated[str, PathParam(pattern=ID_PATTERN)]) -> Response:
     deps = get_deps(request)
-    limited = await check_limits(request, deps)
+    limited = await check_resume_limit(request, deps)
     if limited is not None:
         return limited
     return await start_run(request, deps, None, thread_id=thread_id, answers=dict(body.answers))

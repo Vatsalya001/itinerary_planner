@@ -42,8 +42,8 @@ class Settings(BaseSettings):
     max_agent_turns: int = 10
     max_submit_attempts: int = 3  # initial + 2 repairs
     daily_plan_cap: int = 200
-    rate_limit_per_10min: int = 5
-    rate_limit_per_day: int = 30
+    rate_limit_per_10min: int = 15  # new plans only; clarification resumes are not counted
+    rate_limit_per_day: int = 60
     max_body_bytes: int = 16_384
     trust_proxy_headers: bool = False  # True behind Render/other proxies: client IP from X-Forwarded-For
     share_ttl_days: int = 30

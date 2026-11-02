@@ -3,7 +3,16 @@ import { describe, expect, it } from 'vitest'
 import complete from '../test/fixtures/plan_complete.json'
 import traceEvents from '../test/fixtures/trace_events.json'
 import type { CanonicalPlan, PlanResult, TraceEvent } from '../types'
-import { DEFAULT_FREE_TEXT, buildRequest, defaultFormState, patchForm, validateForm } from './form'
+import {
+  DEFAULT_FREE_TEXT,
+  buildRequest,
+  defaultFormState,
+  patchForm,
+  restoreConstraint,
+  toggleConstraint,
+  validateForm,
+} from './form'
+import { classifyDegradation, omissionLabel } from './labels'
 import { applyPatch, legAfter } from './plan'
 import { planToText, whatsappUrl } from './share'
 import { initialTrace, reduceTrace } from './trace'
@@ -35,12 +44,78 @@ describe('trace reducer', () => {
       label: 'Event search failed',
       reason: 'Look for seated live music on Saturday',
     })
-    expect(state.degraded).toEqual(["Couldn't check events"])
+    expect(state.degraded).toEqual([{ text: "Couldn't check events", kind: 'data' }])
     const validations = state.steps.filter((s) => s.kind === 'validation')
     expect(validations.map((v) => v.status)).toEqual(['warn', 'done'])
     expect(validations[0].details).toEqual(['Worst case is above the budget'])
     expect(state.steps.at(-1)).toMatchObject({ kind: 'result', label: 'Plan ready' })
     expect(state.finished).toBe(true)
+  })
+
+  const ev = (over: Partial<TraceEvent>): TraceEvent => ({ run_id: 'r2', seq: 0, ts: '2026-11-05T04:30:00Z', ...over }) as TraceEvent
+
+  it("shows an agent's note only for the model's own tool calls (node tools)", () => {
+    const s = [
+      ev({ type: 'tool_called', seq: 1, node: 'gather_candidates', tool: 'search_places', reason: 'quiet vegetarian cafe' }),
+      ev({ type: 'tool_completed', seq: 2, node: 'gather_candidates', tool: 'search_places', summary: '6 places' }),
+      ev({ type: 'tool_called', seq: 3, node: 'get_weather', tool: 'get_weather', summary: 'Forecast for 2026-11-07' }),
+      ev({ type: 'tool_called', seq: 4, node: 'tools', tool: 'check_plan', reason: 'Check the draft fits the budget' }),
+    ].reduce(reduceTrace, initialTrace)
+    const [code, weather, model] = s.steps
+    expect(code).toMatchObject({ label: 'Searched for places', reason: null, summary: '6 places', node: 'gather_candidates' })
+    expect(weather).toMatchObject({ label: "Checking Saturday's weather", reason: null, summary: 'Forecast for 2026-11-07' })
+    expect(model).toMatchObject({ reason: 'Check the draft fits the budget', node: 'tools' })
+  })
+
+  it('labels the real backend nodes in plain language', () => {
+    const s = ['build_context', 'resolve_location', 'gather_candidates', 'fallback_planner', 'explain_infeasible']
+      .flatMap((node, i) => [
+        ev({ type: 'node_started', seq: i * 2 + 1, node }),
+        ev({ type: 'node_completed', seq: i * 2 + 2, node, duration_ms: 5 }),
+      ])
+      .reduce(reduceTrace, initialTrace)
+    expect(s.steps.map((x) => x.label)).toEqual([
+      'Set up the day: weather, time window and pacing',
+      'Found the city',
+      'Gathered places and events',
+      'Built a backup plan without the AI model',
+      'Worked out what blocked a plan',
+    ])
+  })
+
+  it('never repeats an agent turn number', () => {
+    const s = [
+      ev({ type: 'node_started', seq: 1, node: 'plan_agent' }),
+      ev({ type: 'node_completed', seq: 2, node: 'plan_agent', summary: 'turn 4: check_plan', data: { turn: 4 } }),
+      ev({ type: 'node_started', seq: 3, node: 'plan_agent' }),
+      ev({
+        type: 'node_completed',
+        seq: 4,
+        node: 'plan_agent',
+        summary: 'turn 4: stopped (Not enough time left for the AI planner; used the deterministic planner)',
+        data: { turn: 4 },
+      }),
+    ].reduce(reduceTrace, initialTrace)
+    expect(s.steps.map((x) => [x.label, x.summary])).toEqual([
+      ['Agent turn 4', 'check_plan'],
+      ['Agent stopped', 'Not enough time left for the AI planner; used the deterministic planner'],
+    ])
+    expect(s.steps.filter((x) => /turn 4/.test(`${x.label} ${x.summary}`))).toHaveLength(1)
+  })
+
+  it('classifies degradations: data versus AI steps replaced by code', () => {
+    const s = [
+      ev({ type: 'degraded', seq: 1, node: 'plan_agent', summary: 'The AI planner timed out; used the deterministic planner' }),
+      ev({ type: 'degraded', seq: 2, node: 'get_weather', summary: 'Weather not checked; planning without a forecast' }),
+    ].reduce(reduceTrace, initialTrace)
+    expect(s.degraded.map((d) => d.kind)).toEqual(['planner', 'data'])
+    expect(classifyDegradation('Live place data unavailable; using the curated OpenStreetMap snapshot')).toBe('data')
+    expect(classifyDegradation('Live place data is temporarily unavailable')).toBe('data')
+    expect(classifyDegradation("Couldn't check this week's events")).toBe('data')
+    expect(classifyDegradation('AI parser unavailable; used rule-based parsing')).toBe('parser')
+    expect(classifyDegradation("The AI planner didn't submit a plan; used the deterministic planner")).toBe('planner')
+    expect(classifyDegradation('The AI model declined this request; used the deterministic planner')).toBe('planner')
+    expect(classifyDegradation('The primary AI model (a) failed; switched to b')).toBe('model')
   })
 
   it('ignores duplicate deliveries and heartbeats', () => {
@@ -84,6 +159,35 @@ describe('request building', () => {
     expect(validateForm({ ...defaultFormState(), freeText: '', city: '' }).form).toBeTruthy()
   })
 
+  it('unions relaxed_constraints across relaxations; other keys replace (D-P2-02)', () => {
+    const first = applyPatch({ free_text: 'x', constraints: ['vegan'] }, { relaxed_constraints: ['access:wheelchair'] })
+    expect(first).toEqual({ free_text: 'x', constraints: ['vegan'], relaxed_constraints: ['access:wheelchair'] })
+    const second = applyPatch(first, { relaxed_constraints: ['diet:jain', 'access:wheelchair'] })
+    expect(second.relaxed_constraints).toEqual(['access:wheelchair', 'diet:jain'])
+    expect(applyPatch(second, { constraints: ['vegetarian'] }).constraints).toEqual(['vegetarian']) // replaced
+    expect(applyPatch(second, { relaxed_constraints: null }).relaxed_constraints).toBeUndefined()
+    expect(applyPatch({ free_text: 'x' }, { relaxed_constraints: [] })).toEqual({ free_text: 'x' })
+  })
+
+  it('remembers dropped constraints in the form so later plans keep them dropped', () => {
+    const start = defaultFormState()
+    start.toggles.wheelchair = true
+    const { form, dirty } = patchForm(start, {}, { relaxed_constraints: ['access:wheelchair'] })
+    expect(form.relaxed).toEqual(['access:wheelchair'])
+    expect(form.toggles.wheelchair).toBe(false)
+    expect(dirty).toEqual({}) // not an edit: the description stays authoritative
+    expect(buildRequest(form, dirty)).toEqual({ free_text: DEFAULT_FREE_TEXT, relaxed_constraints: ['access:wheelchair'] })
+
+    const twice = patchForm(form, dirty, { relaxed_constraints: ['diet:vegetarian'] }).form
+    expect(twice.relaxed).toEqual(['access:wheelchair', 'diet:vegetarian'])
+    expect(twice.toggles.vegetarian).toBe(false)
+
+    expect(toggleConstraint(twice, 'wheelchair').relaxed).toEqual(['diet:vegetarian']) // ticking it brings it back
+    const restored = restoreConstraint(twice, 'diet:vegetarian')
+    expect(restored.relaxed).toEqual(['access:wheelchair'])
+    expect(restored.toggles.vegetarian).toBe(true)
+  })
+
   it('applies relaxation patches to requests and the form', () => {
     const req = { free_text: 'x', budget: 300, neighbourhood: 'Indiranagar' }
     expect(applyPatch(req, { budget: 850, neighbourhood: null, not_a_field: 1 })).toEqual({ free_text: 'x', budget: 850 })
@@ -93,6 +197,16 @@ describe('request building', () => {
     expect(form.toggles.avoid_crowds).toBe(false)
     expect(form.extraConstraints).toBe('no malls')
     expect(dirty).toEqual({ budget: true, constraints: true })
+  })
+})
+
+describe('omission labels', () => {
+  it('prefers the server name, then a free-text idea, then a neutral label', () => {
+    expect(omissionLabel({ ref: 'gp:abc', name: 'Hoppy Yard Brewpub' })).toBe('Hoppy Yard Brewpub')
+    expect(omissionLabel({ ref: 'street food market', name: null })).toBe('street food market')
+    expect(omissionLabel({ ref: 'snap:xyz', name: null })).toBe('Another option')
+    expect(omissionLabel({ ref: 'evfx:1' })).toBe('Another option')
+    expect(omissionLabel({ ref: 'fx:1', name: '  ' })).toBe('Another option')
   })
 })
 

@@ -58,8 +58,10 @@ async def test_plan_ttl(store: PostgresStore, clock: MutableClock) -> None:
 async def test_rate_limit_and_daily(store: PostgresStore, clock: MutableClock) -> None:
     key = _uid()
     assert await store.hit_rate_limit(key, 600, 1) == (True, 0)
-    assert await store.hit_rate_limit(key, 600, 1) == (False, 300)
+    assert await store.hit_rate_limit(key, 600, 1) == (False, 900)  # sliding: free again at 12:20
     clock.now = START + timedelta(minutes=5)
+    assert (await store.hit_rate_limit(key, 600, 1))[0] is False
+    clock.now = START + timedelta(minutes=15)
     assert await store.hit_rate_limit(key, 600, 1) == (True, 0)
     assert await store.incr_daily(key) == 1
     assert await store.incr_daily(key) == 2
@@ -88,3 +90,19 @@ async def test_postgres_checkpointer_setup() -> None:
     async with open_checkpointer(DATABASE_URL) as saver:
         assert isinstance(saver, AsyncPostgresSaver)
         assert await saver.aget_tuple({"configurable": {"thread_id": _uid(), "checkpoint_ns": ""}}) is None
+
+
+async def test_retention(store: PostgresStore, clock: MutableClock) -> None:
+    tid = _uid()
+    await store.record_paused_thread(tid)
+    assert tid in await store.stale_paused_threads(-1)
+    assert tid not in await store.stale_paused_threads(3600)
+    await store.forget_paused_thread(tid)
+    assert tid not in await store.stale_paused_threads(-1)
+
+    sid = _uid()
+    await store.save_plan(sid, {"x": 1}, ttl_days=1)
+    clock.now = START + timedelta(days=2)
+    counts = await store.purge_expired(run_retention_days=90, feedback_retention_days=90)
+    assert counts["plans"] >= 1 and set(counts) == {"plans", "runs", "feedback", "rate_limits", "daily_counters"}
+    assert await store.get_plan(sid) is None

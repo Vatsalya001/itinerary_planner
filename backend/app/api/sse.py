@@ -10,15 +10,17 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from typing import Any
 
 from starlette.responses import JSONResponse
 
 from app.domain.schemas import TraceEvent
 
-# Seconds of silence before a heartbeat event is sent (patched to a tiny value in tests).
+# Seconds of silence before a keep-alive is sent (patched to a tiny value in tests).
 HEARTBEAT_INTERVAL_S: float = 10.0
+# Keep-alives are SSE comment lines, not TraceEvents, so every TraceEvent in a stream has a unique ``seq``.
+# SSE clients (and our frontend parser) ignore comment lines.
+KEEPALIVE_FRAME = b": keep-alive\n\n"
 
 SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
@@ -48,24 +50,19 @@ class StreamEnd:
 STREAM_END = StreamEnd()
 
 
-def heartbeat(run_id: str, seq: int) -> TraceEvent:
-    return TraceEvent(type="heartbeat", run_id=run_id, seq=seq, ts=datetime.now(UTC))
-
-
-async def event_stream(queue: asyncio.Queue[TraceEvent | StreamEnd], run_id: str) -> AsyncIterator[bytes]:
-    """Forward queued events as SSE frames, with a heartbeat after every HEARTBEAT_INTERVAL_S of silence.
+async def event_stream(queue: asyncio.Queue[TraceEvent | StreamEnd]) -> AsyncIterator[bytes]:
+    """Forward queued events as SSE frames, with a ``: keep-alive`` comment after every HEARTBEAT_INTERVAL_S of
+    silence.
 
     Stops after the sentinel. If the client disconnects, Starlette stops iterating; the producer task is
     independent and keeps running (its events are simply never read).
     """
-    last_seq = 0
     while True:
         try:
             item = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL_S)
         except TimeoutError:
-            yield format_event(heartbeat(run_id, last_seq))
+            yield KEEPALIVE_FRAME
             continue
         if isinstance(item, StreamEnd):
             return
-        last_seq = max(last_seq, item.seq)
         yield format_event(item)

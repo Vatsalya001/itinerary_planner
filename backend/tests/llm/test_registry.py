@@ -1,0 +1,170 @@
+"""Model registry: provider parameter rules, pending/unknown IDs, chains with fallbacks, refusal handling."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableWithFallbacks
+from langchain_ollama import ChatOllama
+
+from app.deps import fixture_settings
+from app.graph.prompts import AGENT_SYSTEM_PROMPT, LLMParse
+from app.graph.tools import tool_schemas
+from app.llm import registry
+from app.llm.fake import ScriptedAgentModel
+from app.llm.registry import (
+    METADATA_KEY,
+    ModelRefusalError,
+    PendingModelError,
+    RegistryError,
+    UnknownModelError,
+    build_agent_runnable,
+    build_structured_runnable,
+    get_chat_model,
+    get_spec,
+    is_refusal,
+    load_registry,
+    model_chain,
+    provider_kwargs,
+)
+
+OPUS = "anthropic:claude-opus-5-5"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    registry.clear_cache()
+
+
+def test_registry_lists_the_model_matrix() -> None:
+    reg = load_registry()
+    cases = json.loads((Path(__file__).resolve().parents[3] / "eval_cases.json").read_text())
+    for row in cases["model_matrix"]:
+        if "<" in row["id"]:
+            continue
+        assert row["id"] in reg.specs, row["id"]
+    assert reg.production_primary == OPUS
+    opus = reg.specs[OPUS]
+    assert (opus.pricing.input, opus.pricing.output, opus.pricing.cache_read) == (4.0, 20.0, 0.2)
+    for local in ("ollama:qwen3.5:9b", "ollama:gemma4:e4b", "ollama:granite4:tiny-h"):
+        assert reg.specs[local].kind == "local" and reg.specs[local].pricing.input == 0
+    assert {"fake:agent", "fake:secondary", "fake:primary_503", "baseline:deterministic"} <= set(reg.specs)
+
+
+def test_anthropic_param_rules() -> None:
+    settings = fixture_settings()
+    spec = get_spec(OPUS)
+    agent = provider_kwargs(spec, "agent", settings)
+    parse = provider_kwargs(spec, "parse", settings)
+    for kwargs in (agent, parse):
+        assert not {"temperature", "top_p", "top_k", "tool_choice"} & set(kwargs)
+        assert kwargs["max_tokens"] == 16000
+        assert "server-side-fallback-2026-07-01" in kwargs["betas"]
+        assert kwargs["model_kwargs"] == {"fallbacks": "default"}
+    assert agent["output_config"] == {"effort": "medium"} and parse["output_config"] == {"effort": "low"}
+
+
+def test_anthropic_model_builds_a_valid_request_payload() -> None:
+    settings = fixture_settings()
+    model = get_chat_model(OPUS, "agent", settings)
+    assert isinstance(model, ChatAnthropic)
+    assert model.temperature is None and model.top_p is None and model.top_k is None
+    bound = model.bind_tools(tool_schemas())
+    assert "tool_choice" not in bound.kwargs  # type: ignore[attr-defined]
+    prepared = registry._prepare_messages(get_spec(OPUS))([SystemMessage(content=AGENT_SYSTEM_PROMPT),
+                                                            HumanMessage(content="{}")])
+    payload = model._get_request_payload(prepared, **bound.kwargs)  # type: ignore[attr-defined]
+    assert payload["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert payload["system"][0]["text"] == AGENT_SYSTEM_PROMPT
+    assert payload["fallbacks"] == "default"
+    assert "server-side-fallback-2026-07-01" in payload["betas"]
+    assert payload["output_config"]["effort"] == "medium"
+    assert payload["max_tokens"] == 16000
+    assert not {"temperature", "top_p", "top_k", "tool_choice"} & set(payload)
+    assert [t["name"] for t in payload["tools"]] == ["search_places", "search_events", "estimate_travel",
+                                                       "check_plan", "submit_plan"]
+
+
+def test_ollama_param_rules() -> None:
+    settings = fixture_settings(ollama_base_url="http://127.0.0.1:11999")
+    qwen = get_chat_model("ollama:qwen3.5:9b", "agent", settings)
+    assert isinstance(qwen, ChatOllama)
+    assert qwen.num_ctx == 32768 and qwen.temperature == 0 and qwen.keep_alive == "10m"
+    assert qwen.reasoning is False and qwen.base_url == "http://127.0.0.1:11999"
+    granite = get_chat_model("ollama:granite4:tiny-h", "agent", settings)
+    assert isinstance(granite, ChatOllama) and granite.num_ctx == 32768 and granite.reasoning is None
+    adhoc = get_spec("ollama:llama3.2:3b")
+    assert adhoc.kind == "local" and provider_kwargs(adhoc, "agent", settings)["num_ctx"] == 32768
+
+
+def test_pending_unknown_and_baseline_ids_raise_clearly() -> None:
+    settings = fixture_settings()
+    with pytest.raises(PendingModelError, match=r"models\.yaml"):
+        get_spec("google_genai:<pending>")
+    with pytest.raises(PendingModelError, match="No google_genai model ID is pinned"):
+        get_chat_model("google_genai:gemini-9-pro", "agent", settings)
+    with pytest.raises(PendingModelError, match="xai"):
+        get_spec("xai:grok-9")
+    with pytest.raises(UnknownModelError, match=r"Known models"):
+        get_spec("openai:gpt-9")
+    with pytest.raises(UnknownModelError):
+        get_spec("no-provider")
+    with pytest.raises(RegistryError, match="no-LLM baseline"):
+        get_chat_model("baseline:deterministic", "agent", settings)
+
+
+def test_model_chain_and_fallbacks() -> None:
+    settings = fixture_settings(primary_model="fake:agent", fallback_model="fake:secondary")
+    assert model_chain(settings) == ["fake:agent", "fake:secondary"]
+    assert model_chain(settings, "fake:secondary") == ["fake:secondary"]
+    assert model_chain(settings, "baseline:deterministic") == ["baseline:deterministic"]
+    assert model_chain(fixture_settings(primary_model="fake:agent")) == ["fake:agent"]
+    runnable = build_agent_runnable(model_chain(settings), tool_schemas(), settings)
+    assert isinstance(runnable, RunnableWithFallbacks)
+    structured = build_structured_runnable(model_chain(settings), LLMParse, settings)
+    assert isinstance(structured, RunnableWithFallbacks)
+
+
+def test_models_are_cached_per_purpose_and_fault() -> None:
+    settings = fixture_settings(fault="llm_refusal")
+    a = get_chat_model("fake:agent", "agent", settings)
+    assert get_chat_model("fake:agent", "agent", settings) is a
+    assert get_chat_model("fake:agent", "parse", settings) is not a
+    assert isinstance(a, ScriptedAgentModel) and a.fault == "llm_refusal"
+
+
+def test_is_refusal() -> None:
+    assert is_refusal(AIMessage(content="", response_metadata={"stop_reason": "refusal"}))
+    assert is_refusal(AIMessage(content="", response_metadata={"finish_reason": "SAFETY"}))
+    assert is_refusal(AIMessage(content="", additional_kwargs={"refusal": "no"}))
+    assert not is_refusal(AIMessage(content="ok", response_metadata={"stop_reason": "end_turn"}))
+
+
+async def test_refusal_moves_down_the_chain_and_raises_at_the_end() -> None:
+    settings = fixture_settings(primary_model="fake:agent", fault="llm_refusal")
+    runnable = build_agent_runnable(["fake:agent"], tool_schemas(), settings)
+    with pytest.raises(ModelRefusalError):
+        await runnable.ainvoke([HumanMessage(content="{}")])
+
+
+async def test_fallback_answer_is_tagged_with_the_model_that_ran() -> None:
+    settings = fixture_settings(primary_model="fake:primary_503", fallback_model="fake:secondary")
+    runnable = build_agent_runnable(model_chain(settings), tool_schemas(), settings)
+    message = await runnable.ainvoke([HumanMessage(content="{}")])
+    assert message.response_metadata[METADATA_KEY] == "fake:secondary"
+
+
+async def test_structured_output_written_as_text_is_recovered() -> None:
+    from langchain_core.runnables import RunnableLambda
+
+    raw = AIMessage(content='Sure:\n{"city": "Pune", "energy": "low"}')
+    tag = registry._tag_structured("ollama:qwen3.5:9b", LLMParse)
+    out = await (RunnableLambda(lambda _: {"raw": raw, "parsed": None, "parsing_error": None}) | tag).ainvoke(None)
+    assert out["parsed"].city == "Pune" and out["model_id"] == "ollama:qwen3.5:9b"
+    with pytest.raises(registry.StructuredOutputError):
+        tag({"raw": AIMessage(content="no json here"), "parsed": None, "parsing_error": None})

@@ -81,6 +81,20 @@ describe('SseParser', () => {
     expect(single).toEqual(expected)
   })
 
+  it('ignores ": keep-alive" comment lines between events (backend keep-alives)', async () => {
+    const body =
+      'data: {"type":"run_started","run_id":"r","seq":1,"ts":"2026-11-05T04:30:00Z"}\n\n: keep-alive\n\n: keep-alive\n\n' +
+      'data: {"type":"result","run_id":"r","seq":2,"ts":"2026-11-05T04:30:01Z","data":' +
+      JSON.stringify(complete) +
+      '}\n\n'
+    const msgs = await collect([encoder.encode(body)])
+    expect(msgs.map((m) => JSON.parse(m.data).type)).toEqual(['run_started', 'result'])
+    const seen: string[] = []
+    const result = await postPlan({}, (e) => seen.push(e.type), undefined, { fetchImpl: async () => sseResponse(body) })
+    expect(result.status).toBe('complete')
+    expect(seen).toEqual(['run_started', 'result'])
+  })
+
   it('ignores comments, unknown fields, lines without a colon and retry', () => {
     const got: SseMessage[] = []
     const p = new SseParser((m) => got.push(m))

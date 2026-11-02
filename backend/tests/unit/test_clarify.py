@@ -329,3 +329,10 @@ def test_london_answered_inr_is_converted_not_mixed():
 
 def test_negated_diet_never_blocks():
     assert questions_for(PlanRequest(free_text="Bangalore, I'm not vegetarian, 2000 rupees, 4 hours"), [BLR]) == []
+
+
+def test_apply_answers_preserves_relaxed_constraints():
+    request = PlanRequest(free_text="vegan, wheelchair access, something fun", relaxed_constraints=["access:wheelchair"])
+    answered = apply_answers(request, {"city": "Bangalore", "budget_time": "3 hours, ₹1000"})
+    assert answered.relaxed_constraints == ["access:wheelchair"]
+    assert "access:wheelchair" not in {c.key for c in original_constraints(answered)}

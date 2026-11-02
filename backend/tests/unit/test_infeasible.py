@@ -8,7 +8,6 @@ from app.domain.travel import HeuristicTravel
 from tests.factories import (
     bangalore_like_world,
     make_candidate,
-    make_constraints,
     make_ctx,
     make_prefs,
     synthetic_candidates,
@@ -48,15 +47,15 @@ def test_drop_constraint_relaxation():
     labels = [r.label for r in report.relaxations]
     assert "Drop 'wheelchair accessible'" in labels
     drop = next(r for r in report.relaxations if r.label == "Drop 'wheelchair accessible'")
-    assert drop.patch == {"constraints": ["vegetarian"]}
+    assert drop.patch == {"relaxed_constraints": ["access:wheelchair"]}
     assert "access:wheelchair" in report.binding_constraints
     assert "wheelchair" in report.reason.lower()
-    remaining = make_constraints(drop.patch["constraints"])
+    remaining = [c for c in prefs.hard_constraints if c.key not in drop.patch["relaxed_constraints"]]
     relaxed = prefs.model_copy(update={"hard_constraints": remaining})
     assert plan_deterministic(cands, ctx, relaxed, remaining, travel) is not None
 
 
-def test_drop_patch_does_not_reintroduce_shared_source_text():
+def test_drop_patch_names_only_the_dropped_key():
     shared = map_constraint_text("vegetarian, wheelchair accessible")
     assert {c.key for c in shared} == {"diet:vegetarian", "access:wheelchair"}
     cands = [make_candidate(f"fx:c{i}", key, offset_km=(0.3 * i, 0.0), wheelchair=Evidence.UNKNOWN)
@@ -64,7 +63,10 @@ def test_drop_patch_does_not_reintroduce_shared_source_text():
     prefs = make_prefs(constraints=shared)
     report = explain_infeasible(cands, make_ctx(), prefs, prefs.hard_constraints, travel)
     drop = next(r for r in report.relaxations if "wheelchair" in r.label)
-    assert drop.patch == {"constraints": ["vegetarian"]}
+    assert drop.patch == {"relaxed_constraints": ["access:wheelchair"]}
+    from app.domain.schemas import PlanRequest
+
+    PlanRequest(free_text="vegetarian, wheelchair accessible", **drop.patch)  # a valid request patch
 
 
 def test_time_relaxation():

@@ -40,6 +40,8 @@ export interface PlanRequest {
   constraints?: string[]
   neighbourhood?: string | null
   group_size?: number
+  /** Constraint keys dropped via a one-tap relaxation, e.g. ["access:wheelchair"]; never re-derived from text. */
+  relaxed_constraints?: string[]
 }
 
 /** Every key PlanRequest accepts (the backend forbids extra keys). */
@@ -56,6 +58,7 @@ export const PLAN_REQUEST_KEYS: ReadonlyArray<keyof PlanRequest> = [
   'constraints',
   'neighbourhood',
   'group_size',
+  'relaxed_constraints',
 ]
 
 export interface Constraint {
@@ -166,6 +169,8 @@ export interface Candidate {
 export interface Omission {
   ref: string
   reason: string
+  /** Display name filled server-side from the run's ledger; null for ideas or unknown IDs. */
+  name?: string | null
 }
 
 export interface Leg {

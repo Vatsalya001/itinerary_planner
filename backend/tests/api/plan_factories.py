@@ -211,13 +211,20 @@ def make_deps(settings: Settings, places: Any = None, store: Any = None) -> Deps
 
 
 def parse_sse(body: str) -> list[dict[str, Any]]:
-    frames = [f for f in body.split("\n\n") if f.strip()]
+    """TraceEvents from an SSE body; ``: keep-alive`` comment frames are skipped (see ``keepalives``)."""
     out = []
-    for frame in frames:
+    for frame in (f for f in body.split("\n\n") if f.strip()):
+        if frame.startswith(":"):
+            assert frame == ": keep-alive", frame
+            continue
         assert frame.startswith("data: "), frame
         assert "\n" not in frame
         out.append(json.loads(frame[len("data: "):]))
     return out
+
+
+def keepalives(body: str) -> int:
+    return sum(1 for f in body.split("\n\n") if f == ": keep-alive")
 
 
 class MutableClock:

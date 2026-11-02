@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from starlette.requests import Request
 
-from app.api.security import client_ip
+from app.api.security import client_ip, rate_limit_subject
 
 PEER = "10.1.2.3"
 
@@ -47,3 +49,23 @@ def test_absent_header_uses_peer() -> None:
 def test_header_ignored_when_not_trusted() -> None:
     assert client_ip(_request("203.0.113.9"), False) == PEER
     assert client_ip(_request("6.6.6.6, 203.0.113.9"), False) == PEER
+
+
+def test_rate_limit_subject_groups_ipv6_by_64() -> None:
+    a = rate_limit_subject("2001:db8:aaaa:bbbb:1:2:3:4")
+    b = rate_limit_subject("2001:db8:aaaa:bbbb:ffff:ffff:ffff:ffff")
+    assert a == b == "2001:db8:aaaa:bbbb::/64"
+    assert rate_limit_subject("2001:db8:aaaa:bbbc::1") != a  # a different /64
+    assert rate_limit_subject("203.0.113.9") == "203.0.113.9"
+    assert rate_limit_subject("::ffff:203.0.113.9") == "203.0.113.9"  # IPv4-mapped
+    assert rate_limit_subject("unknown") == "unknown"
+
+
+async def test_ipv6_clients_in_one_64_share_a_plan_bucket(make_client: Any, fake_runner: Any,
+                                                          clocked_store: Any) -> None:
+    brief = {"city": "Bangalore"}
+    async with make_client(store=clocked_store, rate_limit_per_10min=1, trust_proxy_headers=True) as (client, _a, _d):
+        r1 = await client.post("/api/plan", json=brief, headers={"X-Forwarded-For": "2001:db8:1:2::10"})
+        r2 = await client.post("/api/plan", json=brief, headers={"X-Forwarded-For": "2001:db8:1:2:ffff::99"})
+        r3 = await client.post("/api/plan", json=brief, headers={"X-Forwarded-For": "2001:db8:1:3::10"})
+    assert (r1.status_code, r2.status_code, r3.status_code) == (200, 429, 200)

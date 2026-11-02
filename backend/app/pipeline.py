@@ -57,7 +57,7 @@ async def build_context(prefs: Preferences, location: Location, deps: Deps, trac
             prefs.assumptions = [a for a in prefs.assumptions if not a.startswith("Starting at ")]
             prefs.assumptions.append(f"Starting at {fmt_clock(earliest)} because the usual start time has passed")
 
-    tracer.emit("tool_called", node="get_weather", tool="get_weather", reason=f"forecast for {day.isoformat()}")
+    tracer.emit("tool_called", node="get_weather", tool="get_weather", summary=f"Forecast for {day.isoformat()}")
     t0 = time.perf_counter()
     try:
         weather = await deps.weather.forecast(location, day)
@@ -102,7 +102,7 @@ async def search_places(queries: list[PlaceQuery], ctx: WorldContext, deps: Deps
     Returns (candidates, degradations, places_available).
     """
     async def run(provider_name: str, q: PlaceQuery, provider: PlacesProvider) -> list[Candidate]:
-        with tracer.tool("search_places", reason=q.intent, node="gather_candidates") as info:
+        with tracer.tool("search_places", node="gather_candidates") as info:
             found = await provider.search(q, ctx)
             info["summary"] = f"{len(found)} places for '{q.intent}' ({provider_name})"
         return found
@@ -131,7 +131,7 @@ async def search_events(prefs: Preferences, ctx: WorldContext, deps: Deps,
     if deps.events is None:
         return [], []
     try:
-        with tracer.tool("search_events", reason="events matching interests", node="gather_candidates") as info:
+        with tracer.tool("search_events", node="gather_candidates") as info:
             found = await deps.events.search(prefs.interests, ctx, max_price=prefs.budget)
             info["summary"] = f"{len(found)} events on {ctx.date.isoformat()}"
         return found, []

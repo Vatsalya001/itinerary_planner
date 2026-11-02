@@ -1,7 +1,8 @@
 """Postgres implementation of the Store protocol (psycopg 3 async + psycopg_pool).
 
-Same tables as the SQLite store with JSONB and TIMESTAMPTZ columns. Counters use single-statement upserts with
-``RETURNING`` so concurrent hits are counted atomically.
+Same tables and semantics as the SQLite store (sliding two-window rate limits, retention) with JSONB and
+TIMESTAMPTZ columns. Counters use single-statement upserts with ``RETURNING`` so concurrent hits are counted
+atomically; a denied hit is compensated with a decrement, so concurrent hits never admit more than the limit.
 """
 
 from __future__ import annotations
@@ -11,7 +12,16 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.store.base import RunRecord
-from app.store.sqlite import JSON_RUN_COLUMNS, RUN_COLUMNS, fixed_window, utc_now
+from app.store.sqlite import (
+    DAILY_COUNTER_TTL_DAYS,
+    JSON_RUN_COLUMNS,
+    RATE_LIMIT_ROW_TTL_S,
+    RUN_COLUMNS,
+    sliding_estimate,
+    sliding_retry_after,
+    utc_now,
+    window_bounds,
+)
 
 Clock = Callable[[], datetime]
 
@@ -64,8 +74,11 @@ SCHEMA = [
         summary    JSONB NOT NULL,
         created_at TIMESTAMPTZ NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS paused_threads (
+        thread_id  TEXT PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL
+    )""",
 ]
-CLEANUP_EVERY = 200
 
 
 def normalize_pg_url(url: str) -> str:
@@ -83,7 +96,6 @@ class PostgresStore:
         self._pool: Any = None
         self._min_size = min_size
         self._max_size = max_size
-        self._ops = 0
 
     async def init(self) -> None:
         if self._pool is not None:
@@ -117,13 +129,12 @@ class PostgresStore:
                 return []
             return list(await cur.fetchall())
 
-    async def _maybe_cleanup(self) -> None:
-        self._ops += 1
-        if self._ops % CLEANUP_EVERY:
-            return
-        now = self._now()
-        await self._execute("DELETE FROM rate_limits WHERE window_start < %s", (int(now.timestamp()) - 2 * 86400,))
-        await self._execute("DELETE FROM plans WHERE expires_at <= %s", (now,))
+    async def _rowcount(self, sql: str, params: tuple[Any, ...]) -> int:
+        if self._pool is None:
+            raise RuntimeError("PostgresStore.init() was not called")
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql, params)
+            return max(0, int(cur.rowcount))
 
     async def ping(self) -> bool:
         rows = await self._execute("SELECT 1")
@@ -139,7 +150,6 @@ class PostgresStore:
             "expires_at = EXCLUDED.expires_at",
             (share_id, Jsonb(record), now, now + timedelta(days=ttl_days)),
         )
-        await self._maybe_cleanup()
 
     async def get_plan(self, share_id: str) -> dict[str, Any] | None:
         rows = await self._execute("SELECT record FROM plans WHERE share_id = %s AND expires_at > %s",
@@ -173,15 +183,21 @@ class PostgresStore:
         return RunRecord.model_validate(dict(zip(RUN_COLUMNS, rows[0], strict=True)))
 
     async def hit_rate_limit(self, key: str, window_s: int, limit: int) -> tuple[bool, int]:
-        start, retry_after = fixed_window(self._now().timestamp(), window_s)
+        start, prev_start, elapsed = window_bounds(self._now().timestamp(), window_s)
         rows = await self._execute(
             "INSERT INTO rate_limits (key, window_start, count) VALUES (%s, %s, 1) "
             "ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limits.count + 1 RETURNING count",
             (key, start),
         )
-        await self._maybe_cleanup()
-        allowed = int(rows[0][0]) <= limit
-        return allowed, (0 if allowed else retry_after)
+        current = int(rows[0][0])
+        prev_rows = await self._execute("SELECT count FROM rate_limits WHERE key = %s AND window_start = %s",
+                                        (key, prev_start))
+        previous = int(prev_rows[0][0]) if prev_rows else 0
+        if sliding_estimate(previous, current, elapsed, window_s) <= limit + 1e-9:
+            return True, 0
+        await self._execute("UPDATE rate_limits SET count = count - 1 WHERE key = %s AND window_start = %s",
+                            (key, start))
+        return False, sliding_retry_after(previous, current - 1, limit, elapsed, window_s)
 
     async def incr_daily(self, key: str) -> int:
         rows = await self._execute(
@@ -200,3 +216,33 @@ class PostgresStore:
     async def get_eval_summary(self) -> dict[str, Any] | None:
         rows = await self._execute("SELECT summary FROM eval_summary ORDER BY id DESC LIMIT 1")
         return dict(rows[0][0]) if rows else None
+
+    async def record_paused_thread(self, thread_id: str) -> None:
+        await self._execute(
+            "INSERT INTO paused_threads (thread_id, created_at) VALUES (%s, %s) "
+            "ON CONFLICT (thread_id) DO UPDATE SET created_at = EXCLUDED.created_at",
+            (thread_id, self._now()),
+        )
+
+    async def forget_paused_thread(self, thread_id: str) -> None:
+        await self._execute("DELETE FROM paused_threads WHERE thread_id = %s", (thread_id,))
+
+    async def stale_paused_threads(self, max_age_s: int) -> list[str]:
+        cutoff = self._now() - timedelta(seconds=max_age_s)
+        rows = await self._execute("SELECT thread_id FROM paused_threads WHERE created_at < %s ORDER BY created_at",
+                                   (cutoff,))
+        return [str(r[0]) for r in rows]
+
+    async def purge_expired(self, run_retention_days: int, feedback_retention_days: int) -> dict[str, int]:
+        now = self._now()
+        day_cutoff = (now - timedelta(days=DAILY_COUNTER_TTL_DAYS)).astimezone(UTC).date()
+        return {
+            "plans": await self._rowcount("DELETE FROM plans WHERE expires_at <= %s", (now,)),
+            "runs": await self._rowcount("DELETE FROM runs WHERE created_at < %s",
+                                         (now - timedelta(days=run_retention_days),)),
+            "feedback": await self._rowcount("DELETE FROM feedback WHERE created_at < %s",
+                                             (now - timedelta(days=feedback_retention_days),)),
+            "rate_limits": await self._rowcount("DELETE FROM rate_limits WHERE window_start < %s",
+                                                (int(now.timestamp()) - RATE_LIMIT_ROW_TTL_S,)),
+            "daily_counters": await self._rowcount("DELETE FROM daily_counters WHERE day < %s", (day_cutoff,)),
+        }

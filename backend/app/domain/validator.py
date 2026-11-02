@@ -15,6 +15,8 @@ Codes added beyond the original list:
 * ``HOURS_UNVERIFIED`` is an error (not a warning) for concert halls, theatres and cinemas with unknown hours
   that are not events with times: they are only a plan when something is on.
 * ``PROSE_NUMERIC_CLAIM`` ignores place names from the ledger ("Midnight Scoops" is a name, not a time).
+* ``IDLE_WAIT`` (warning): a stop starts more than ``IDLE_WAIT_MIN`` minutes after the arrival time (waiting
+  for an event); shown under the "time" check.
 * ``PACING_RELAXED`` (warning): under ``setting:outdoors_only`` with no seated outdoor candidate in the ledger,
   the low-energy seated-stop rule is waived (otherwise "chill + outdoors only" could never be planned).
 
@@ -101,10 +103,12 @@ CODES: dict[str, str] = {
     "CURRENCY_MISMATCH": "A stop, Plan B or leg is priced in a different currency from the budget",
     "PACING_RELAXED": "Low-energy seated-stop rule waived for 'outdoors only' (no seated outdoor options) (warning)",
     "LOCATION_APPROXIMATE": "Stop or Plan B has no real coordinates; venue location and legs are estimates (warning)",
+    "IDLE_WAIT": "A stop starts more than 20 minutes after you arrive, e.g. waiting for an event (warning)",
 }
 
 WARNING_CODES = {"HOURS_UNVERIFIED", "WEATHER_RISK", "CONSTRAINT_DROPPED", "ALCOHOL_SERVED", "PACING_RELAXED",
-                 "LOCATION_APPROXIMATE"}
+                 "LOCATION_APPROXIMATE", "IDLE_WAIT"}
+IDLE_WAIT_MIN = 20
 CITY_RADIUS_KM = 40.0
 EVENT_MIN_MINUTES = 30
 
@@ -381,6 +385,11 @@ def _scheduled_checks(plan: CanonicalPlan, draft: PlanDraft, ledger: Mapping[str
 
     for i, (s, ds) in enumerate(zip(plan.stops, draft.stops, strict=True)):
         c = s.candidate
+        arrival = ctx.start_min if i == 0 else (
+            plan.stops[i - 1].end_min + plan.legs[i - 1].minutes_max + pacing.buffer_minutes)
+        if s.start_min - arrival > IDLE_WAIT_MIN:
+            out.append(_err("IDLE_WAIT",
+                            f"You'd wait about {s.start_min - arrival} min before {c.name} starts", i, c.id))
         status = opening_status(c, s.start_min, s.end_min)
         if status == "closed" and i not in late_events:
             what = "the event's time" if c.kind == "event" else "its known opening hours"
@@ -549,9 +558,12 @@ def summarize_checks(report: ValidationReport, ctx: WorldContext, prefs: Prefere
     else:
         t = plan.totals
         detail = f"Uses {t.elapsed_min} of {t.available_minutes} min including travel and buffers"
+        if "IDLE_WAIT" in codes:
+            detail += "; " + codes["IDLE_WAIT"][0].message[0].lower() + codes["IDLE_WAIT"][0].message[1:]
         if "PACING_RELAXED" in codes:
             detail += "; no seated stop because nothing seated is outdoors"
-        items.append(CheckItem(name="time", status="warn" if "PACING_RELAXED" in codes else "pass", detail=detail))
+        warn = "PACING_RELAXED" in codes or "IDLE_WAIT" in codes
+        items.append(CheckItem(name="time", status="warn" if warn else "pass", detail=detail))
     # opening hours
     if "HOURS_CONFLICT" in codes:
         items.append(CheckItem(name="opening_hours", status="fail", detail=codes["HOURS_CONFLICT"][0].message))

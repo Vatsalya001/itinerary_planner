@@ -1,0 +1,386 @@
+"""Graph mechanics: trace integrity, deadlines, append-only history, protocol errors and caps, baseline path,
+checkpoint cleanup, resume edge cases and the crash path."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any
+
+import pytest
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from pydantic import Field
+
+import app.graph.build as build_module
+import app.graph.runner as runner_module
+import app.llm.registry as registry_module
+from app.baseline import run_baseline
+from app.graph.nodes.common import AGENT_NO_TIME, PARSER_DEGRADED
+from app.graph.runner import EXPIRED, compiled_graph
+from app.llm.fake import ScriptedAgentModel
+from tests.graph.helpers import (
+    agent_tools,
+    assert_plan_sound,
+    assert_trace_integrity,
+    collect,
+    events_json,
+    finalize_data,
+    make_deps,
+    nodes_run,
+    request_for,
+    run_case,
+)
+
+TRACE_CASES = [
+    "assignment_example", "vague_free_text", "impossible_budget", "model_refusal", "places_provider_outage",
+    "invalid_submission_then_repair_exhausted", "agent_ends_without_submit", "places_outage_no_snapshot_city",
+    "unknown_city", "weather_unavailable",
+]
+
+
+@pytest.mark.parametrize("case_id", TRACE_CASES)
+async def test_trace_integrity(case_id: str) -> None:
+    result, events, _ = await run_case(case_id)
+    assert_trace_integrity(events)
+    assert all(e.run_id == result.run_id for e in events)
+    # agent notes are the only model text in the trace
+    for e in events:
+        if e.type == "tool_called" and e.node == "tools" and e.reason:
+            assert len(e.reason) <= 140
+
+
+async def test_run_id_and_thread_id_are_honoured() -> None:
+    deps = make_deps()
+    result, events = await collect(request_for("vague_free_text"), deps, run_id="r_custom123", thread_id="t_custom_thread")
+    assert result.run_id == "r_custom123" and {e.run_id for e in events} == {"r_custom123"}
+    assert result.thread_id == "t_custom_thread"
+
+
+async def test_soft_deadline_skips_the_agent() -> None:
+    deps = make_deps(run_deadline_s=5)
+    t0 = time.perf_counter()
+    result, events = await collect(request_for("assignment_example"), deps)
+    assert time.perf_counter() - t0 < 5
+    assert result.status == "fallback" and result.mode == "deterministic"
+    assert AGENT_NO_TIME in result.degradations and PARSER_DEGRADED in result.degradations
+    assert "plan_agent" not in nodes_run(events)
+    assert_trace_integrity(events)
+    assert_plan_sound(result)
+
+
+async def test_hard_deadline_returns_rejected_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def stuck(state: Any, runtime: Any) -> dict[str, Any]:
+        await asyncio.sleep(30)
+        return {}
+
+    monkeypatch.setattr(build_module, "build_context", stuck)
+    monkeypatch.setattr(runner_module, "HARD_GRACE_S", 0.3)
+    deps = make_deps(run_deadline_s=1)
+    t0 = time.perf_counter()
+    result, events = await collect(request_for("assignment_example"), deps)
+    assert time.perf_counter() - t0 < 3
+    assert result.status == "rejected" and result.message and "too long" in result.message
+    assert [e.type for e in events[-4:]] == ["error", "node_started", "node_completed", "result"]
+    assert_trace_integrity(events)
+
+
+async def test_unexpected_bug_yields_error_then_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def broken(state: Any, runtime: Any) -> dict[str, Any]:
+        raise RuntimeError("internal detail /etc/passwd line 42")
+
+    monkeypatch.setattr(build_module, "build_context", broken)
+    deps = make_deps()
+    result, events = await collect(request_for("assignment_example"), deps)
+    assert result.status == "rejected"
+    assert result.message and result.run_id in result.message
+    assert [e.type for e in events].count("error") == 1
+    dumped = events_json(events)
+    assert "/etc/passwd" not in dumped and "Traceback" not in dumped
+    assert_trace_integrity(events)
+    # the crashed thread was cleaned up
+    graph = compiled_graph(deps.checkpointer)
+    thread_id = events[0].data["thread_id"] if events[0].data else None
+    snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+    assert not snapshot.values
+
+
+async def test_checkpoints_deleted_after_terminal_kept_while_paused() -> None:
+    deps = make_deps()
+    graph = compiled_graph(deps.checkpointer)
+    paused, _ = await collect(request_for("vague_free_text"), deps)
+    snap = await graph.aget_state({"configurable": {"thread_id": paused.thread_id}})
+    assert "ask_clarification" in snap.next
+    done, _ = await collect(request_for("assignment_example"), deps, thread_id="t_terminal_1")
+    assert done.status == "complete"
+    snap = await graph.aget_state({"configurable": {"thread_id": "t_terminal_1"}})
+    assert not snap.values
+
+
+async def test_resume_unknown_thread_is_rejected() -> None:
+    deps = make_deps()
+    result, events = await collect(None, deps, thread_id="t_does_not_exist", resume_answers={"city": "Pune"})
+    assert result.status == "rejected" and result.message == EXPIRED
+    assert_trace_integrity(events)
+
+
+async def test_new_run_without_request_is_rejected() -> None:
+    result, events = await collect(None, make_deps())
+    assert result.status == "rejected"
+    assert_trace_integrity(events)
+
+
+async def test_append_only_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def keep(checkpointer: Any, thread_id: str | None) -> None:
+        return None
+
+    monkeypatch.setattr(runner_module, "delete_thread", keep)
+    deps = make_deps(fault="parser_omits_diet_and_agent_selects_nonveg")  # includes a rejected submission
+    result, _ = await collect(request_for("diet_dropped_by_parser"), deps, thread_id="t_history")
+    assert result.status == "complete"
+    graph = compiled_graph(deps.checkpointer)
+    history = [s async for s in graph.aget_state_history({"configurable": {"thread_id": "t_history"}})]
+    snapshots: list[list[BaseMessage]] = [list(s.values.get("messages") or []) for s in reversed(history)]
+    previous: list[BaseMessage] = []
+    for messages in snapshots:
+        assert len(messages) >= len(previous)
+        for old, new in zip(previous, messages, strict=False):
+            assert old.id == new.id and old.content == new.content and type(old) is type(new)
+            if isinstance(old, AIMessage):
+                assert old.tool_calls == new.tool_calls  # type: ignore[attr-defined]
+        previous = messages
+    assert any(isinstance(m, ToolMessage) and m.status == "error" and m.name == "submit_plan" for m in previous)
+
+
+async def test_baseline_runs_through_the_graph() -> None:
+    deps = make_deps()
+    result, events = await collect(request_for("assignment_example"), deps, model_id="baseline:deterministic")
+    assert_trace_integrity(events)
+    assert result.status == "complete" and result.mode == "deterministic"
+    assert result.model == "baseline:deterministic"
+    assert "plan_agent" not in nodes_run(events)
+    assert finalize_data(events)["usage"]["llm_calls"] == 0
+    assert not result.degradations
+    reference = await run_baseline(request_for("assignment_example"), make_deps())
+    assert result.plan is not None and reference.plan is not None
+    assert [s.candidate.id for s in result.plan.stops] == [s.candidate.id for s in reference.plan.stops]
+    assert_plan_sound(result)
+
+
+async def test_baseline_clarification_resumes() -> None:
+    deps = make_deps()
+    paused, _ = await collect(request_for("vague_free_text"), deps, model_id="baseline:deterministic")
+    assert paused.status == "needs_clarification" and paused.thread_id
+    answers = {"city": "Bangalore", "budget": "around 1000", "available_time": "afternoon, 3 hours"}
+    result, events = await collect(None, deps, thread_id=paused.thread_id, resume_answers=answers)
+    assert result.status == "complete" and result.model == "baseline:deterministic"
+    assert_trace_integrity(events)
+
+
+class _Misbehaving(ScriptedAgentModel):
+    """Plays scripted first turns, then the normal scripted policy."""
+
+    script: list[AIMessage] = Field(default_factory=list)
+
+    def _agent_reply(self, messages: list[BaseMessage]) -> AIMessage:
+        turn = sum(isinstance(m, AIMessage) for m in messages)
+        if turn < len(self.script):
+            return self.script[turn].model_copy(deep=True)
+        return super()._agent_reply(messages)
+
+
+def _use_model(monkeypatch: pytest.MonkeyPatch, script: list[AIMessage]) -> None:
+    original = registry_module.get_chat_model
+
+    def fake_get(model_id: str, purpose: str, settings: Any, *, role: str = "primary") -> Any:
+        if purpose == "agent":
+            return _Misbehaving(model_id=model_id, fault=settings.active_fault(), role=role, script=script)
+        return original(model_id, purpose, settings, role=role)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry_module, "get_chat_model", fake_get)
+
+
+def _call(name: str, args: dict[str, Any], call_id: str) -> dict[str, Any]:
+    return {"name": name, "args": args, "id": call_id, "type": "tool_call"}
+
+
+async def test_protocol_errors_are_counted_and_recovered(monkeypatch: pytest.MonkeyPatch) -> None:
+    turn = AIMessage(content="", tool_calls=[
+        _call("book_table", {"reason": "book it"}, "c1"),
+        _call("search_places", {"intent": "cafe", "category": "spaceport", "reason": "x"}, "c2"),
+        _call("search_places", {"category": "cafe", "reason": "missing intent"}, "c3"),
+        _call("estimate_travel", {"candidate_ids": ["fx:nope", "fx:nada"], "reason": "x"}, "c4"),
+        _call("search_places", {"intent": "quiet vegetarian restaurant", "category": "restaurant", "reason": "a"}, "c5"),
+        _call("search_places", {"intent": "quiet cafe", "category": "cafe", "reason": "b"}, "c6"),
+        _call("search_places", {"intent": "live music venue", "category": "live_music_venue", "reason": "c"}, "c7"),
+        _call("search_places", {"intent": "park for a walk", "category": "park", "reason": "d" * 300}, "c8"),
+    ], invalid_tool_calls=[{"name": "search_places", "args": "{not json", "id": "c9", "error": "bad json",
+                            "type": "invalid_tool_call"}])
+    _use_model(monkeypatch, [turn])
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert_trace_integrity(events)
+    data = finalize_data(events)
+    assert data["protocol_errors"] == 5
+    assert data["protocol_error_kinds"] == {"unknown_tool": 1, "schema_invalid": 2, "unknown_id": 1,
+                                            "malformed_args": 1}
+    codes = [(e.tool, (e.data or {}).get("code")) for e in events if e.type == "tool_failed"]
+    assert ("book_table", "UNKNOWN_TOOL") in codes and ("search_places", "MALFORMED_ARGS") in codes
+    assert ("search_places", "SCHEMA_INVALID") in codes and ("estimate_travel", "UNKNOWN_ID") in codes
+    assert all(len(e.reason or "") <= 140 for e in events)
+    assert result.status == "complete" and result.mode == "agent"
+    assert_plan_sound(result)
+
+
+async def test_tool_caps_are_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
+    intents = ["vegetarian restaurant", "cafe", "park", "live music venue", "bookstore", "art gallery", "dessert"]
+    turn = AIMessage(content="", tool_calls=[
+        _call("search_places", {"intent": i, "reason": f"search {i}"}, f"s{n}") for n, i in enumerate(intents)])
+    _use_model(monkeypatch, [turn])
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert_trace_integrity(events)
+    capped = [e for e in events if e.type == "tool_failed" and (e.data or {}).get("code") == "CAP_REACHED"]
+    assert len(capped) == 1
+    assert agent_tools(events)["search_places"] == 7
+    data = finalize_data(events)
+    assert data["protocol_errors"] == 1 and data["protocol_error_kinds"] == {"cap_reached": 1}
+    assert result.status == "complete"
+
+
+async def test_turn_cap_routes_to_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    search = AIMessage(content="", tool_calls=[_call("search_places", {"intent": "cafe", "reason": "again"}, "t")])
+    _use_model(monkeypatch, [search] * 20)
+    result, events = await collect(request_for("assignment_example"), make_deps(max_agent_turns=3))
+    assert result.status == "fallback"
+    assert finalize_data(events)["agent_turns"] == 3
+    assert any("ran out of turns" in d for d in result.degradations)
+    assert_trace_integrity(events)
+    assert_plan_sound(result)
+
+
+async def test_interrupt_and_resume_with_sqlite_checkpointer(tmp_path: Any, caplog: pytest.LogCaptureFixture) -> None:
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "checkpoints.db")) as saver:
+        await saver.setup()
+        deps = make_deps()
+        deps.checkpointer = saver
+        with caplog.at_level("WARNING"):
+            paused, _ = await collect(request_for("vague_free_text"), deps)
+            answers = {"city": "Bangalore", "budget": "around 1000", "available_time": "afternoon, 3 hours"}
+            result, events = await collect(None, deps, thread_id=paused.thread_id, resume_answers=answers)
+        assert paused.status == "needs_clarification" and result.status == "complete"
+        assert_trace_integrity(events)
+        serde_warnings = [r for r in caplog.records if r.name.startswith("langgraph")]
+        assert not serde_warnings, [r.getMessage() for r in serde_warnings]
+        snapshot = await compiled_graph(saver).aget_state({"configurable": {"thread_id": paused.thread_id}})
+        assert not snapshot.values  # deleted after the terminal result
+
+
+async def test_refusal_during_places_outage_reports_places_unavailable() -> None:
+    from app.domain.schemas import PlanRequest
+
+    deps = make_deps(fault="places_http_503")  # no curated snapshot covers Jaipur
+    request = PlanRequest.model_validate({**request_for("assignment_example").model_dump(), "city": "Jaipur"})
+    result, events = await collect(request, deps, model_id="baseline:deterministic")
+    assert result.status == "no_feasible_plan" and result.message and "temporarily unavailable" in result.message
+    assert_trace_integrity(events)
+
+
+async def test_unexpected_tool_exception_is_contained(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.graph.nodes.execute as execute_module
+
+    async def explode(args: Any, env: Any) -> Any:
+        raise ConnectionError("raw socket error with internal detail")
+
+    monkeypatch.setattr(execute_module, "run_search_events", explode)
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert result.status == "complete"
+    failed = [e for e in events if e.type == "tool_failed" and e.tool == "search_events"]
+    assert failed and (failed[0].data or {}).get("code") == "TOOL_ERROR"
+    assert "internal detail" not in events_json(events)
+    assert_trace_integrity(events)
+
+
+class _HangsAfterCheck(ScriptedAgentModel):
+    """Searches, passes check_plan, then never answers again (a slow model hitting the deadline)."""
+
+    async def _agenerate(self, messages: list[BaseMessage], stop: list[str] | None = None,
+                         run_manager: Any = None, **kwargs: Any) -> Any:
+        if self.mode == "agent" and sum(isinstance(m, AIMessage) for m in messages) >= 2:
+            await asyncio.sleep(3600)
+        return await super()._agenerate(messages, stop, run_manager, **kwargs)
+
+
+async def test_deadline_after_a_clean_check_plan_uses_the_checked_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.graph.nodes.common import AGENT_TIMEOUT, AGENT_USED_CHECKED_DRAFT
+
+    original = registry_module.get_chat_model
+
+    def fake_get(model_id: str, purpose: str, settings: Any, *, role: str = "primary") -> Any:
+        if purpose == "agent":
+            return _HangsAfterCheck(model_id=model_id, role=role)
+        return original(model_id, purpose, settings, role=role)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry_module, "get_chat_model", fake_get)
+    result, events = await collect(request_for("assignment_example"), make_deps(run_deadline_s=16))
+    assert_trace_integrity(events)
+    assert result.status == "complete" and result.mode == "agent"
+    assert result.degradations == [AGENT_USED_CHECKED_DRAFT] and AGENT_TIMEOUT not in result.degradations
+    salvage = [e for e in events if e.type == "validation" and (e.data or {}).get("source") == "agent_checked_draft"]
+    assert salvage and salvage[0].data and salvage[0].data["ok"] is True
+    assert finalize_data(events)["submit_attempts"] == 0
+    assert_plan_sound(result)
+
+
+async def test_agent_timeout_degradation_wording_comes_from_the_fallback() -> None:
+    from app.graph.nodes.common import AGENT_TIMEOUT
+
+    result, events, _ = await run_case("model_timeout", run_deadline_s=16)
+    assert AGENT_TIMEOUT == "The AI planner ran out of time; switched to the rule-based planner"
+    degraded = [e for e in events if e.type == "degraded"]
+    assert [(e.node, e.summary) for e in degraded] == [("fallback_planner", AGENT_TIMEOUT)]
+    assert result.degradations == [AGENT_TIMEOUT]
+
+
+async def test_resume_reports_only_its_own_usage() -> None:
+    deps = make_deps()
+    paused, paused_events = await collect(request_for("vague_free_text"), deps)
+    assert finalize_data(paused_events)["usage"]["llm_calls"] == 1  # the parse
+    answers = {"city": "Bangalore", "budget": "around 1000", "available_time": "afternoon, 3 hours"}
+    _, events = await collect(None, deps, thread_id=paused.thread_id, resume_answers=answers)
+    data = finalize_data(events)
+    assert data["usage"]["llm_calls"] == data["agent_turns"] + 1  # parse again + one call per turn
+
+
+async def test_concurrent_resumes_run_exactly_once() -> None:
+    from app.graph.runner import ALREADY_RESUMING
+
+    deps = make_deps()
+    paused, _ = await collect(request_for("vague_free_text"), deps)
+    answers = {"city": "Bangalore", "budget": "around 1000", "available_time": "afternoon, 3 hours"}
+    outcomes = await asyncio.gather(*(collect(None, deps, thread_id=paused.thread_id, resume_answers=answers)
+                                      for _ in range(3)))
+    statuses = sorted(r.status for r, _ in outcomes)
+    assert statuses == ["complete", "rejected", "rejected"]
+    assert {r.message for r, _ in outcomes if r.status == "rejected"} <= {ALREADY_RESUMING, EXPIRED}
+    for _, events in outcomes:
+        assert_trace_integrity(events)
+    later, _ = await collect(None, deps, thread_id=paused.thread_id, resume_answers=answers)
+    assert later.status == "rejected" and later.message == EXPIRED
+
+
+async def test_omissions_carry_display_names() -> None:
+    for model in ("fake:agent", "baseline:deterministic"):
+        result, _ = await collect(request_for("assignment_example"), make_deps(), model_id=model)
+        assert result.plan is not None and result.plan.omitted
+        ids = [o for o in result.plan.omitted if ":" in o.ref]
+        assert ids and all(o.name for o in ids), result.plan.omitted
+
+
+async def test_out_of_range_text_time_is_capped_with_an_assumption() -> None:
+    from app.domain.schemas import PlanRequest
+
+    request = PlanRequest.model_validate({**request_for("assignment_example").model_dump(), "available_time": "20 hours"})
+    result, events = await collect(request, make_deps())
+    assert result.preferences is not None and result.preferences.available_minutes == 720
+    assert "Capped at 12 hours" in result.assumptions
+    assert_trace_integrity(events)

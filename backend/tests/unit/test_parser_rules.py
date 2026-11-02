@@ -504,7 +504,7 @@ def test_merge_llm_cannot_drop_constraints_and_request_fields_win():
 
 
 def test_merge_llm_fills_free_text_fields_over_rules():
-    request = PlanRequest(free_text="Indiranagar on Saturday, around 1000, after lunch for a couple of hours")
+    request = PlanRequest(free_text="Indiranagar on Saturday, around 1000, a coffee after lunch for a couple of hours")
     rules = parse_rules(request, NOW)
     llm = _llm(city="Bengaluru", budget=1000, neighbourhood="Indiranagar", start_min=840, available_minutes=150,
                mood="relaxed", energy=Energy.LOW, interests=["Coffee"],
@@ -937,3 +937,58 @@ def test_loose_amount_is_read_only_when_it_is_the_only_number(text, budget, note
     assert outcome.preferences.budget == budget
     assert note in outcome.preferences.assumptions
     assert ("budget" in outcome.missing) is (budget is None)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Phase 2 follow-ups: D-P2-02 (relaxed constraints), D-P2-11 (grounded LLM interests)
+# ---------------------------------------------------------------------------------------------------
+
+IMPOSSIBLE_TEXT = ("I'm in Bangalore with ₹2000 and 4 hours this Saturday. I'm tired. I'm vegan and jain, need "
+                   "wheelchair access and want to avoid crowded places.")
+
+
+def test_relaxed_constraint_is_dropped_from_every_source():
+    request = PlanRequest(free_text=IMPOSSIBLE_TEXT, constraints=["wheelchair accessible"],
+                          relaxed_constraints=["access:wheelchair"])
+    outcome = parse_rules(request, NOW)
+    assert keys(outcome.preferences.hard_constraints) == ["diet:vegan", "diet:jain", "crowd:avoid"]
+    assert keys(original_constraints(request)) == ["diet:vegan", "diet:jain", "crowd:avoid"]
+    assert "Dropped: wheelchair accessible (as you chose)" in outcome.preferences.assumptions
+    assert outcome.unmapped_constraints == []
+    llm = _llm(city="Bangalore", hard_constraints=[Constraint(kind="access", value="wheelchair")])
+    assert "access:wheelchair" not in keys(merge_parse(llm, outcome, request).preferences.hard_constraints)
+    assert "access:wheelchair" not in keys(merge_parse(None, outcome, request).preferences.hard_constraints)
+    assert apply_defaults(outcome, BLR).assumptions.count("Dropped: wheelchair accessible (as you chose)") == 1
+
+
+def test_relaxing_one_side_of_a_conflict_removes_the_conflict():
+    request = PlanRequest(city="Bangalore", budget=1000, available_time="3 hours",
+                          constraints=["indoors only", "must include an outdoor walk"],
+                          relaxed_constraints=["must_include:outdoor_walk"])
+    outcome = parse_rules(request, NOW)
+    assert keys(outcome.preferences.hard_constraints) == ["setting:indoors_only"]
+    assert outcome.conflicts == []
+    assert "Dropped: include an outdoor walk (as you chose)" in outcome.preferences.assumptions
+
+
+@pytest.mark.parametrize(
+    ("text", "llm_interests", "expected"),
+    [
+        ("plan something fun for saturday", ["outdoor_walk", "shopping"], []),
+        ("Bangalore, coffee and a stroll", ["coffee", "walks", "shopping"], ["coffee", "walks"]),
+        ("Bangalore, near Cubbon Park", ["nature"], ["nature"]),  # the word "park" is in the text
+        ("Bangalore, no shopping please, pottery class", ["shopping", "pottery"], ["pottery"]),
+        ("Bangalore, love bookshops", ["museums"], ["books"]),  # nothing grounded -> the rules' interests
+    ],
+)
+def test_merge_keeps_only_grounded_llm_interests(text, llm_interests, expected):
+    request = PlanRequest(free_text=text)
+    merged = merge_parse(_llm(interests=llm_interests), parse_rules(request, NOW), request)
+    assert merged.preferences.interests == expected
+
+
+def test_structured_interests_always_win_over_llm_interests():
+    request = PlanRequest(city="Bangalore", interests=["museums"], free_text="coffee and shopping")
+    merged = merge_parse(_llm(interests=["coffee", "shopping"]), parse_rules(request, NOW), request)
+    assert merged.preferences.interests == ["museums"]
+    assert normalize_interest("outdoor_walk") == ["walks"]

@@ -1,5 +1,6 @@
 import type { Status, TraceEvent } from '../types'
 import { humanize } from './format'
+import { classifyDegradation, type DegradationKind } from './labels'
 
 export type StepKind = 'run' | 'node' | 'tool' | 'validation' | 'degraded' | 'clarification' | 'result' | 'error'
 export type StepStatus = 'running' | 'done' | 'failed' | 'warn' | 'info'
@@ -9,9 +10,12 @@ export interface TraceStep {
   kind: StepKind
   /** Raw node or tool name from the backend, e.g. "search_places". */
   name: string | null
+  /** The graph node that emitted the event ("tools" for the model's own tool calls). */
+  node: string | null
   /** Plain-language label. */
   label: string
   status: StepStatus
+  /** The model's one-line reason; only set for the model's own tool calls (node "tools"). */
   reason: string | null
   summary: string | null
   durationMs: number | null
@@ -19,15 +23,29 @@ export interface TraceStep {
   details: string[]
 }
 
+export interface Degradation {
+  text: string
+  kind: DegradationKind
+}
+
 export interface TraceState {
   steps: TraceStep[]
-  degraded: string[]
+  degraded: Degradation[]
   seen: Record<string, true>
   lastEventAt: string | null
   finished: boolean
+  /** Last agent turn number shown, so a turn is never labelled twice. */
+  lastAgentTurn: number | null
 }
 
-export const initialTrace: TraceState = { steps: [], degraded: [], seen: {}, lastEventAt: null, finished: false }
+export const initialTrace: TraceState = {
+  steps: [],
+  degraded: [],
+  seen: {},
+  lastEventAt: null,
+  finished: false,
+  lastAgentTurn: null,
+}
 
 const NODE_LABELS: Record<string, string> = {
   guard_input: 'Checked the request is complete and in range',
@@ -35,8 +53,9 @@ const NODE_LABELS: Record<string, string> = {
   check_clarity: 'Checked whether anything was unclear',
   ask_clarification: 'Asked you a quick question',
   resolve_location: 'Found the city',
+  build_context: 'Set up the day: weather, time window and pacing',
   get_weather: "Checked Saturday's weather",
-  compute_window: 'Worked out your time window',
+  gather_candidates: 'Gathered places and events',
   plan_agent: 'Agent chose the next step',
   validate_plan: 'Checked budget, time, opening hours, diet and more',
   fallback_planner: 'Built a backup plan without the AI model',
@@ -50,8 +69,9 @@ const NODE_RUNNING_LABELS: Record<string, string> = {
   check_clarity: 'Checking whether anything is unclear',
   ask_clarification: 'Preparing a quick question',
   resolve_location: 'Finding the city',
+  build_context: 'Setting up the day: weather, time window and pacing',
   get_weather: "Checking Saturday's weather",
-  compute_window: 'Working out your time window',
+  gather_candidates: 'Gathering places and events',
   plan_agent: 'Agent is choosing the next step',
   validate_plan: 'Checking budget, time, opening hours, diet and more',
   fallback_planner: 'Building a backup plan without the AI model',
@@ -60,6 +80,8 @@ const NODE_RUNNING_LABELS: Record<string, string> = {
 }
 
 const TOOL_LABELS: Record<string, string> = {
+  get_weather: "Checked Saturday's weather",
+  resolve_location: 'Looked up the city',
   search_places: 'Searched for places',
   search_events: 'Looked for events on the day',
   estimate_travel: 'Estimated travel between stops',
@@ -68,6 +90,8 @@ const TOOL_LABELS: Record<string, string> = {
 }
 
 const TOOL_RUNNING_LABELS: Record<string, string> = {
+  get_weather: "Checking Saturday's weather",
+  resolve_location: 'Looking up the city',
   search_places: 'Searching for places',
   search_events: 'Looking for events on the day',
   estimate_travel: 'Estimating travel between stops',
@@ -76,6 +100,8 @@ const TOOL_RUNNING_LABELS: Record<string, string> = {
 }
 
 const TOOL_FAILED_LABELS: Record<string, string> = {
+  get_weather: 'Weather check failed',
+  resolve_location: 'City lookup failed',
   search_places: 'Place search failed',
   search_events: 'Event search failed',
   estimate_travel: 'Travel estimate failed',
@@ -133,12 +159,19 @@ function violationMessages(data: Record<string, unknown> | null | undefined): { 
   return { messages, errors }
 }
 
+/** The model's reason, only for the model's own tool calls; code-run steps never get an "Agent's note". */
+function agentReason(ev: TraceEvent): string | null {
+  return ev.node === 'tools' ? str(ev.reason) : null
+}
+
 function newStep(ev: TraceEvent, partial: Partial<TraceStep> & Pick<TraceStep, 'kind' | 'label' | 'status'>): TraceStep {
   return {
     key: `${ev.run_id}:${ev.seq}:${ev.type}`,
     name: null,
-    reason: str(ev.reason),
-    summary: str(ev.summary),
+    node: ev.node ?? null,
+    reason: agentReason(ev),
+    // A code-side reason (older backends) is still useful context, shown as a plain summary.
+    summary: str(ev.summary) ?? (ev.node !== 'tools' ? str(ev.reason) : null),
     durationMs: typeof ev.duration_ms === 'number' ? ev.duration_ms : null,
     startedTs: ev.ts || null,
     details: [],
@@ -175,11 +208,36 @@ function completeStep(
     ...prev,
     label: status === 'failed' ? failedLabel : label,
     status,
-    reason: prev.reason ?? str(ev.reason),
+    reason: prev.reason ?? agentReason(ev),
     summary: str(ev.summary) ?? prev.summary,
     durationMs: typeof ev.duration_ms === 'number' ? ev.duration_ms : durationBetween(prev.startedTs, ev.ts),
   }
   return steps
+}
+
+const TURN_PREFIX = /^turn\s+\d+\s*:\s*/i
+
+/**
+ * Finish a plan_agent step. The backend summary starts with "turn N: ..."; the number moves into the label, and a
+ * turn already shown (e.g. "turn 4: check_plan" then "turn 4: stopped (...)") is never numbered twice.
+ */
+function completeAgentTurn(state: TraceState, ev: TraceEvent): TraceState {
+  const steps = completeStep(state, ev, 'node', 'plan_agent', 'done')
+  const turn = typeof ev.data?.turn === 'number' ? ev.data.turn : null
+  const raw = str(ev.summary)
+  let summary = raw ? raw.replace(TURN_PREFIX, '') : null
+  const stopped = summary ? /^stopped\s*\((.*)\)\s*$/i.exec(summary) : null
+  if (stopped) summary = stopped[1] || null
+  const fresh = turn !== null && turn !== state.lastAgentTurn
+  const label = stopped ? 'Agent stopped' : fresh ? `Agent turn ${turn}` : nodeLabel('plan_agent')
+  // completeStep updated (or appended) the matching step; it is the last plan_agent node step.
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    if (steps[i].kind === 'node' && steps[i].name === 'plan_agent') {
+      steps[i] = { ...steps[i], label, summary, status: stopped ? 'warn' : steps[i].status }
+      break
+    }
+  }
+  return { ...state, steps, lastAgentTurn: turn ?? state.lastAgentTurn }
 }
 
 /** Pure reducer from streamed TraceEvents to the steps shown in "How I planned this". */
@@ -216,6 +274,7 @@ export function reduceTrace(state: TraceState, ev: TraceEvent): TraceState {
     case 'node_completed': {
       const node = ev.node ?? 'step'
       if (HIDDEN_NODES.has(node)) return base
+      if (node === 'plan_agent') return completeAgentTurn(base, ev)
       return { ...base, steps: completeStep(state, ev, 'node', node, 'done') }
     }
     case 'tool_called': {
@@ -248,9 +307,10 @@ export function reduceTrace(state: TraceState, ev: TraceEvent): TraceState {
     }
     case 'degraded': {
       const text = str(ev.summary) ?? str(ev.data?.reason) ?? str(ev.data?.message) ?? 'Something was unavailable'
+      const kind = classifyDegradation(text, ev.node)
       return {
         ...base,
-        degraded: state.degraded.includes(text) ? state.degraded : [...state.degraded, text],
+        degraded: state.degraded.some((d) => d.text === text) ? state.degraded : [...state.degraded, { text, kind }],
         steps: [...state.steps, newStep(ev, { kind: 'degraded', label: text, status: 'warn', summary: null })],
       }
     }

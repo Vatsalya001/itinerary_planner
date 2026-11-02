@@ -1,14 +1,14 @@
 import type { Ref } from 'react'
 import type { PlanResult } from '../types'
+import { classifyDegradation, omissionLabel } from '../lib/labels'
 import { legAfter, providersIn } from '../lib/plan'
 import { ChecksPanel } from './ChecksPanel'
+import { DegradationNotices } from './DegradationNotices'
 import { Feedback } from './Feedback'
 import { PlanActions } from './PlanActions'
 import { LegRow, StopCard } from './StopCard'
 import { SummaryBar } from './SummaryBar'
 import { Notice, linkClass } from './ui'
-
-const ID_LIKE = /^(gp|snap|fx|ev|evfx):/
 
 function uniq(items: string[]): string[] {
   return [...new Set(items.map((s) => s.trim()).filter(Boolean))]
@@ -35,6 +35,7 @@ export function PlanView({
   }
 
   const isFallback = result.status === 'fallback'
+  const plannerReasons = result.degradations.filter((d) => classifyDegradation(d) === 'planner')
   const providers = providersIn(plan)
   const warnings = uniq([
     ...result.warnings,
@@ -65,23 +66,16 @@ export function PlanView({
       {isFallback ? (
         <Notice tone="warn" title="This is a backup plan" role="status">
           <p>The AI planner couldn't finish, so a simpler rule-based planner built this plan. It passed the same checks.</p>
-          {result.degradations.length ? (
+          {plannerReasons.length ? (
             <ul className="list-disc pl-5">
-              {result.degradations.map((d, i) => (
+              {plannerReasons.map((d, i) => (
                 <li key={i}>{d}</li>
               ))}
             </ul>
           ) : null}
         </Notice>
-      ) : result.degradations.length ? (
-        <Notice tone="info" title="Some data was unavailable">
-          <ul className="list-disc pl-5">
-            {result.degradations.map((d, i) => (
-              <li key={i}>{d}</li>
-            ))}
-          </ul>
-        </Notice>
       ) : null}
+      <DegradationNotices items={result.degradations} exclude={isFallback ? ['planner'] : []} />
 
       <SummaryBar plan={plan} />
 
@@ -112,8 +106,8 @@ export function PlanView({
           <ul className="mt-2 space-y-2">
             {plan.omitted.map((o, i) => (
               <li key={i} className="text-sm text-stone-800">
-                {ID_LIKE.test(o.ref) ? null : <span className="font-medium">{`${o.ref}: `}</span>}
-                {o.reason}
+                <span className="font-semibold text-stone-900">{omissionLabel(o)}</span>
+                {` — ${o.reason}`}
               </li>
             ))}
           </ul>

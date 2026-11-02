@@ -13,8 +13,10 @@ Searches (all with the deterministic planner, app.domain.fallback):
   the default 15:00 start. The "even with an unlimited budget and a longer window" sentence is only used when
   those searches actually ran and failed.
 
-Relaxation patches use PlanRequest field names: ``budget``, ``available_time`` (minutes), ``constraints``
-(remaining constraint texts) and ``start_time``.
+Relaxation patches use PlanRequest field names: ``budget`` (and ``currency``), ``available_time`` (minutes),
+``start_time``, ``mood`` and ``relaxed_constraints`` (the one constraint key being dropped, e.g.
+``["access:wheelchair"]``; the client unions it with keys already relaxed, and the parser excludes relaxed keys
+from every source, free text included).
 """
 
 from __future__ import annotations
@@ -76,17 +78,6 @@ def constraint_label(c: Constraint) -> str:
     if c.kind == "must_avoid":
         return _AVOID_LABELS.get(c.value, f"avoid {c.value.replace('_', ' ')}")
     return _LABELS.get(c.key, c.value.replace("_", " "))
-
-
-def _remaining_texts(remaining: list[Constraint], dropped: Constraint) -> list[str]:
-    texts: list[str] = []
-    for c in remaining:
-        text = c.source_text.strip()
-        if not text or (dropped.source_text and text == dropped.source_text.strip()):
-            text = constraint_label(c)
-        if text not in texts:
-            texts.append(text)
-    return texts
 
 
 def _worst(result: SearchResult | None) -> int | None:
@@ -214,7 +205,7 @@ def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs
             label = con.source_text.strip() or constraint_label(con)
             drop_labels.append(label)
             relaxations.append(Relaxation(label=f"Drop '{label}'",
-                                          patch={"constraints": _remaining_texts(remaining, con)}))
+                                          patch={"relaxed_constraints": [con.key]}))
 
     # pacing rules (energy profile): test each on its own so the reason names the one that binds
     pacing = ctx.pacing

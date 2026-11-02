@@ -6,15 +6,14 @@ import { linkClass } from '../components/ui'
 const NODES: Array<[string, string, string]> = [
   ['guard_input', 'code', 'Input bounds (body size, budget, 30–720 minutes, list sizes, text length), Unicode normalisation, and rejecting anything that is not leisure planning.'],
   ['parse_preferences', 'LLM, structured output', 'Free text and form fields become normalised preferences: city, budget, currency, start, duration, mood, energy, interests, hard constraints and soft preferences. A rule-based parser is the fallback.'],
+  ['resolve_location', 'code', 'City to coordinates, timezone, country and currency, with aliases such as Bengaluru and Bangalore.'],
   ['check_clarity', 'code', 'Looks only for blocking gaps: no city, ambiguous currency, contradictory or unmappable hard constraints, city not found. At most one round of questions; after that, visible defaults.'],
   ['ask_clarification', 'code + interrupt', 'Pauses the run with up to two questions and quick replies, then resumes with your answers.'],
-  ['resolve_location', 'code', 'City to coordinates, timezone, country and currency, with aliases such as Bengaluru and Bangalore.'],
-  ['get_weather', 'code', 'Forecast for the target date: rain probability, temperature, weather code and sunset.'],
-  ['compute_window', 'code', 'The coming Saturday in the city’s timezone, start and end, meal windows and the daylight window.'],
+  ['build_context', 'code', 'The coming Saturday in the city’s timezone, start and end, meal and daylight windows, pacing for your energy, and the forecast for the day: rain probability, temperature and sunset.'],
   ['plan_agent', 'LLM with tools', 'Searches, composes, checks and submits a plan.'],
   ['tools', 'code', 'Runs the tools, records every returned place or event in a per-run ledger, emits trace events and enforces per-tool caps.'],
   ['validate_plan', 'code', 'Rebuilds the plan from the ledger, computes the schedule and costs, and runs every check below.'],
-  ['fallback_planner', 'code', 'A search over the same candidates with the same constraints and pacing, used when the model fails or repairs run out.'],
+  ['fallback_planner', 'code', 'A search over the same candidates (gathering places and events itself if needed) with the same constraints and pacing, used when the model fails or repairs run out.'],
   ['explain_infeasible', 'code', 'Which constraint removed what, the cheapest workable budget and time found, and one-tap relaxations.'],
   ['finalize', 'code', 'Builds the result, saves the plan for share links, writes the run record and deletes the paused-run checkpoint.'],
 ]

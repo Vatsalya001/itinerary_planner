@@ -14,6 +14,7 @@ from tests.api.plan_factories import (
     GOOGLE_ID,
     MOOD,
     FakeRunner,
+    keepalives,
     make_result,
     parse_sse,
 )
@@ -75,13 +76,14 @@ async def test_heartbeat_during_silence(make_client: Any, monkeypatch: pytest.Mo
     monkeypatch.setattr(runner_module, "stream_plan", fake.stream_plan)
     async with make_client() as (client, _app, _deps):
         resp = await client.post("/api/plan", json=BRIEF, headers=SSE)
+        assert keepalives(resp.text) >= 1  # SSE comment frames, not TraceEvents
+        assert resp.text.index(": keep-alive") > resp.text.index('"node":"finalize"')
         events = parse_sse(resp.text)
         types = [e["type"] for e in events]
-        assert "heartbeat" in types
+        assert "heartbeat" not in types
         assert types[-1] == "result"
-        hb = next(e for e in events if e["type"] == "heartbeat")
-        assert hb["run_id"] == events[0]["run_id"]
-        assert types.index("heartbeat") > types.index("node_completed")
+        seqs = [e["seq"] for e in events]
+        assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)  # every TraceEvent seq is unique
 
 
 async def test_json_mode_returns_plan_result(make_client: Any, fake_runner: FakeRunner) -> None:
@@ -190,7 +192,8 @@ async def test_per_ip_rate_limit_returns_429_with_retry_after(make_client: Any, 
         resp = await client.post("/api/plan", json=BRIEF, headers=SSE)
         assert resp.status_code == 429
         retry_after = int(resp.headers["retry-after"])
-        assert retry_after == 300  # clock is 12:05 UTC; the 10-minute window resets at 12:10
+        # Sliding window: 2 hits at 12:05 decay through the 12:10 window; a third fits again at 12:15.
+        assert retry_after == 600
         body = resp.json()
         assert body["status"] == "rejected"
         assert body["detail"] == f"Too many plans; try again in {retry_after} seconds"
@@ -203,7 +206,8 @@ async def test_per_day_ip_limit(make_client: Any, fake_runner: FakeRunner,
         assert (await client.post("/api/plan", json=BRIEF)).status_code == 200
         resp = await client.post("/api/plan", json=BRIEF)
         assert resp.status_code == 429
-        assert int(resp.headers["retry-after"]) == 11 * 3600 + 55 * 60  # until 00:00 UTC
+        # Two-window day estimate: the rest of today plus the decay of today's hit through tomorrow.
+        assert int(resp.headers["retry-after"]) == 11 * 3600 + 55 * 60 + 86400
 
 
 async def test_global_daily_cap(make_client: Any, fake_runner: FakeRunner,
@@ -283,12 +287,81 @@ async def test_resume_streams_and_passes_thread_and_answers(make_client: Any, fa
         assert fake_runner.calls[1]["resume_answers"] == {"city": "Mumbai"}
 
 
-async def test_resume_is_rate_limited(make_client: Any, fake_runner: FakeRunner,
-        clocked_store: Any) -> None:
-    async with make_client(store=clocked_store, rate_limit_per_10min=1) as (client, _app, _deps):
+async def test_resumes_do_not_count_toward_plan_limits_or_daily_cap(make_client: Any, fake_runner: FakeRunner,
+                                                                     clocked_store: Any) -> None:
+    async with make_client(store=clocked_store, rate_limit_per_10min=1, daily_plan_cap=1) as (client, _app, _deps):
         assert (await client.post("/api/plan", json=BRIEF)).status_code == 200
-        resp = await client.post("/api/plan/t_abcdef12/resume", json={"answers": {"city": "Pune"}})
-        assert resp.status_code == 429 and "retry-after" in resp.headers
+        for city in ("Pune", "Mumbai", "Delhi"):
+            resp = await client.post("/api/plan/t_abcdef12/resume", json={"answers": {"city": city}})
+            assert resp.status_code == 200, resp.text
+        assert await clocked_store.incr_daily("plans") == 2  # only the one new plan was counted
+        resp = await client.post("/api/plan", json=BRIEF)
+        assert resp.status_code == 429 and resp.json()["detail"].startswith("Too many plans")
+
+
+async def test_resumes_have_their_own_limit(make_client: Any, fake_runner: FakeRunner, clocked_store: Any,
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(routes, "RESUMES_PER_10MIN", 2)
+    async with make_client(store=clocked_store) as (client, _app, _deps):
+        for _ in range(2):
+            assert (await client.post("/api/plan/t_abcdef12/resume", json={"answers": {"city": "Pune"}})
+                    ).status_code == 200
+        resp = await client.post("/api/plan/t_abcdef12/resume", json={"answers": {"city": "Pune"}}, headers=SSE)
+        assert resp.status_code == 429 and int(resp.headers["retry-after"]) > 0
+        assert resp.json() == {"status": "rejected", "detail": "Too many answers; try again in 600 seconds"}
+        assert len(fake_runner.calls) == 2
+        assert (await client.post("/api/plan", json=BRIEF)).status_code == 200  # plans are a separate bucket
+
+
+def _expired_result(run_id: str = "r_test000001", **_: Any) -> Any:
+    from app.domain.schemas import PlanResult
+    from app.graph import runner as runner_module
+
+    return PlanResult(run_id=run_id, status="rejected", message=runner_module.EXPIRED)
+
+
+async def test_resume_of_unknown_thread_is_404_in_json_and_rejected_in_sse(make_client: Any,
+                                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeRunner(result_factory=_expired_result)
+    from app.graph import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "stream_plan", fake.stream_plan)
+    monkeypatch.setattr(runner_module, "run_plan", fake.run_plan)
+    async with make_client() as (client, _app, _deps):
+        resp = await client.post("/api/plan/t_unknown01/resume", json={"answers": {"city": "Pune"}},
+                                 headers=JSON_ACCEPT)
+        assert resp.status_code == 404
+        body = resp.json()
+        assert body["status"] == "rejected" and body["detail"] == "This plan can no longer be resumed"
+        assert body["run_id"].startswith("r_")
+
+        resp = await client.post("/api/plan/t_unknown01/resume", json={"answers": {"city": "Pune"}}, headers=SSE)
+        assert resp.status_code == 200
+        result = parse_sse(resp.text)[-1]["data"]
+        assert result["status"] == "rejected" and result["message"] == runner_module.EXPIRED
+
+        # A rejected *new* plan is not a resume: still 200 with the result body.
+        resp = await client.post("/api/plan", json=BRIEF, headers=JSON_ACCEPT)
+        assert resp.status_code == 200 and resp.json()["status"] == "rejected"
+
+
+async def test_paused_threads_are_recorded_and_forgotten(make_client: Any, monkeypatch: pytest.MonkeyPatch,
+                                                         clocked_store: Any) -> None:
+    paused = FakeRunner(result_factory=lambda **kw: make_result(status="needs_clarification",
+                                                                thread_id="t_paused001", **kw))
+    from app.graph import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "stream_plan", paused.stream_plan)
+    monkeypatch.setattr(runner_module, "run_plan", paused.run_plan)
+    async with make_client(store=clocked_store) as (client, _app, _deps):
+        await client.post("/api/plan", json={"free_text": "plan my saturday"}, headers=SSE)
+        assert await clocked_store.stale_paused_threads(-1) == ["t_paused001"]
+
+        done = FakeRunner()
+        monkeypatch.setattr(runner_module, "run_plan", done.run_plan)
+        resp = await client.post("/api/plan/t_paused001/resume", json={"answers": {"city": "Bangalore"}})
+        assert resp.json()["status"] == "complete"
+        assert await clocked_store.stale_paused_threads(-1) == []
 
 
 async def test_xss_strings_are_json_escaped(make_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:

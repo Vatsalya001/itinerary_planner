@@ -45,7 +45,8 @@
     "reason": "Every plan that keeps you vegetarian and away from crowds costs more than ₹300.",
     "binding_constraints": [
       "budget",
-      "diet:vegetarian"
+      "diet:vegetarian",
+      "access:wheelchair"
     ],
     "relaxations": [
       {
@@ -58,6 +59,14 @@
         "label": "Allow 2 more hours",
         "patch": {
           "available_time": 360
+        }
+      },
+      {
+        "label": "Drop 'need wheelchair access'",
+        "patch": {
+          "relaxed_constraints": [
+            "access:wheelchair"
+          ]
         }
       }
     ],

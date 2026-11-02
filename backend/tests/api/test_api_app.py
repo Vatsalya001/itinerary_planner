@@ -153,7 +153,10 @@ async def test_lifespan_creates_store_and_checkpointer_and_restores_injected_dep
         assert isinstance(deps.store, SQLiteStore) and deps.store.path == f"{tmp_path}/db/app.db"
         assert deps.checkpointer is not None and not isinstance(deps.checkpointer, InMemorySaver)
         assert app.state.deps is deps
-        assert (tmp_path / "db" / "checkpoints.db").exists()
+        assert (tmp_path / "db" / "app.checkpoints.db").exists()
+        sweeper = app.state.retention_task
+        assert sweeper is not None and not sweeper.done()
+    assert sweeper.cancelled() or sweeper.done()
     assert deps.store is None and deps.checkpointer is None
     assert app.state.deps is None
 
@@ -170,3 +173,35 @@ def test_openapi_hidden_in_prod() -> None:
     dev = create_app(fixture_settings(frontend_dist="/nonexistent"), make_deps(fixture_settings()))
     assert dev.openapi_url == "/api/openapi.json"
     assert dev.docs_url is None
+
+
+async def test_startup_sweep_deletes_abandoned_checkpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    from datetime import UTC, datetime, timedelta
+
+    from langgraph.checkpoint.base import empty_checkpoint
+
+    from tests.api.plan_factories import MutableClock
+
+    monkeypatch.setattr(main_module, "setup_observability", lambda settings: {})
+    clock = MutableClock(datetime(2026, 11, 5, 12, 0, tzinfo=UTC))
+    store = SQLiteStore(":memory:", clock=clock)
+    await store.init()
+    saver = InMemorySaver()
+    cfg = {"configurable": {"thread_id": "t_abandoned1", "checkpoint_ns": ""}}
+    await saver.aput(cfg, empty_checkpoint(), {}, {})  # type: ignore[arg-type]
+    await store.record_paused_thread("t_abandoned1")
+    clock.now += timedelta(hours=25)
+
+    settings = fixture_settings(frontend_dist=str(tmp_path / "x"))
+    deps = make_deps(settings, store=store)
+    deps.checkpointer = saver
+    app = create_app(settings, deps)
+    async with app.router.lifespan_context(app):
+        for _ in range(100):
+            if await saver.aget_tuple(cfg) is None:
+                break
+            await asyncio.sleep(0.01)
+        assert await saver.aget_tuple(cfg) is None
+        assert await store.stale_paused_threads(-1) == []
+    await store.close()

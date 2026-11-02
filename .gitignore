@@ -10,6 +10,7 @@ __pycache__/
 backend/.env
 backend/data/app.db*
 backend/data/checkpoints.db*
+backend/data/*.checkpoints.db*
 # Node
 frontend/node_modules/
 frontend/dist/

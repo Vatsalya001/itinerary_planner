@@ -1,0 +1,85 @@
+# Model registry (IMPLEMENTATION_PLAN.md section 8). Switching models is configuration, not code.
+#
+# kind:     api | local | fake | baseline
+# params:   provider constructor settings (see app/llm/registry.py for the per-provider rules)
+# pricing_per_mtok: USD per million tokens; local, fake and baseline rows cost 0
+# timeouts: agent_turn_s caps one agent model call; parse_s caps the structured-output parse call
+# params.structured_output: json_schema (default; always used for Anthropic) | function_calling
+# pending:  true until a real model ID is pinned; requesting it raises PendingModelError
+production:
+  primary: anthropic:claude-opus-5-5
+  fallback: null  # set to a second provider after evals, e.g. a pinned Gemini model
+
+timeouts:
+  api: {agent_turn_s: 45, parse_s: 15}
+  local: {agent_turn_s: 150, parse_s: 25}  # parse falls back to rules quickly; turns keep the time
+  fake: {agent_turn_s: 45, parse_s: 15}
+  baseline: {agent_turn_s: 0, parse_s: 0}
+
+candidates:
+  - id: anthropic:claude-opus-5-5
+    kind: api
+    note: Production default candidate. Thinking is always on; depth is set with output_config.effort.
+    params:
+      max_tokens: 16000  # leaves room for thinking
+      effort: {parse: low, agent: medium, judge: medium}
+      max_retries: 1  # the run deadline, not SDK retries, bounds latency
+      request_timeout_s: 60
+      cache_system_prompt: true  # cache_control on the static system prompt block
+      betas: [server-side-fallback-2026-07-01]
+      server_side_fallback: default  # request field `fallbacks: "default"` (refusal fallback)
+    pricing_per_mtok: {input: 4.00, output: 20.00, cache_read: 0.20, cache_write: 5.00}
+
+  - id: google_genai:<pending>
+    kind: api
+    pending: true
+    note: Key pending. List models with the key, pin the ID here, then run the smoke test before any eval.
+    params: {temperature: 0, max_tokens: 8192}
+    pricing_per_mtok: {input: 0, output: 0}
+
+  - id: xai:<pending>
+    kind: api
+    pending: true
+    note: Key pending. List models with the key, pin the ID here, then run the smoke test before any eval.
+    params: {temperature: 0, max_tokens: 8192}
+    pricing_per_mtok: {input: 0, output: 0}
+
+  - id: ollama:qwen3.5:9b
+    kind: local
+    note: Local, eval/dev only.
+    # Ollama answers 501 "structured output is unavailable" for format=<schema> on this model; tool-call
+    # based structured output works.
+    params: {num_ctx: 32768, temperature: 0, keep_alive: 10m, reasoning: false, structured_output: function_calling}
+    pricing_per_mtok: {input: 0, output: 0}
+
+  - id: ollama:gemma4:e4b
+    kind: local
+    note: Local, eval/dev only.
+    params: {num_ctx: 32768, temperature: 0, keep_alive: 10m, reasoning: false, structured_output: function_calling}
+    pricing_per_mtok: {input: 0, output: 0}
+
+  - id: ollama:granite4:tiny-h
+    kind: local
+    note: Local, eval/dev only. No thinking mode, so `reasoning` is left unset.
+    params: {num_ctx: 32768, temperature: 0, keep_alive: 10m, reasoning: null}
+    pricing_per_mtok: {input: 0, output: 0}
+
+  - id: fake:agent
+    kind: fake
+    note: Scripted offline model (app/llm/fake.py). Behaviour faults come from settings.fault.
+    pricing_per_mtok: {input: 0, output: 0}
+
+  - id: fake:secondary
+    kind: fake
+    note: Scripted offline model used as the second provider in fallback-chain tests.
+    pricing_per_mtok: {input: 0, output: 0}
+
+  - id: fake:primary_503
+    kind: fake
+    note: Scripted model that always fails like an HTTP 503 (exercises with_fallbacks).
+    pricing_per_mtok: {input: 0, output: 0}
+
+  - id: baseline:deterministic
+    kind: baseline
+    note: No LLM. Rules parser plus the deterministic planner.
+    pricing_per_mtok: {input: 0, output: 0}

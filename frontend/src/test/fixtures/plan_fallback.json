@@ -245,11 +245,8 @@
     "omitted": [
       {
         "ref": "gp:ChIJtest_brewpub",
-        "reason": "Left out a brewpub with music because it serves alcohol and is likely busy on Saturday evenings."
-      },
-      {
-        "ref": "street food market",
-        "reason": "Skipped a street-food market because it is likely crowded at that hour."
+        "reason": "Serves alcohol and is likely busy on Saturday evenings.",
+        "name": "Hoppy Yard Brewpub"
       }
     ],
     "weather": {
