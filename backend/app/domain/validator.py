@@ -14,7 +14,8 @@ Codes added beyond the original list:
   put at the city centre and tagged ``approx_location``); the user must check the venue, legs are estimates.
 * ``HOURS_UNVERIFIED`` is an error (not a warning) for concert halls, theatres and cinemas with unknown hours
   that are not events with times: they are only a plan when something is on.
-* ``PROSE_NUMERIC_CLAIM`` ignores place names from the ledger ("Midnight Scoops" is a name, not a time).
+* ``PROSE_NUMERIC_CLAIM`` also covers distances ("2.2 km", "500 m", "a 2km walk", "half a kilometre"); leg
+  distances are shown from data. It ignores place names from the ledger ("Midnight Scoops" is a name, not a time).
 * ``IDLE_WAIT`` (warning): a stop starts more than ``IDLE_WAIT_MIN`` minutes after the arrival time (waiting
   for an event); shown under the "time" check.
 * ``PACING_RELAXED`` (warning): under ``setting:outdoors_only`` with no seated outdoor candidate in the ledger,
@@ -96,7 +97,7 @@ CODES: dict[str, str] = {
     "EVENT_DATE_MISMATCH": "Event not on the target date",
     "SOURCE_MISSING": "Stop without a provider origin",
     "TRANSFER_UNKNOWN": "Leg could not be estimated (missing coordinates)",
-    "PROSE_NUMERIC_CLAIM": "Currency amounts, durations or clock times in model prose",
+    "PROSE_NUMERIC_CLAIM": "Currency amounts, durations, distances or clock times in model prose",
     "CONSTRAINT_DROPPED": "An original hard constraint was missing from parsed preferences (warning; still enforced)",
     "PLAN_B_INVALID": "Plan B candidate unknown, outdoor, or itself violating constraints",
     "ALCOHOL_SERVED": "Stop serves alcohol under alcohol:avoid but is not an alcohol venue (warning)",
@@ -142,6 +143,10 @@ _PROSE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         rf"|\b{_WORDNUM}[\s-]+{_UNITS}\b"
         r"|\b(?:half|quarter)[\s-]+hours?\b|\b(?:hours?|minutes?)[\s-]+long\b",
         re.IGNORECASE)),
+    ("distance", re.compile(
+        rf"\b{_NUM}\s*(?:km|kms|kilometres?|kilometers?|m|metres?|meters?|mi|miles?)\b"
+        rf"|\b{_WORDNUM}[\s-]+(?:km|kms|kilometres?|kilometers?|metres?|meters?|miles?)\b",
+        re.IGNORECASE)),
     ("clock time", re.compile(
         r"\b\d{1,2}(?:[:.][0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)(?![a-z])"
         r"|\b(?:[01]?\d|2[0-3]):[0-5]\d\b"
@@ -170,7 +175,7 @@ def name_pattern(names: Iterable[str]) -> re.Pattern[str] | None:
 
 
 def numeric_claims(text: str | None, names: re.Pattern[str] | None = None) -> list[str]:
-    """Kinds of numeric claims found in ``text`` ("currency amount", "duration", "clock time"). Place names
+    """Kinds of numeric claims found in ``text`` ("currency amount", "duration", "distance", "clock time"). Place names
     matched by ``names`` (see ``name_pattern``) are blanked first, so "Midnight Scoops" is not a clock time."""
     if not text:
         return []

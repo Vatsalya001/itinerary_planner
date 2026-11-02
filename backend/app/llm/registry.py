@@ -47,6 +47,7 @@ BASELINE_ID = "baseline:deterministic"
 METADATA_KEY = "registry_model_id"
 _SAMPLING_PARAMS = ("temperature", "top_p", "top_k")
 DEFAULT_NUM_CTX = 32768
+DEFAULT_NUM_PREDICT = 2048  # Ollama output cap per call (a runaway generation otherwise eats the whole turn)
 
 
 class RegistryError(ValueError):
@@ -135,8 +136,8 @@ def find_spec(model_id: str) -> ModelSpec | None:
     if provider == "ollama":  # any local model works for dev with the safe local defaults
         t = registry.timeouts.get("local", {})
         return ModelSpec(id=model_id, provider="ollama", model=model, kind="local",
-                         params={"num_ctx": DEFAULT_NUM_CTX, "temperature": 0, "keep_alive": "10m",
-                                 "reasoning": False},
+                         params={"num_ctx": DEFAULT_NUM_CTX, "num_predict": DEFAULT_NUM_PREDICT, "temperature": 0,
+                                 "keep_alive": "10m", "reasoning": False},
                          note="ad-hoc local model (not in models.yaml)", agent_turn_s=t.get("agent_turn_s", 150.0),
                          parse_s=t.get("parse_s", 60.0))
     return None
@@ -214,8 +215,7 @@ def provider_kwargs(spec: ModelSpec, purpose: Purpose, settings: Settings) -> di
         reasoning = p.get("reasoning", False)
         if reasoning is not None:
             kwargs["reasoning"] = reasoning
-        if p.get("num_predict"):
-            kwargs["num_predict"] = int(p["num_predict"])
+        kwargs["num_predict"] = int(p.get("num_predict") or DEFAULT_NUM_PREDICT)
         return kwargs
     if spec.provider == "google_genai":
         kwargs = {"temperature": float(p.get("temperature", 0))}

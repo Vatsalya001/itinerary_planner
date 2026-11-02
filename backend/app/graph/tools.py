@@ -8,6 +8,7 @@ Candidate records in ``ToolMessage.artifact["candidates"]``.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from itertools import pairwise
@@ -24,6 +25,7 @@ from app.domain.schemas import (
     Constraint,
     CostRange,
     PlaceQuery,
+    PlanDraft,
     Preferences,
     Violation,
     WorldContext,
@@ -563,6 +565,78 @@ def run_estimate_travel(args: EstimateTravelArgs, env: ToolEnv) -> ToolOutcome:
                        data={"legs": len(legs)})
 
 
+SUBMIT_NOW = "Now call submit_plan with exactly these stops."
+
+# validator code -> the fix, phrased as an instruction (one line in tool results for small models)
+_FIXES: dict[str, str] = {
+    "UNKNOWN_ID": "use only IDs returned by search_places or search_events",
+    "DUPLICATE_STOP": "remove the repeated stop",
+    "DURATION_OUT_OF_RANGE": "set duration_min inside that stop's visit_minutes range",
+    "BUDGET_EXCEEDED": "swap in cheaper or free stops, or drop one",
+    "TIME_EXCEEDED": "shorten stops or drop one",
+    "HOURS_CONFLICT": "pick a place open then, or reorder the stops",
+    "DIET_UNVERIFIED": "use food stops with confirmed diet evidence",
+    "DIET_CONFLICT": "use food stops with confirmed diet evidence",
+    "ACCESSIBILITY_UNVERIFIED": "use stops with confirmed wheelchair access",
+    "ALCOHOL_CONFLICT": "replace the alcohol venue",
+    "SETTING_CONFLICT": "replace the stop that breaks the indoor/outdoor rule",
+    "MUST_INCLUDE_MISSING": "add a stop that provides the required item",
+    "MUST_AVOID_VIOLATED": "replace the stop the person wants to avoid",
+    "CROWD_LIKELY": "avoid stops that are likely busy at that time",
+    "PACING_EXCEEDED": "use fewer stops, less walking or shorter legs",
+    "DAYLIGHT_CONFLICT": "move the outdoor walk before sunset",
+    "EVENT_DATE_MISMATCH": "use only events on the plan's date",
+    "SOURCE_MISSING": "use a different candidate",
+    "CITY_MISMATCH": "use places in the plan's city",
+    "TRANSFER_UNKNOWN": "use a different candidate",
+    "PLAN_B_INVALID": "use an indoor returned candidate as plan_b_candidate_id, or leave it out",
+    "PROSE_NUMERIC_CLAIM": "remove prices, durations, clock times and distances from the text",
+    "SCHEMA_INVALID": "give every stop candidate_id, duration_min and why",
+}
+
+
+# Message helper only (the validator decides): spots the number-like words to quote back to the model.
+_NUMBERISH = re.compile(
+    r"(?:₹|\$|£|€|rs\.?\s*)?\d+(?:[.,:]\d+)*[\s-]*(?:a\.?m\.?|p\.?m\.?|hours?|hrs?|h\b|minutes?|mins?|km|kms|"
+    r"kilomet(?:er|re)s?|met(?:er|re)s?|m\b|rupees?|inr|rs\b)?",
+    re.IGNORECASE)
+
+
+def _prose_fix(v: Violation, draft: PlanDraft | None) -> str:
+    """Quote the offending words so a model can remove them (small models resubmit the same text otherwise)."""
+    fields: list[tuple[str, str]] = []
+    if draft is not None and v.stop_index is not None and v.stop_index < len(draft.stops):
+        stop = draft.stops[v.stop_index]
+        fields = [("why", stop.why), ("tradeoff", stop.tradeoff or "")]
+    elif draft is not None:
+        fields = [("summary_note", draft.summary_note)] + [("omitted reason", o.reason) for o in draft.omitted]
+    for name, text in fields:
+        found = [m.group(0).strip().rstrip(".,;:") for m in _NUMBERISH.finditer(text) if m.group(0).strip()]
+        if found:
+            quoted = ", ".join(f'"{f[:30]}"' for f in dict.fromkeys(found))
+            return f"rewrite {name} without {quoted} (no prices, durations, clock times or distances)"
+        if text and v.message.startswith(f"'{name}'"):
+            return f'rewrite {name} without numbers or number words: "{text[:80]}"'
+    return _FIXES["PROSE_NUMERIC_CLAIM"]
+
+
+def fix_line(errors: list[Violation], draft: PlanDraft | None = None) -> str:
+    """All fixes for a failed check or submission, in one line: "Fix: stop 2: ...; plan: ..."."""
+    parts: list[str] = []
+    for v in errors:
+        if v.code == "PROSE_NUMERIC_CLAIM":
+            fix = _prose_fix(v, draft)
+        elif v.code == "HOURS_CONFLICT" and "event" in v.message:
+            fix = "arrive before the event starts: move it earlier, or shorten or drop the stop before it"
+        else:
+            fix = _FIXES.get(v.code, v.message)
+        where = f"stop {v.stop_index + 1}" if v.stop_index is not None else "plan"
+        item = f"{where}: {fix} ({v.code})"
+        if item not in parts:
+            parts.append(item)
+    return "Fix: " + "; ".join(parts) + "." if parts else ""
+
+
 def run_check_plan(args: Any, env: ToolEnv) -> ToolOutcome:
     draft, schema_errors = draft_from_payload(normalize_plan_payload(args))
     if draft is None:
@@ -570,7 +644,9 @@ def run_check_plan(args: Any, env: ToolEnv) -> ToolOutcome:
         return error_outcome(f"{message}. Expected stops: [{{candidate_id, duration_min, why, tradeoff?, "
                              "plan_b_candidate_id?}], omitted, summary_note", protocol=True, code="SCHEMA_INVALID")
     report = validate_plan(draft, env.ledger, env.ctx, env.prefs, env.original, env.deps.travel)
-    body: dict[str, Any] = {"ok": report.ok}
+    # the next step comes first, so small models read it before the details
+    body: dict[str, Any] = {"ok": report.ok,
+                            "next_step": SUBMIT_NOW if report.ok else fix_line(report.errors, draft)}
     if report.plan is not None:
         plan = report.plan
         t = plan.totals

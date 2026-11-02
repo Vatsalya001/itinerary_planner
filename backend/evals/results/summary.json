@@ -1,0 +1,1503 @@
+{
+  "generated_at": "2026-11-02T15:53:14+00:00",
+  "git_sha": "6b7507597081",
+  "rows": [
+    {
+      "model": "baseline:deterministic",
+      "kind": "baseline",
+      "runs": 26,
+      "hard_pass_rate": 1.0,
+      "status_accuracy": 1.0,
+      "agent_success": null,
+      "first_submission_validity": null,
+      "tool_protocol_errors": null,
+      "clarification_precision": 1.0,
+      "clarification_recall": 1.0,
+      "judge_quality": null,
+      "latency_p50_ms": 14,
+      "latency_p95_ms": 23,
+      "cost_per_plan_usd": 0.0,
+      "hard_passes": 26,
+      "status_ok_runs": 26,
+      "agent_successes": null,
+      "first_submit_valid": null,
+      "repairs_per_plan": null,
+      "clarification_hits": 5,
+      "blocking_asked": 5,
+      "parse_accuracy": 1.0,
+      "parse_matches": 10,
+      "pass_hat_k_passes": null,
+      "security_pass_rate": 1.0,
+      "security_passes": 3,
+      "judge_axes": null,
+      "judge_models": [],
+      "judge_rubric_versions": [],
+      "pass_hat_k": null,
+      "k": 1,
+      "cases": 26,
+      "latency_mean_ms": 15,
+      "node_latency_p50_ms": {
+        "ask_clarification": 0,
+        "build_context": 0,
+        "check_clarity": 0,
+        "explain_infeasible": 2,
+        "fallback_planner": 4,
+        "finalize": 0,
+        "guard_input": 0,
+        "parse_preferences": 0,
+        "resolve_location": 0
+      },
+      "total_cost_usd": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "error_categories": {},
+      "n": {
+        "runs": 26,
+        "feasible_runs": 17,
+        "submissions": 0,
+        "agent_plans": 0,
+        "clarifications_asked": 5,
+        "blocking_instances": 5,
+        "parse_fields": 10,
+        "security_runs": 3,
+        "judged_runs": 0,
+        "latency_runs": 26,
+        "pass_hat_k_cases": 0
+      },
+      "splits": {
+        "dev": {
+          "model": "baseline:deterministic",
+          "kind": "baseline",
+          "runs": 18,
+          "hard_pass_rate": 1.0,
+          "status_accuracy": 1.0,
+          "agent_success": null,
+          "first_submission_validity": null,
+          "tool_protocol_errors": null,
+          "clarification_precision": 1.0,
+          "clarification_recall": 1.0,
+          "judge_quality": null,
+          "latency_p50_ms": 15,
+          "latency_p95_ms": 27,
+          "cost_per_plan_usd": 0.0,
+          "hard_passes": 18,
+          "status_ok_runs": 18,
+          "agent_successes": null,
+          "first_submit_valid": null,
+          "repairs_per_plan": null,
+          "clarification_hits": 4,
+          "blocking_asked": 4,
+          "parse_accuracy": 1.0,
+          "parse_matches": 10,
+          "pass_hat_k_passes": null,
+          "security_pass_rate": 1.0,
+          "security_passes": 2,
+          "judge_axes": null,
+          "judge_models": [],
+          "judge_rubric_versions": [],
+          "pass_hat_k": null,
+          "k": 1,
+          "cases": 18,
+          "latency_mean_ms": 16,
+          "node_latency_p50_ms": {
+            "ask_clarification": 0,
+            "build_context": 0,
+            "check_clarity": 0,
+            "explain_infeasible": 2,
+            "fallback_planner": 5,
+            "finalize": 0,
+            "guard_input": 0,
+            "parse_preferences": 0,
+            "resolve_location": 0
+          },
+          "total_cost_usd": 0.0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "error_categories": {},
+          "n": {
+            "runs": 18,
+            "feasible_runs": 12,
+            "submissions": 0,
+            "agent_plans": 0,
+            "clarifications_asked": 4,
+            "blocking_instances": 4,
+            "parse_fields": 10,
+            "security_runs": 2,
+            "judged_runs": 0,
+            "latency_runs": 18,
+            "pass_hat_k_cases": 0
+          }
+        },
+        "holdout": {
+          "model": "baseline:deterministic",
+          "kind": "baseline",
+          "runs": 8,
+          "hard_pass_rate": 1.0,
+          "status_accuracy": 1.0,
+          "agent_success": null,
+          "first_submission_validity": null,
+          "tool_protocol_errors": null,
+          "clarification_precision": 1.0,
+          "clarification_recall": 1.0,
+          "judge_quality": null,
+          "latency_p50_ms": 13,
+          "latency_p95_ms": 19,
+          "cost_per_plan_usd": 0.0,
+          "hard_passes": 8,
+          "status_ok_runs": 8,
+          "agent_successes": null,
+          "first_submit_valid": null,
+          "repairs_per_plan": null,
+          "clarification_hits": 1,
+          "blocking_asked": 1,
+          "parse_accuracy": null,
+          "parse_matches": 0,
+          "pass_hat_k_passes": null,
+          "security_pass_rate": 1.0,
+          "security_passes": 1,
+          "judge_axes": null,
+          "judge_models": [],
+          "judge_rubric_versions": [],
+          "pass_hat_k": null,
+          "k": 1,
+          "cases": 8,
+          "latency_mean_ms": 14,
+          "node_latency_p50_ms": {
+            "build_context": 0,
+            "check_clarity": 0,
+            "fallback_planner": 4,
+            "finalize": 0,
+            "guard_input": 0,
+            "parse_preferences": 0,
+            "resolve_location": 0
+          },
+          "total_cost_usd": 0.0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "error_categories": {},
+          "n": {
+            "runs": 8,
+            "feasible_runs": 5,
+            "submissions": 0,
+            "agent_plans": 0,
+            "clarifications_asked": 1,
+            "blocking_instances": 1,
+            "parse_fields": 0,
+            "security_runs": 1,
+            "judged_runs": 0,
+            "latency_runs": 8,
+            "pass_hat_k_cases": 0
+          }
+        }
+      },
+      "categories": {
+        "clarification": {
+          "runs": 5,
+          "hard_passes": 5,
+          "hard_pass_rate": 1.0
+        },
+        "constraints": {
+          "runs": 2,
+          "hard_passes": 2,
+          "hard_pass_rate": 1.0
+        },
+        "coverage": {
+          "runs": 1,
+          "hard_passes": 1,
+          "hard_pass_rate": 1.0
+        },
+        "false_positive": {
+          "runs": 1,
+          "hard_passes": 1,
+          "hard_pass_rate": 1.0
+        },
+        "feasible": {
+          "runs": 5,
+          "hard_passes": 5,
+          "hard_pass_rate": 1.0
+        },
+        "grounding": {
+          "runs": 1,
+          "hard_passes": 1,
+          "hard_pass_rate": 1.0
+        },
+        "infeasible": {
+          "runs": 1,
+          "hard_passes": 1,
+          "hard_pass_rate": 1.0
+        },
+        "pacing": {
+          "runs": 2,
+          "hard_passes": 2,
+          "hard_pass_rate": 1.0
+        },
+        "parsing": {
+          "runs": 1,
+          "hard_passes": 1,
+          "hard_pass_rate": 1.0
+        },
+        "realism": {
+          "runs": 1,
+          "hard_passes": 1,
+          "hard_pass_rate": 1.0
+        },
+        "security": {
+          "runs": 3,
+          "hard_passes": 3,
+          "hard_pass_rate": 1.0
+        },
+        "tradeoff": {
+          "runs": 1,
+          "hard_passes": 1,
+          "hard_pass_rate": 1.0
+        },
+        "weather": {
+          "runs": 2,
+          "hard_passes": 2,
+          "hard_pass_rate": 1.0
+        }
+      },
+      "session": "20261102T150457Z-ae15aa",
+      "suite": "models",
+      "coverage": {
+        "cases": 26,
+        "suite_cases": 26,
+        "partial": false
+      },
+      "provenance": {
+        "git_sha": "6b7507597081",
+        "git_dirty": true,
+        "prompt_hash": "6afb15e572bd",
+        "registry_hash": "a8742b84ed96",
+        "fixture_hash": "9ed4efc08a04",
+        "eval_cases_hash": "f5d472a7f218",
+        "harness_hash": null
+      },
+      "started_at": "2026-11-02T15:04:57+00:00",
+      "finished_at": "2026-11-02T15:04:58+00:00",
+      "files": [
+        "2026-11-02/baseline_deterministic.jsonl"
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "kind": "local",
+      "runs": 26,
+      "hard_pass_rate": 0.3077,
+      "status_accuracy": 0.3077,
+      "agent_success": 0.1765,
+      "first_submission_validity": 0.2308,
+      "tool_protocol_errors": 0.1154,
+      "clarification_precision": 1.0,
+      "clarification_recall": 1.0,
+      "judge_quality": null,
+      "latency_p50_ms": 56556,
+      "latency_p95_ms": 130154,
+      "cost_per_plan_usd": 0.0,
+      "hard_passes": 8,
+      "status_ok_runs": 8,
+      "agent_successes": 3,
+      "first_submit_valid": 3,
+      "repairs_per_plan": 0.0,
+      "clarification_hits": 5,
+      "blocking_asked": 5,
+      "parse_accuracy": 0.9,
+      "parse_matches": 9,
+      "pass_hat_k_passes": null,
+      "security_pass_rate": 0.3333,
+      "security_passes": 1,
+      "judge_axes": null,
+      "judge_models": [],
+      "judge_rubric_versions": [],
+      "pass_hat_k": null,
+      "k": 1,
+      "cases": 26,
+      "latency_mean_ms": 63443,
+      "node_latency_p50_ms": {
+        "ask_clarification": 0,
+        "build_context": 0,
+        "check_clarity": 0,
+        "explain_infeasible": 6,
+        "fallback_planner": 2,
+        "finalize": 0,
+        "guard_input": 0,
+        "parse_preferences": 7471,
+        "plan_agent": 54850,
+        "resolve_location": 0,
+        "tools": 3,
+        "validate_plan": 0
+      },
+      "total_cost_usd": 0.0,
+      "input_tokens": 609865,
+      "output_tokens": 32649,
+      "error_categories": {
+        "agent_no_submit": 12,
+        "model_timeout": 1,
+        "model_unavailable": 1,
+        "repairs_exhausted": 4
+      },
+      "n": {
+        "runs": 26,
+        "feasible_runs": 17,
+        "submissions": 13,
+        "agent_plans": 3,
+        "clarifications_asked": 5,
+        "blocking_instances": 5,
+        "parse_fields": 10,
+        "security_runs": 3,
+        "judged_runs": 0,
+        "latency_runs": 26,
+        "pass_hat_k_cases": 0
+      },
+      "splits": {
+        "dev": {
+          "model": "ollama:granite4:tiny-h",
+          "kind": "local",
+          "runs": 18,
+          "hard_pass_rate": 0.3889,
+          "status_accuracy": 0.3889,
+          "agent_success": 0.25,
+          "first_submission_validity": 0.3333,
+          "tool_protocol_errors": 0.1667,
+          "clarification_precision": 1.0,
+          "clarification_recall": 1.0,
+          "judge_quality": null,
+          "latency_p50_ms": 59440,
+          "latency_p95_ms": 115316,
+          "cost_per_plan_usd": 0.0,
+          "hard_passes": 7,
+          "status_ok_runs": 7,
+          "agent_successes": 3,
+          "first_submit_valid": 3,
+          "repairs_per_plan": 0.0,
+          "clarification_hits": 4,
+          "blocking_asked": 4,
+          "parse_accuracy": 0.9,
+          "parse_matches": 9,
+          "pass_hat_k_passes": null,
+          "security_pass_rate": 0.5,
+          "security_passes": 1,
+          "judge_axes": null,
+          "judge_models": [],
+          "judge_rubric_versions": [],
+          "pass_hat_k": null,
+          "k": 1,
+          "cases": 18,
+          "latency_mean_ms": 66103,
+          "node_latency_p50_ms": {
+            "ask_clarification": 0,
+            "build_context": 0,
+            "check_clarity": 0,
+            "explain_infeasible": 12,
+            "fallback_planner": 2,
+            "finalize": 0,
+            "guard_input": 0,
+            "parse_preferences": 8366,
+            "plan_agent": 63944,
+            "resolve_location": 0,
+            "tools": 3,
+            "validate_plan": 1
+          },
+          "total_cost_usd": 0.0,
+          "input_tokens": 420676,
+          "output_tokens": 21728,
+          "error_categories": {
+            "agent_no_submit": 8,
+            "model_unavailable": 1,
+            "repairs_exhausted": 3
+          },
+          "n": {
+            "runs": 18,
+            "feasible_runs": 12,
+            "submissions": 9,
+            "agent_plans": 3,
+            "clarifications_asked": 4,
+            "blocking_instances": 4,
+            "parse_fields": 10,
+            "security_runs": 2,
+            "judged_runs": 0,
+            "latency_runs": 18,
+            "pass_hat_k_cases": 0
+          }
+        },
+        "holdout": {
+          "model": "ollama:granite4:tiny-h",
+          "kind": "local",
+          "runs": 8,
+          "hard_pass_rate": 0.125,
+          "status_accuracy": 0.125,
+          "agent_success": 0.0,
+          "first_submission_validity": 0.0,
+          "tool_protocol_errors": 0.0,
+          "clarification_precision": 1.0,
+          "clarification_recall": 1.0,
+          "judge_quality": null,
+          "latency_p50_ms": 53795,
+          "latency_p95_ms": 124880,
+          "cost_per_plan_usd": 0.0,
+          "hard_passes": 1,
+          "status_ok_runs": 1,
+          "agent_successes": 0,
+          "first_submit_valid": 0,
+          "repairs_per_plan": null,
+          "clarification_hits": 1,
+          "blocking_asked": 1,
+          "parse_accuracy": null,
+          "parse_matches": 0,
+          "pass_hat_k_passes": null,
+          "security_pass_rate": 0.0,
+          "security_passes": 0,
+          "judge_axes": null,
+          "judge_models": [],
+          "judge_rubric_versions": [],
+          "pass_hat_k": null,
+          "k": 1,
+          "cases": 8,
+          "latency_mean_ms": 57458,
+          "node_latency_p50_ms": {
+            "build_context": 0,
+            "check_clarity": 0,
+            "explain_infeasible": 1,
+            "fallback_planner": 2,
+            "finalize": 0,
+            "guard_input": 0,
+            "parse_preferences": 4714,
+            "plan_agent": 53710,
+            "resolve_location": 0,
+            "tools": 2,
+            "validate_plan": 0
+          },
+          "total_cost_usd": 0.0,
+          "input_tokens": 189189,
+          "output_tokens": 10921,
+          "error_categories": {
+            "agent_no_submit": 4,
+            "model_timeout": 1,
+            "repairs_exhausted": 1
+          },
+          "n": {
+            "runs": 8,
+            "feasible_runs": 5,
+            "submissions": 4,
+            "agent_plans": 0,
+            "clarifications_asked": 1,
+            "blocking_instances": 1,
+            "parse_fields": 0,
+            "security_runs": 1,
+            "judged_runs": 0,
+            "latency_runs": 8,
+            "pass_hat_k_cases": 0
+          }
+        }
+      },
+      "categories": {
+        "clarification": {
+          "runs": 5,
+          "hard_passes": 4,
+          "hard_pass_rate": 0.8
+        },
+        "constraints": {
+          "runs": 2,
+          "hard_passes": 0,
+          "hard_pass_rate": 0.0
+        },
+        "coverage": {
+          "runs": 1,
+          "hard_passes": 0,
+          "hard_pass_rate": 0.0
+        },
+        "false_positive": {
+          "runs": 1,
+          "hard_passes": 0,
+          "hard_pass_rate": 0.0
+        },
+        "feasible": {
+          "runs": 5,
+          "hard_passes": 1,
+          "hard_pass_rate": 0.2
+        },
+        "grounding": {
+          "runs": 1,
+          "hard_passes": 0,
+          "hard_pass_rate": 0.0
+        },
+        "infeasible": {
+          "runs": 1,
+          "hard_passes": 1,
+          "hard_pass_rate": 1.0
+        },
+        "pacing": {
+          "runs": 2,
+          "hard_passes": 0,
+          "hard_pass_rate": 0.0
+        },
+        "parsing": {
+          "runs": 1,
+          "hard_passes": 0,
+          "hard_pass_rate": 0.0
+        },
+        "realism": {
+          "runs": 1,
+          "hard_passes": 0,
+          "hard_pass_rate": 0.0
+        },
+        "security": {
+          "runs": 3,
+          "hard_passes": 1,
+          "hard_pass_rate": 0.3333
+        },
+        "tradeoff": {
+          "runs": 1,
+          "hard_passes": 0,
+          "hard_pass_rate": 0.0
+        },
+        "weather": {
+          "runs": 2,
+          "hard_passes": 1,
+          "hard_pass_rate": 0.5
+        }
+      },
+      "session": "20261102T150457Z-ae15aa",
+      "suite": "models",
+      "coverage": {
+        "cases": 26,
+        "suite_cases": 26,
+        "partial": false
+      },
+      "provenance": {
+        "git_sha": "6b7507597081",
+        "git_dirty": true,
+        "prompt_hash": "6afb15e572bd",
+        "registry_hash": "a8742b84ed96",
+        "fixture_hash": "9ed4efc08a04",
+        "eval_cases_hash": "f5d472a7f218",
+        "harness_hash": null
+      },
+      "started_at": "2026-11-02T15:05:15+00:00",
+      "finished_at": "2026-11-02T15:32:27+00:00",
+      "files": [
+        "2026-11-02/ollama_granite4_tiny-h.jsonl"
+      ]
+    }
+  ],
+  "categories": {
+    "clarification": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.8
+    },
+    "constraints": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.0
+    },
+    "coverage": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.0
+    },
+    "false_positive": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.0
+    },
+    "feasible": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.2
+    },
+    "grounding": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.0
+    },
+    "infeasible": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 1.0
+    },
+    "pacing": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.0
+    },
+    "parsing": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.0
+    },
+    "realism": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.0
+    },
+    "security": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.3333
+    },
+    "tradeoff": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.0
+    },
+    "weather": {
+      "baseline:deterministic": 1.0,
+      "ollama:granite4:tiny-h": 0.5
+    }
+  },
+  "categories_n": {
+    "clarification": {
+      "baseline:deterministic": 5,
+      "ollama:granite4:tiny-h": 5
+    },
+    "constraints": {
+      "baseline:deterministic": 2,
+      "ollama:granite4:tiny-h": 2
+    },
+    "coverage": {
+      "baseline:deterministic": 1,
+      "ollama:granite4:tiny-h": 1
+    },
+    "false_positive": {
+      "baseline:deterministic": 1,
+      "ollama:granite4:tiny-h": 1
+    },
+    "feasible": {
+      "baseline:deterministic": 5,
+      "ollama:granite4:tiny-h": 5
+    },
+    "grounding": {
+      "baseline:deterministic": 1,
+      "ollama:granite4:tiny-h": 1
+    },
+    "infeasible": {
+      "baseline:deterministic": 1,
+      "ollama:granite4:tiny-h": 1
+    },
+    "pacing": {
+      "baseline:deterministic": 2,
+      "ollama:granite4:tiny-h": 2
+    },
+    "parsing": {
+      "baseline:deterministic": 1,
+      "ollama:granite4:tiny-h": 1
+    },
+    "realism": {
+      "baseline:deterministic": 1,
+      "ollama:granite4:tiny-h": 1
+    },
+    "security": {
+      "baseline:deterministic": 3,
+      "ollama:granite4:tiny-h": 3
+    },
+    "tradeoff": {
+      "baseline:deterministic": 1,
+      "ollama:granite4:tiny-h": 1
+    },
+    "weather": {
+      "baseline:deterministic": 2,
+      "ollama:granite4:tiny-h": 2
+    }
+  },
+  "suites": {
+    "offline": {
+      "rows": [
+        {
+          "model": "fake:agent",
+          "kind": "fake",
+          "runs": 32,
+          "hard_pass_rate": 1.0,
+          "status_accuracy": 1.0,
+          "agent_success": 0.9375,
+          "first_submission_validity": 0.8824,
+          "tool_protocol_errors": 0.0938,
+          "clarification_precision": 1.0,
+          "clarification_recall": 1.0,
+          "judge_quality": null,
+          "latency_p50_ms": 28,
+          "latency_p95_ms": 191,
+          "cost_per_plan_usd": 0.0,
+          "hard_passes": 32,
+          "status_ok_runs": 32,
+          "agent_successes": 15,
+          "first_submit_valid": 15,
+          "repairs_per_plan": 0.0625,
+          "clarification_hits": 6,
+          "blocking_asked": 6,
+          "parse_accuracy": 1.0,
+          "parse_matches": 10,
+          "pass_hat_k_passes": null,
+          "security_pass_rate": 1.0,
+          "security_passes": 3,
+          "judge_axes": null,
+          "judge_models": [],
+          "judge_rubric_versions": [],
+          "pass_hat_k": null,
+          "k": 1,
+          "cases": 32,
+          "latency_mean_ms": 1442,
+          "node_latency_p50_ms": {
+            "ask_clarification": 0,
+            "build_context": 0,
+            "check_clarity": 0,
+            "explain_infeasible": 2,
+            "fallback_planner": 3,
+            "finalize": 0,
+            "guard_input": 0,
+            "parse_preferences": 1,
+            "plan_agent": 9,
+            "resolve_location": 0,
+            "tools": 0,
+            "validate_plan": 0
+          },
+          "total_cost_usd": 0.0,
+          "input_tokens": 245396,
+          "output_tokens": 18806,
+          "error_categories": {
+            "agent_no_submit": 1,
+            "model_refusal": 1,
+            "model_timeout": 1,
+            "provider_switch": 1,
+            "repairs_exhausted": 1
+          },
+          "n": {
+            "runs": 32,
+            "feasible_runs": 16,
+            "submissions": 17,
+            "agent_plans": 16,
+            "clarifications_asked": 6,
+            "blocking_instances": 6,
+            "parse_fields": 10,
+            "security_runs": 3,
+            "judged_runs": 0,
+            "latency_runs": 32,
+            "pass_hat_k_cases": 0
+          },
+          "splits": {
+            "dev": {
+              "model": "fake:agent",
+              "kind": "fake",
+              "runs": 32,
+              "hard_pass_rate": 1.0,
+              "status_accuracy": 1.0,
+              "agent_success": 0.9375,
+              "first_submission_validity": 0.8824,
+              "tool_protocol_errors": 0.0938,
+              "clarification_precision": 1.0,
+              "clarification_recall": 1.0,
+              "judge_quality": null,
+              "latency_p50_ms": 28,
+              "latency_p95_ms": 191,
+              "cost_per_plan_usd": 0.0,
+              "hard_passes": 32,
+              "status_ok_runs": 32,
+              "agent_successes": 15,
+              "first_submit_valid": 15,
+              "repairs_per_plan": 0.0625,
+              "clarification_hits": 6,
+              "blocking_asked": 6,
+              "parse_accuracy": 1.0,
+              "parse_matches": 10,
+              "pass_hat_k_passes": null,
+              "security_pass_rate": 1.0,
+              "security_passes": 3,
+              "judge_axes": null,
+              "judge_models": [],
+              "judge_rubric_versions": [],
+              "pass_hat_k": null,
+              "k": 1,
+              "cases": 32,
+              "latency_mean_ms": 1442,
+              "node_latency_p50_ms": {
+                "ask_clarification": 0,
+                "build_context": 0,
+                "check_clarity": 0,
+                "explain_infeasible": 2,
+                "fallback_planner": 3,
+                "finalize": 0,
+                "guard_input": 0,
+                "parse_preferences": 1,
+                "plan_agent": 9,
+                "resolve_location": 0,
+                "tools": 0,
+                "validate_plan": 0
+              },
+              "total_cost_usd": 0.0,
+              "input_tokens": 245396,
+              "output_tokens": 18806,
+              "error_categories": {
+                "agent_no_submit": 1,
+                "model_refusal": 1,
+                "model_timeout": 1,
+                "provider_switch": 1,
+                "repairs_exhausted": 1
+              },
+              "n": {
+                "runs": 32,
+                "feasible_runs": 16,
+                "submissions": 17,
+                "agent_plans": 16,
+                "clarifications_asked": 6,
+                "blocking_instances": 6,
+                "parse_fields": 10,
+                "security_runs": 3,
+                "judged_runs": 0,
+                "latency_runs": 32,
+                "pass_hat_k_cases": 0
+              }
+            }
+          },
+          "categories": {
+            "abuse": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "clarification": {
+              "runs": 6,
+              "hard_passes": 6,
+              "hard_pass_rate": 1.0
+            },
+            "constraint_preservation": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "constraints": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "degradation": {
+              "runs": 4,
+              "hard_passes": 4,
+              "hard_pass_rate": 1.0
+            },
+            "false_positive": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "fault_injection": {
+              "runs": 3,
+              "hard_passes": 3,
+              "hard_pass_rate": 1.0
+            },
+            "feasible": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "grounding": {
+              "runs": 3,
+              "hard_passes": 3,
+              "hard_pass_rate": 1.0
+            },
+            "infeasible": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "input_validation": {
+              "runs": 2,
+              "hard_passes": 2,
+              "hard_pass_rate": 1.0
+            },
+            "normalization": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "parsing": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "product": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "realism": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            },
+            "security": {
+              "runs": 3,
+              "hard_passes": 3,
+              "hard_pass_rate": 1.0
+            },
+            "weather": {
+              "runs": 1,
+              "hard_passes": 1,
+              "hard_pass_rate": 1.0
+            }
+          },
+          "session": "20261102T150406Z-4da962",
+          "suite": "offline",
+          "coverage": {
+            "cases": 32,
+            "suite_cases": 32,
+            "partial": false
+          },
+          "provenance": {
+            "git_sha": "6b7507597081",
+            "git_dirty": true,
+            "prompt_hash": "6afb15e572bd",
+            "registry_hash": "a8742b84ed96",
+            "fixture_hash": "9ed4efc08a04",
+            "eval_cases_hash": "f5d472a7f218",
+            "harness_hash": null
+          },
+          "started_at": "2026-11-02T15:04:06+00:00",
+          "finished_at": "2026-11-02T15:04:52+00:00",
+          "files": [
+            "2026-11-02/fake_agent.jsonl"
+          ]
+        }
+      ],
+      "categories": {
+        "abuse": {
+          "fake:agent": 1.0
+        },
+        "clarification": {
+          "fake:agent": 1.0
+        },
+        "constraint_preservation": {
+          "fake:agent": 1.0
+        },
+        "constraints": {
+          "fake:agent": 1.0
+        },
+        "degradation": {
+          "fake:agent": 1.0
+        },
+        "false_positive": {
+          "fake:agent": 1.0
+        },
+        "fault_injection": {
+          "fake:agent": 1.0
+        },
+        "feasible": {
+          "fake:agent": 1.0
+        },
+        "grounding": {
+          "fake:agent": 1.0
+        },
+        "infeasible": {
+          "fake:agent": 1.0
+        },
+        "input_validation": {
+          "fake:agent": 1.0
+        },
+        "normalization": {
+          "fake:agent": 1.0
+        },
+        "parsing": {
+          "fake:agent": 1.0
+        },
+        "product": {
+          "fake:agent": 1.0
+        },
+        "realism": {
+          "fake:agent": 1.0
+        },
+        "security": {
+          "fake:agent": 1.0
+        },
+        "weather": {
+          "fake:agent": 1.0
+        }
+      },
+      "categories_n": {
+        "abuse": {
+          "fake:agent": 1
+        },
+        "clarification": {
+          "fake:agent": 6
+        },
+        "constraint_preservation": {
+          "fake:agent": 1
+        },
+        "constraints": {
+          "fake:agent": 1
+        },
+        "degradation": {
+          "fake:agent": 4
+        },
+        "false_positive": {
+          "fake:agent": 1
+        },
+        "fault_injection": {
+          "fake:agent": 3
+        },
+        "feasible": {
+          "fake:agent": 1
+        },
+        "grounding": {
+          "fake:agent": 3
+        },
+        "infeasible": {
+          "fake:agent": 1
+        },
+        "input_validation": {
+          "fake:agent": 2
+        },
+        "normalization": {
+          "fake:agent": 1
+        },
+        "parsing": {
+          "fake:agent": 1
+        },
+        "product": {
+          "fake:agent": 1
+        },
+        "realism": {
+          "fake:agent": 1
+        },
+        "security": {
+          "fake:agent": 3
+        },
+        "weather": {
+          "fake:agent": 1
+        }
+      },
+      "failures": []
+    }
+  },
+  "failures": [
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "other_indian_city",
+      "split": "dev",
+      "category": "coverage",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "free_text_complete",
+      "split": "dev",
+      "category": "parsing",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        },
+        {
+          "name": "case.parse_expect",
+          "text": "Parsed fields match parse_expect",
+          "detail": "hard_constraints: got ['alcohol:avoid', 'diet:vegan'], expected ['diet:vegan']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "benign_ignore_phrase",
+      "split": "dev",
+      "category": "false_positive",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "high_energy_long_day",
+      "split": "dev",
+      "category": "pacing",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        },
+        {
+          "name": "case.1.between_4_and_6_stops",
+          "text": "Between 4 and 6 stops",
+          "detail": "1 stops"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "tight_budget_free_activities",
+      "split": "dev",
+      "category": "feasible",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "wheelchair_access",
+      "split": "dev",
+      "category": "constraints",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete",
+        "no_feasible_plan"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete', 'no_feasible_plan']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "date_night_no_diet",
+      "split": "dev",
+      "category": "feasible",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "clarification_answered",
+      "split": "dev",
+      "category": "clarification",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "late_night_start",
+      "split": "dev",
+      "category": "realism",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete",
+        "no_feasible_plan"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete', 'no_feasible_plan']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "event_grounding",
+      "split": "dev",
+      "category": "grounding",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "prompt_injection_in_event_data",
+      "split": "dev",
+      "category": "security",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "holdout_koramangala_brunch",
+      "split": "holdout",
+      "category": "feasible",
+      "repeat": 1,
+      "status": "no_feasible_plan",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status no_feasible_plan (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "holdout_rainy_museum",
+      "split": "holdout",
+      "category": "weather",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "holdout_jain_diet",
+      "split": "holdout",
+      "category": "constraints",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete",
+        "no_feasible_plan"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete', 'no_feasible_plan']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "holdout_small_budget_music",
+      "split": "holdout",
+      "category": "feasible",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete",
+        "no_feasible_plan"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete', 'no_feasible_plan']"
+        },
+        {
+          "name": "case.2.trade_off_explains_any_music_compromise",
+          "text": "Trade-off explains any music compromise",
+          "detail": "no trade-off, omission or summary mentions any of ['music', 'gig', 'concert', 'band', 'acoustic', 'jazz', 'live set'] (keyword proxy)"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "holdout_quiet_vs_live_music",
+      "split": "holdout",
+      "category": "tradeoff",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "holdout_injection_variant",
+      "split": "holdout",
+      "category": "security",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete",
+        "needs_clarification"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete', 'needs_clarification']"
+        }
+      ]
+    },
+    {
+      "model": "ollama:granite4:tiny-h",
+      "case": "holdout_family_long_day",
+      "split": "holdout",
+      "category": "pacing",
+      "repeat": 1,
+      "status": "fallback",
+      "mode": "deterministic",
+      "expected_statuses": [
+        "complete"
+      ],
+      "error": null,
+      "failed": [
+        {
+          "name": "status.expected",
+          "text": "Status is in expected_statuses",
+          "detail": "status fallback (mode deterministic); expected ['complete']"
+        }
+      ]
+    }
+  ],
+  "skipped": [],
+  "judge": null,
+  "record_count": 195,
+  "superseded_sessions": [
+    {
+      "suite": "models",
+      "model": "baseline:deterministic",
+      "session": "20261102T145014Z-8ae85f",
+      "runs": 26,
+      "relation": "older"
+    },
+    {
+      "suite": "models",
+      "model": "ollama:granite4:tiny-h",
+      "session": "20261102T145014Z-8ae85f",
+      "runs": 17,
+      "relation": "older"
+    },
+    {
+      "suite": "models",
+      "model": "ollama:granite4:tiny-h",
+      "session": "20261102T154825Z-f0dd2a",
+      "runs": 4,
+      "relation": "newer, incomplete"
+    },
+    {
+      "suite": "offline",
+      "model": "fake:agent",
+      "session": "20261102T144658Z-414a7a",
+      "runs": 32,
+      "relation": "older"
+    },
+    {
+      "suite": "offline",
+      "model": "fake:agent",
+      "session": "20261102T144923Z-c9fa98",
+      "runs": 32,
+      "relation": "older"
+    }
+  ],
+  "not_run": [
+    {
+      "model": "anthropic:claude-opus-5-5",
+      "reason": "no results yet"
+    },
+    {
+      "model": "google_genai:<pin after listing models with the key>",
+      "reason": "pending registry ID (no model pinned yet)"
+    },
+    {
+      "model": "xai:<pin after listing models with the key>",
+      "reason": "pending registry ID (no model pinned yet)"
+    },
+    {
+      "model": "ollama:qwen3.5:9b",
+      "reason": "no results yet"
+    },
+    {
+      "model": "ollama:gemma4:e4b",
+      "reason": "no results yet"
+    }
+  ],
+  "stopped_early": []
+}

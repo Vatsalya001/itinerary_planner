@@ -5,6 +5,7 @@
 # pricing_per_mtok: USD per million tokens; local, fake and baseline rows cost 0
 # timeouts: agent_turn_s caps one agent model call; parse_s caps the structured-output parse call
 # params.structured_output: json_schema (default; always used for Anthropic) | function_calling
+# params.num_predict (Ollama): output-token cap per call; without it small models can generate for minutes
 # pending:  true until a real model ID is pinned; requesting it raises PendingModelError
 production:
   primary: anthropic:claude-opus-5-5
@@ -49,19 +50,21 @@ candidates:
     note: Local, eval/dev only.
     # Ollama answers 501 "structured output is unavailable" for format=<schema> on this model; tool-call
     # based structured output works.
-    params: {num_ctx: 32768, temperature: 0, keep_alive: 10m, reasoning: false, structured_output: function_calling}
+    params: {num_ctx: 32768, num_predict: 2048, temperature: 0, keep_alive: 10m, reasoning: false,
+             structured_output: function_calling}
     pricing_per_mtok: {input: 0, output: 0}
 
   - id: ollama:gemma4:e4b
     kind: local
     note: Local, eval/dev only.
-    params: {num_ctx: 32768, temperature: 0, keep_alive: 10m, reasoning: false, structured_output: function_calling}
+    params: {num_ctx: 32768, num_predict: 2048, temperature: 0, keep_alive: 10m, reasoning: false,
+             structured_output: function_calling}
     pricing_per_mtok: {input: 0, output: 0}
 
   - id: ollama:granite4:tiny-h
     kind: local
     note: Local, eval/dev only. No thinking mode, so `reasoning` is left unset.
-    params: {num_ctx: 32768, temperature: 0, keep_alive: 10m, reasoning: null}
+    params: {num_ctx: 32768, num_predict: 2048, temperature: 0, keep_alive: 10m, reasoning: null}
     pricing_per_mtok: {input: 0, output: 0}
 
   - id: fake:agent

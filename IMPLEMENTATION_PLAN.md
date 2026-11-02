@@ -170,7 +170,7 @@ Every tool takes a required `reason` (≤ 140 characters). The trace shows it as
 ### Loop rules
 
 - At most 10 model turns, tool caps as above, and a 60-second run deadline (`RUN_DEADLINE_S`). Local models in evals get a separate, longer deadline that is reported, not hidden.
-- Tool results are compact JSON with candidate IDs. The model can only reference IDs present in `ledger`; prose may mention names but not prices, durations or times (`PROSE_NUMERIC_CLAIM`).
+- Tool results are compact JSON with candidate IDs. The model can only reference IDs present in `ledger`; prose may mention names but not prices, durations, times or distances (`PROSE_NUMERIC_CLAIM`).
 - `submit_plan` violations come back to the model as the tool's error result, listing violation codes and fields. That keeps the message history append-only.
 - If the model ends a turn with text instead of `submit_plan`, the graph adds one nudge. A second text-only ending routes to the fallback.
 - Forced tool choice is not used: Claude Opus 5.5 rejects `tool_choice` "any"/"tool" with a 400. Tool use is steered from the prompt, and strict schemas keep arguments valid.
@@ -255,7 +255,7 @@ elapsed    = last_depart - window.start ; time_ok = elapsed <= available_minutes
 | `WEATHER_RISK` (warning) | Outdoor stop with rain probability ≥ 50% and no Plan B |
 | `EVENT_DATE_MISMATCH` | Event start not on the target date in the city's timezone |
 | `SOURCE_MISSING` | Stop without provider, URL or curated origin |
-| `PROSE_NUMERIC_CLAIM` | Currency amounts, durations or clock times in `why`, `tradeoff` or `summary_note` |
+| `PROSE_NUMERIC_CLAIM` | Currency amounts, durations, clock times or distances in `why`, `tradeoff` or `summary_note` (venue names are ignored) |
 | `CONSTRAINT_DROPPED` | Any original hard constraint not enforced, even if the parser dropped it |
 
 ### Guardrail layers (adapted from QueryPilot)

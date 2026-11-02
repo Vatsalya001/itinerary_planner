@@ -522,3 +522,23 @@ def test_planner_omissions_carry_names_and_avoid_long_waits():
                                                                interests=["music", "food"]))
     assert report is not None and report.ok
     assert "IDLE_WAIT" not in {v.code for v in report.violations}
+
+
+def test_templates_never_mention_distances():
+    from app.domain.validator import numeric_claims
+
+    cases = [
+        (make_ctx(energy="low"), make_prefs(constraints=["vegetarian", "avoid crowded places"])),
+        (make_ctx(energy="high", start_min=600, available=540), make_prefs(energy="high", start_min=600,
+                                                                           available=540, budget=4000)),
+        (make_ctx(energy="medium", weather="rain"), make_prefs(energy="medium", interests=["walks"], constraints=[])),
+    ]
+    for ctx, prefs in cases:
+        draft, _ = plan_and_validate(WORLD, ctx, prefs)
+        assert draft is not None
+        texts = [s.why for s in draft.stops] + [s.tradeoff or "" for s in draft.stops] + [draft.summary_note]
+        texts += [o.reason for o in draft.omitted]
+        for text in texts:
+            assert "distance" not in numeric_claims(text), text
+            for word in ("km", "kilomet", "metre", "meter", "mile"):
+                assert word not in text.lower(), text

@@ -22,7 +22,14 @@ from app.graph.nodes.common import (
     tracer_of,
 )
 from app.graph.state import PlannerState, RunContext, dump, get_constraints, get_ctx, get_ledger, get_prefs
-from app.graph.tools import SUBMIT_PLAN, dumps, normalize_plan_payload, violation_dicts, with_turns_left
+from app.graph.tools import (
+    SUBMIT_PLAN,
+    dumps,
+    fix_line,
+    normalize_plan_payload,
+    violation_dicts,
+    with_turns_left,
+)
 
 REPAIR_INSTRUCTION = ("Fix every error and call submit_plan again. Use only candidate IDs returned by your tools, "
                       "keep durations inside each candidate's visit range, and keep numbers out of the prose.")
@@ -73,7 +80,8 @@ async def validate_submission(state: PlannerState, runtime: Runtime[RunContext])
     tracer.emit("tool_failed", node="validate_plan", tool=SUBMIT_PLAN, summary="rejected: " + ", ".join(codes),
                 data={"code": "VALIDATION_FAILED", "codes": codes, "attempt": attempts, "recovered": can_repair})
     body: dict[str, Any] = {"ok": False, "attempt": attempts, "attempts_left": max_attempts - attempts if can_repair
-                            else 0, "errors": violation_dicts(report.errors), "warnings": violation_dicts(report.warnings)}
+                            else 0, "fix": fix_line(report.errors, draft), "errors": violation_dicts(report.errors),
+                            "warnings": violation_dicts(report.warnings)}
     if can_repair:
         body["instruction"] = REPAIR_INSTRUCTION
         update["route"] = "plan_agent"

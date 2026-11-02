@@ -384,3 +384,48 @@ async def test_out_of_range_text_time_is_capped_with_an_assumption() -> None:
     assert result.preferences is not None and result.preferences.available_minutes == 720
     assert "Capped at 12 hours" in result.assumptions
     assert_trace_integrity(events)
+
+
+async def test_text_only_ending_without_a_clean_check_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.graph.nodes.common import AGENT_NO_SUBMIT
+
+    search = AIMessage(content="", tool_calls=[_call("search_places", {"intent": "quiet cafe", "reason": "a"}, "s1")])
+    _use_model(monkeypatch, [search, AIMessage(content="Here you go!"), AIMessage(content="Done, enjoy!")])
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert result.status == "fallback" and result.mode == "deterministic"
+    assert AGENT_NO_SUBMIT in result.degradations and finalize_data(events)["nudges"] == 1
+    assert "enjoy" not in events_json(events).lower()
+    assert_trace_integrity(events)
+
+
+async def test_repair_message_carries_a_one_line_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json as _json
+
+    async def keep(checkpointer: Any, thread_id: str | None) -> None:
+        return None
+
+    monkeypatch.setattr(runner_module, "delete_thread", keep)
+    deps = make_deps(fault="submit_plan_unknown_ids_twice")
+    await collect(request_for("assignment_example"), deps, thread_id="t_fix")
+    snapshot = await compiled_graph(deps.checkpointer).aget_state({"configurable": {"thread_id": "t_fix"}})
+    replies = [m for m in snapshot.values["messages"] if isinstance(m, ToolMessage) and m.name == "submit_plan"]
+    body = _json.loads(str(replies[0].content))
+    assert body["fix"].startswith("Fix: stop 1: use only IDs returned by search_places or search_events")
+
+
+async def test_parse_node_adds_no_constraints_outside_merge_parse(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.graph.nodes.parse as parse_module
+    from app.domain.parser_rules import merge_parse as real_merge
+
+    seen: list[Any] = []
+
+    def spy(llm: Any, rules: Any, request: Any) -> Any:
+        out = real_merge(llm, rules, request)
+        seen.append(out)
+        return out
+
+    monkeypatch.setattr(parse_module, "merge_parse", spy)
+    result, _ = await collect(request_for("assignment_example"), make_deps())
+    assert seen and result.preferences is not None
+    keys = {c.key for c in result.preferences.hard_constraints}
+    assert keys == {c.key for c in seen[-1].preferences.hard_constraints}

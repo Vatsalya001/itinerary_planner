@@ -68,7 +68,7 @@
     "Every stop is inside known opening hours, or carries an 'hours unverified' label",
     "Every original hard constraint is satisfied with positive evidence, or the status is neither complete nor fallback",
     "Pacing limits for the parsed energy level hold",
-    "No currency amounts, durations or clock times in model prose",
+    "No currency amounts, durations, clock times or distances in model prose",
     "Every stop has a non-empty why and a source badge (live, curated snapshot, web event, estimate)",
     "Trace events match executed nodes and tools in order and contain no keys or the secret sentinel"
   ],
@@ -413,7 +413,7 @@
     "Missing coordinates fail with TRANSFER_UNKNOWN",
     "Pacing over the energy profile fails with PACING_EXCEEDED",
     "Outdoor walk after sunset fails with DAYLIGHT_CONFLICT",
-    "Currency amounts, durations or clock times in prose fail PROSE_NUMERIC_CLAIM",
+    "Currency amounts, durations, clock times or distances in prose fail PROSE_NUMERIC_CLAIM",
     "Event date not equal to the target Saturday fails EVENT_DATE_MISMATCH",
     "A hard constraint present in raw input but absent from parsed preferences fails CONSTRAINT_DROPPED",
     "Malformed submit_plan input never renders",

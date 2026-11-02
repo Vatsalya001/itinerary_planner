@@ -763,3 +763,29 @@ def test_omission_names_are_filled_from_the_ledger():
     assert report.plan is not None
     named = {o.ref: o.name for o in report.plan.omitted}
     assert named == {"fx:other": "Real Museum Name", "a rooftop bar": None}
+
+
+# --- distances are factual claims too ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text", ["only 2.2 km away", "a 500 m stroll", "1.5 kilometres from the station",
+                                  "a 2km walk", "800m down the road", "half a kilometre away", "a mile up the road",
+                                  "a few metres from the gate", "0.5 miles", "two kilometers"])
+def test_distances_in_prose_are_flagged(text):
+    assert "distance" in numeric_claims(text)
+    report = run(PlanDraft(stops=[stop("fx:cafe", 50, why=text)]), [CAFE])
+    assert "PROSE_NUMERIC_CLAIM" in codes(report)
+
+
+@pytest.mark.parametrize("text", ["3 stops close together", "I'm sure you'll like it", "Top 10 most loved cafes",
+                                  "a short walk away", "close to the park", "rated 4.5 stars"])
+def test_non_distance_uses_are_fine(text):
+    assert numeric_claims(text) == []
+
+
+def test_distance_inside_a_venue_name_is_not_a_claim():
+    run_cafe = make_candidate("fx:run", "cafe", name="5km Run Cafe")
+    ok = run(PlanDraft(stops=[stop("fx:run", 50, why="5km Run Cafe is a calm, seated stop.")]), [run_cafe])
+    assert "PROSE_NUMERIC_CLAIM" not in codes(ok)
+    bad = run(PlanDraft(stops=[stop("fx:run", 50, why="5km Run Cafe is 2 km from here.")]), [run_cafe])
+    assert "PROSE_NUMERIC_CLAIM" in codes(bad)

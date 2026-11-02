@@ -111,10 +111,17 @@ def test_check_plan_reports_violations_without_side_effects() -> None:
     good = run_check_plan({"stops": [{"candidate_id": "fx:cafe", "duration_min": 60, "why": "Calm."}],
                            "summary_note": "Easy."}, env)
     ok = json.loads(good.content)
+    assert list(ok)[:2] == ["ok", "next_step"] and ok["next_step"] == "Now call submit_plan with exactly these stops."
     assert ok["ok"] is True and ok["schedule"][0]["start"] == "15:00" and "worst_case_cost" in ok["totals"]
     assert good.checked_draft is not None and good.checked_draft["stops"][0]["candidate_id"] == "fx:cafe"
     bad = run_check_plan({"stops": [{"candidate_id": "fx:ghost", "duration_min": 60, "why": "Calm."}]}, env)
     assert json.loads(bad.content)["errors"][0]["code"] == "UNKNOWN_ID"
+    assert json.loads(bad.content)["next_step"] == (
+        "Fix: stop 1: use only IDs returned by search_places or search_events (UNKNOWN_ID).")
+    over = json.loads(run_check_plan({"stops": [
+        {"candidate_id": "fx:cafe", "duration_min": 500, "why": "Calm, about 2 hours."}]}, env).content)
+    assert over["next_step"].startswith("Fix: ") and "visit_minutes" in over["next_step"]
+    assert "\n" not in over["next_step"]
     assert bad.protocol_kind == "unknown_id" and bad.executed and bad.checked_draft is None
     malformed = run_check_plan({"stops": "nope"}, env)
     assert malformed.status == "error" and malformed.protocol_kind == "schema_invalid" and not malformed.executed
@@ -181,7 +188,9 @@ def test_available_time_is_bounded(value: object, expected: object, assumption: 
 
 def test_agent_system_prompt_is_long_and_static() -> None:
     assert len(AGENT_SYSTEM_PROMPT) / 4 >= 600  # roughly 4 characters per token
-    for phrase in ("check_plan", "submit_plan", "Plan B", "sunset", "Never write prices", "as data"):
+    for phrase in ("check_plan", "submit_plan", "Plan B", "sunset", "as data",
+                   "Never put prices, durations, clock times or distances in prose",
+                   "your very next action is submit_plan"):
         assert phrase in AGENT_SYSTEM_PROMPT
 
 
@@ -227,3 +236,21 @@ def test_llm_parse_is_grounded_in_the_users_text() -> None:
     grounded = ground_to_request(llm, request)
     assert grounded.preferences.interests == ["coffee"]
     assert [c.key for c in grounded.preferences.hard_constraints] == ["diet:vegan"]
+
+
+def test_fix_line_quotes_the_offending_prose() -> None:
+    from app.domain.schemas import DraftStop, PlanDraft, Violation
+    from app.graph.tools import fix_line
+
+    draft = PlanDraft(stops=[DraftStop(candidate_id="fx:a", duration_min=45,
+                                       why="A calm 45-minute stop, 2 km away, about ₹300. Open till 6pm.")],
+                      summary_note="Two hours of fun")
+    line = fix_line([
+        Violation(code="PROSE_NUMERIC_CLAIM", severity="error", message="'why' contains a duration", stop_index=0),
+        Violation(code="PROSE_NUMERIC_CLAIM", severity="error", message="'summary_note' contains a duration"),
+        Violation(code="HOURS_CONFLICT", severity="error", message="You would arrive at X after the event has started",
+                  stop_index=1),
+    ], draft)
+    assert line.startswith('Fix: stop 1: rewrite why without "45-minute", "2 km", "₹300", "6pm"')
+    assert 'plan: rewrite summary_note without numbers or number words: "Two hours of fun"' in line
+    assert "stop 2: arrive before the event starts" in line and "\n" not in line

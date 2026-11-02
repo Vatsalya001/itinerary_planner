@@ -33,6 +33,29 @@ def test_protocols() -> None:
     assert isinstance(OpenMeteoWeather(client), WeatherProvider)
 
 
+def gr(gid: int, name: str, lat: float, lng: float, cc: str, tz: str, pop: int | None, admin1: str = "") -> dict[str, Any]:
+    out: dict[str, Any] = {"id": gid, "name": name, "latitude": lat, "longitude": lng, "country_code": cc,
+                           "timezone": tz, "admin1": admin1}
+    if pop is not None:
+        out["population"] = pop
+    return out
+
+
+BANGALORE_TOWN_PK = gr(1183880, "Bangalore Town", 24.8817, 67.0844, "PK", "Asia/Karachi", None, "Sindh")
+BENGALURU = gr(1277333, "Bengaluru", 12.97194, 77.59369, "IN", "Asia/Kolkata", 8443675, "Karnataka")
+MUMBAI = gr(1275339, "Mumbai", 19.07283, 72.88261, "IN", "Asia/Kolkata", 12691836, "Maharashtra")
+NEW_DELHI = gr(1261481, "New Delhi", 28.63576, 77.22445, "IN", "Asia/Kolkata", 317797, "Delhi")
+DELHI = gr(1273294, "Delhi", 28.65195, 77.23149, "IN", "Asia/Kolkata", 10927986, "Delhi")
+DELHI_CA = gr(5940956, "Delhi", 42.85341, -80.49971, "CA", "America/Toronto", 4000, "Ontario")
+
+
+def geo_route(mock: respx.MockRouter, name: str, results: list[dict[str, Any]], country: str | None = None
+              ) -> respx.Route:
+    params = {"name": name, **({"countryCode": country} if country else {})}
+    return mock.get(GEOCODE_URL, params=params).mock(return_value=httpx.Response(200, json={"results": results}
+                                                                                if results else {}))
+
+
 async def test_geocode_maps_results_to_locations() -> None:
     with respx.mock(assert_all_called=True) as mock:
         route = mock.get(GEOCODE_URL).mock(return_value=httpx.Response(200, json={
@@ -40,42 +63,118 @@ async def test_geocode_maps_results_to_locations() -> None:
         async with httpx.AsyncClient() as client:
             res = await OpenMeteoGeocoder(client).resolve("Bengaluru")
     params = route.calls.last.request.url.params
-    assert (params["name"], params["count"], params["language"], params["format"]) == ("Bengaluru", "5", "en", "json")
+    assert (params["name"], params["count"], params["language"], params["format"]) == ("Bengaluru", "10", "en", "json")
+    assert params["countryCode"] == "IN"
     [loc] = res  # the malformed second result (no timezone) is dropped
     assert loc == Location(id="geonames:1277333", name="Bengaluru", country_code="IN", admin1="Karnataka",
                            lat=12.97194, lng=77.59369, timezone="Asia/Kolkata", currency="INR", population=8443675)
 
 
-async def test_geocode_falls_back_to_alias_when_nothing_matches() -> None:
-    with respx.mock(assert_all_called=True) as mock:
-        first = mock.get(GEOCODE_URL, params={"name": "Bangalore"}).mock(
-            return_value=httpx.Response(200, json={"generationtime_ms": 0.5}))
-        second = mock.get(GEOCODE_URL, params={"name": "Bengaluru"}).mock(
-            return_value=httpx.Response(200, json={"results": [geo_result()]}))
+async def test_bangalore_resolves_to_bengaluru_india_not_pakistan() -> None:
+    """Live Open-Meteo returns only "Bangalore Town, PK" for "Bangalore"; the gazetteer steers it to India."""
+    with respx.mock(assert_all_called=False) as mock:
+        in_bangalore = geo_route(mock, "Bangalore", [], "IN")
+        in_bengaluru = geo_route(mock, "Bengaluru", [BENGALURU], "IN")
+        pk = geo_route(mock, "Bangalore", [BANGALORE_TOWN_PK])  # what a country-less query returns (live)
         async with httpx.AsyncClient() as client:
             res = await OpenMeteoGeocoder(client).resolve("Bangalore")
-    assert first.called and second.called
-    assert [r.id for r in res] == ["geonames:1277333"]
+    assert [(r.id, r.country_code, r.currency, r.timezone) for r in res] == [
+        ("geonames:1277333", "IN", "INR", "Asia/Kolkata")]
+    assert in_bangalore.called and in_bengaluru.called and not pk.called
 
 
-async def test_geocode_unknown_city_and_country_hint() -> None:
-    with respx.mock() as mock:
+async def test_wrong_country_results_are_ignored_for_a_gazetteer_city() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(GEOCODE_URL).mock(return_value=httpx.Response(200, json={"results": [BANGALORE_TOWN_PK]}))
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("bangalore")
+    # nothing usable from the API (wrong country for every spelling): the gazetteer entry is returned
+    assert [(r.id, r.country_code, r.timezone, r.currency) for r in res] == [
+        ("gazetteer:bangalore", "IN", "Asia/Kolkata", "INR")]
+    assert (res[0].lat, res[0].lng) == (12.9716, 77.5946)
+
+
+async def test_bombay_resolves_to_mumbai() -> None:
+    dharavi = gr(1272866, "Dharavi", 19.0402, 72.8550, "IN", "Asia/Kolkata", 1000000, "Maharashtra")
+    with respx.mock(assert_all_called=True) as mock:
+        geo_route(mock, "Bombay", [dharavi], "IN")  # live Open-Meteo returns nearby places, not the city
+        geo_route(mock, "Mumbai", [MUMBAI], "IN")
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("Bombay")
+    assert [(r.name, r.country_code, r.currency) for r in res] == [("Mumbai", "IN", "INR")]
+
+
+async def test_delhi_prefers_the_exact_name_and_india() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        geo_route(mock, "Delhi", [NEW_DELHI, DELHI_CA, DELHI], "IN")  # defensive: a CA row slipped through
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("delhi")
+    assert [(r.id, r.name, r.country_code) for r in res] == [
+        ("geonames:1273294", "Delhi", "IN"), ("geonames:1261481", "New Delhi", "IN")]
+
+
+async def test_country_hint_overrides_the_gazetteer() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.get(GEOCODE_URL, params={"name": "Delhi", "countryCode": "CA"}).mock(
+            return_value=httpx.Response(200, json={"results": [DELHI_CA]}))
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("Delhi, Canada")
+    assert route.called and [(r.country_code, r.currency) for r in res] == [("CA", "CAD")]
+
+
+async def test_world_city_in_the_gazetteer() -> None:
+    paris_fr = gr(2988507, "Paris", 48.85341, 2.3488, "FR", "Europe/Paris", 2138551, "Île-de-France")
+    with respx.mock(assert_all_called=False) as mock:
+        route = geo_route(mock, "Paris", [paris_fr], "FR")
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("Paris, France")
+    assert route.called and [(r.name, r.country_code, r.currency) for r in res] == [("Paris", "FR", "EUR")]
+
+
+async def test_world_city_outside_the_gazetteer_is_ranked() -> None:
+    results = [
+        gr(4409896, "Springfield", 37.21533, -93.29824, "US", "America/Chicago", 166810, "Missouri"),
+        gr(9999999, "Springfield Gardens", 40.6632, -73.7621, "US", "America/New_York", 900000, "New York"),
+        gr(4951788, "Springfield", 42.10148, -72.58981, "US", "America/New_York", 153606, "Massachusetts"),
+        gr(4250542, "Springfield", 39.80172, -89.64371, "US", "America/Chicago", 116565, "Illinois"),
+    ]
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.get(GEOCODE_URL, params={"name": "Springfield"}).mock(
+            return_value=httpx.Response(200, json={"results": list(reversed(results))}))
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("Springfield")
+            massachusetts = await OpenMeteoGeocoder(client).resolve("Springfield, Massachusetts")
+    assert "countryCode" not in route.calls[0].request.url.params
+    assert [r.admin1 for r in res] == ["Missouri", "Massachusetts", "Illinois", "New York"]  # exact, then population
+    assert [r.admin1 for r in massachusetts] == ["Massachusetts"]
+
+
+async def test_unknown_city() -> None:
+    with respx.mock(assert_all_called=True) as mock:
         mock.get(GEOCODE_URL, params={"name": "Atlantisville"}).mock(return_value=httpx.Response(200, json={}))
-        mock.get(GEOCODE_URL, params={"name": "London"}).mock(return_value=httpx.Response(200, json={"results": [
-            geo_result(id=2643743, name="London", country_code="GB", admin1="England", timezone="Europe/London",
-                       latitude=51.50853, longitude=-0.12574),
-            geo_result(id=6058560, name="London", country_code="CA", admin1="Ontario", timezone="America/Toronto",
-                       latitude=42.98339, longitude=-81.23304),
-        ]}))
         async with httpx.AsyncClient() as client:
             geo = OpenMeteoGeocoder(client)
             assert await geo.resolve("Atlantisville") == []
-            both = await geo.resolve("London")
-            assert [r.currency for r in both] == ["GBP", "CAD"]
-            canada = await geo.resolve("London, Ontario")
-            assert [r.country_code for r in canada] == ["CA"]
             assert await geo.resolve("x") == []
             assert await geo.resolve("   ") == []
+
+
+async def test_non_gazetteer_alias_fallback() -> None:
+    with respx.mock(assert_all_called=True) as mock:
+        first = mock.get(GEOCODE_URL, params={"name": "Belgaum"}).mock(return_value=httpx.Response(200, json={}))
+        second = mock.get(GEOCODE_URL, params={"name": "Belagavi"}).mock(return_value=httpx.Response(200, json={
+            "results": [gr(1276533, "Belagavi", 15.85212, 74.50447, "IN", "Asia/Kolkata", 488157, "Karnataka")]}))
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("Belgaum")
+    assert first.called and second.called and [r.name for r in res] == ["Belagavi"]
+
+
+async def test_gazetteer_city_survives_a_geocoder_outage() -> None:
+    with respx.mock() as mock:
+        mock.get(GEOCODE_URL).mock(return_value=httpx.Response(503))
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("Mumbai")
+    assert [(r.id, r.country_code, r.timezone) for r in res] == [("gazetteer:mumbai", "IN", "Asia/Kolkata")]
 
 
 @pytest.mark.parametrize(("status", "retryable"), [(500, True), (429, True), (400, False)])
@@ -84,7 +183,7 @@ async def test_geocode_errors_raise(status: int, retryable: bool) -> None:
         mock.get(GEOCODE_URL).mock(return_value=httpx.Response(status))
         async with httpx.AsyncClient() as client:
             with pytest.raises(ProviderError) as info:
-                await OpenMeteoGeocoder(client).resolve("Mumbai")
+                await OpenMeteoGeocoder(client).resolve("Springfield")
     assert info.value.retryable is retryable
 
 
@@ -93,7 +192,7 @@ async def test_geocode_timeout() -> None:
         mock.get(GEOCODE_URL).mock(side_effect=httpx.ConnectTimeout("slow"))
         async with httpx.AsyncClient() as client:
             with pytest.raises(ProviderError) as info:
-                await OpenMeteoGeocoder(client).resolve("Mumbai")
+                await OpenMeteoGeocoder(client).resolve("Springfield")
     assert info.value.code == "timeout" and info.value.retryable
 
 
@@ -164,11 +263,23 @@ async def test_forecast_network_error_is_unavailable(locations: dict[str, Locati
 @pytest.mark.live
 @pytest.mark.skipif(not os.environ.get("RUN_LIVE"), reason="needs RUN_LIVE=1 and network")
 async def test_live_open_meteo() -> None:
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(headers={"User-Agent": "SaturdayPlanner/0.1"}) as client:
         [blr, *_] = await OpenMeteoGeocoder(client).resolve("Bangalore")
-        assert blr.timezone == "Asia/Kolkata" and blr.currency == "INR"
+        assert blr.country_code == "IN" and blr.timezone == "Asia/Kolkata" and blr.currency == "INR"
+        assert abs(blr.lat - 12.97) < 0.3 and abs(blr.lng - 77.59) < 0.3
         w = await OpenMeteoWeather(client).forecast(blr, date.today())
     assert w.status == "ok" and w.sunset_min is not None
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("RUN_LIVE"), reason="needs RUN_LIVE=1 and network")
+async def test_live_bangalore_resolves_to_india() -> None:
+    async with httpx.AsyncClient(headers={"User-Agent": "SaturdayPlanner/0.1"}) as client:
+        geo = OpenMeteoGeocoder(client)
+        [blr, *_] = await geo.resolve("Bangalore")
+        [bom, *_] = await geo.resolve("Bombay")
+    assert (blr.country_code, blr.currency) == ("IN", "INR") and blr.id.startswith(("geonames:", "gazetteer:"))
+    assert (bom.country_code, bom.currency) == ("IN", "INR")
 
 
 @pytest.mark.parametrize("payload", [[], "nope", {"results": "nope"}, {"results": {"id": 1}}])
@@ -177,16 +288,17 @@ async def test_geocode_unexpected_shapes_raise_provider_error(payload: Any) -> N
         mock.get(GEOCODE_URL).mock(return_value=httpx.Response(200, json=payload))
         async with httpx.AsyncClient() as client:
             with pytest.raises(ProviderError) as info:
-                await OpenMeteoGeocoder(client).resolve("Mumbai")
+                await OpenMeteoGeocoder(client).resolve("Springfield")
     assert info.value.code == "bad_response"
 
 
 async def test_geocode_skips_odd_results() -> None:
-    odd = [geo_result(latitude="north"), "string", geo_result(country_code=7), geo_result(id=99, name="Good")]
+    odd = [geo_result(latitude="north"), "string", geo_result(country_code=7),
+           geo_result(id=99, name="Goodtown", country_code="US", timezone="America/Chicago")]
     with respx.mock() as mock:
         mock.get(GEOCODE_URL).mock(return_value=httpx.Response(200, json={"results": odd}))
         async with httpx.AsyncClient() as client:
-            res = await OpenMeteoGeocoder(client).resolve("Good")
+            res = await OpenMeteoGeocoder(client).resolve("Goodtown")
     assert [r.id for r in res] == ["geonames:99"]
 
 
@@ -197,3 +309,12 @@ async def test_forecast_unexpected_shapes_are_unavailable(locations: dict[str, L
         async with httpx.AsyncClient() as client:
             w = await OpenMeteoWeather(client).forecast(locations["blr"], SAT)
     assert w.status == "unavailable"
+
+
+async def test_nearby_places_with_other_names_fall_back_to_the_gazetteer() -> None:
+    sion = gr(1256113, "Sion", 19.0390, 72.8619, "IN", "Asia/Kolkata", 50000, "Maharashtra")
+    with respx.mock() as mock:
+        mock.get(GEOCODE_URL).mock(return_value=httpx.Response(200, json={"results": [sion]}))
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("Bombay")
+    assert [(r.id, r.name) for r in res] == [("gazetteer:mumbai", "Mumbai")]

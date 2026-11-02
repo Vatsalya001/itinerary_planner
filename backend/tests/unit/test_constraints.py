@@ -108,3 +108,8 @@ def test_negates_all_diets():
     assert negates_all_diets("I'm not vegetarian")
     assert not negates_all_diets("I'm vegetarian, not vegan")
     assert not negates_all_diets("no non-veg")
+
+
+@pytest.mark.parametrize("text", ["no need for wheelchair access", "wheelchair not needed", "I don't need step-free access"])
+def test_negated_access_is_not_a_constraint(text):
+    assert keys(text) == []

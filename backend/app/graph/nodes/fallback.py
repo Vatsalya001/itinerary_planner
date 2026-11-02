@@ -5,8 +5,9 @@ the default searches run through the shared pipeline (snapshot fallback included
 the union. No plan -> explain_infeasible (or an honest "place data unavailable" when nothing could be
 searched). Every plan is re-validated with the same checks as an agent plan.
 
-Before any of that, when the agent loop stopped for time (timeout, deadline or turn cap) and its last
-check_plan draft had no errors, that draft is re-validated and used (status complete, mode agent). The reason
+Before any of that, when the agent loop stopped for time (timeout, deadline, turn cap) or ended text-only after
+its nudge, and its latest check_plan draft had no errors, that draft is re-validated and used (status
+complete, mode agent, with a note saying so). The reason
 the agent stopped is reported here, once, with wording that matches what actually happened.
 """
 
@@ -21,7 +22,7 @@ from app.domain.infeasible import explain_infeasible
 from app.domain.parser_rules import default_queries
 from app.domain.schemas import PlanDraft, ValidationReport
 from app.domain.validator import validate_plan
-from app.graph.nodes.common import AGENT_NO_SUBMIT, AGENT_USED_CHECKED_DRAFT, TIME_STOPS, degrade, tracer_of
+from app.graph.nodes.common import AGENT_NO_SUBMIT, SALVAGE_NOTES, degrade, tracer_of
 from app.graph.state import PlannerState, RunContext, dump, get_constraints, get_ctx, get_ledger, get_prefs
 from app.graph.tools import violation_dicts
 from app.llm.registry import is_baseline
@@ -29,9 +30,10 @@ from app.pipeline import PLACES_UNAVAILABLE, search_events, search_places
 
 
 def _checked_draft_report(state: PlannerState, rc: RunContext) -> tuple[PlanDraft, ValidationReport] | None:
-    """The agent's last check_plan draft, re-validated now, when the loop stopped for time (D-P2-10)."""
+    """The agent's latest check_plan draft (only kept when that check had no errors), re-validated now, when
+    the loop stopped for time, at the turn cap or with a text-only reply after its nudge (D-P2-10)."""
     raw = state.get("checked_draft")
-    if not raw or state.get("agent_stop") not in TIME_STOPS:
+    if not raw or state.get("agent_stop") not in SALVAGE_NOTES:
         return None
     draft = PlanDraft.model_validate(raw)
     report = validate_plan(draft, get_ledger(state), get_ctx(state), get_prefs(state),
@@ -62,7 +64,8 @@ async def fallback_planner(state: PlannerState, runtime: Runtime[RunContext]) ->
         if salvaged is not None and salvaged[1].ok:
             info["summary"] = f"used the agent's checked draft ({len(salvaged[0].stops)} stop(s))"
             info["data"] = {"ledger_size": len(ledger), "source": "agent_checked_draft"}
-            return {"degradations": degrade(tracer, "fallback_planner", AGENT_USED_CHECKED_DRAFT, stop=stop),
+            note = SALVAGE_NOTES[str(stop)]
+            return {"degradations": degrade(tracer, "fallback_planner", note, stop=stop),
                     "final": {"status": "complete", "mode": "agent", "draft": dump(salvaged[0])},
                     "route": "finalize"}
 

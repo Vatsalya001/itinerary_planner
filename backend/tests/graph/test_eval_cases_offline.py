@@ -296,13 +296,16 @@ async def test_invalid_submission_then_repair_exhausted() -> None:
 
 
 async def test_agent_ends_without_submit() -> None:
+    from app.graph.nodes.common import AGENT_CHECKED_NOT_SUBMITTED
+
     result, events, _ = await run_case("agent_ends_without_submit")
     assert_trace_integrity(events)
     assert result.status in {"complete", "fallback"}
-    assert result.status == "fallback" and result.mode == "deterministic"
-    assert finalize_data(events)["nudges"] == 1
-    assert AGENT_NO_SUBMIT in result.degradations
-    assert result.plan is not None and "Enjoy" not in result.plan.summary_note
+    # one nudge, then the draft that already passed check_plan is re-validated and used (never the free text)
+    assert result.status == "complete" and result.mode == "agent"
+    assert finalize_data(events)["nudges"] == 1 and finalize_data(events)["submit_attempts"] == 0
+    assert result.degradations == [AGENT_CHECKED_NOT_SUBMITTED]
+    assert "Here is my plan" not in events_json(events)
     assert_plan_sound(result)
 
 

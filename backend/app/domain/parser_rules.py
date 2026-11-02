@@ -1216,7 +1216,7 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
         interests = r.interests
     else:  # the model may only name interests the user's own words support
         interests = _grounded_interests(m.interests, r.interests, request) or r.interests
-    llm_hard = [c for c in m.hard_constraints if is_valid(c)]
+    llm_hard = _supported_llm_constraints(m.hard_constraints, request)
     hard = _without_relaxed(merge_constraints(r.hard_constraints, original_constraints(request), llm_hard), request)
     if request.group_size != 1:
         group = request.group_size
@@ -1237,9 +1237,94 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     )
     return ParseOutcome(
         preferences=prefs, missing=_missing(city, budget, minutes_found),
-        unmapped_constraints=_dedupe([*rules.unmapped_constraints, *llm.unmapped_constraints]),
+        unmapped_constraints=[u for u in _dedupe([*rules.unmapped_constraints, *llm.unmapped_constraints])
+                              if not any(_clause_supports(c, u) for c in llm_hard)],  # the model mapped it
         conflicts=detect_conflicts(hard), budget_currency_explicit=explicit, source="llm",
     )
+
+
+# Textual support for constraints a model adds. A model constraint is kept only when the user's own words (free text
+# or structured constraints, never instruction-like sentences) back it: either the rules mapping already yields it,
+# or this per-key lexicon matches without negation. Unsupported model constraints are dropped silently.
+_LLM_NEGATED_BEFORE = re.compile(r"\b(?:no|not|don'?t|doesn'?t|never|without)\b[^,;]{0,20}$", re.IGNORECASE)
+_INCLUDE_CUE = re.compile(r"\b(?:include|including|must|want|wanna|need|have\s+to|has\s+to|make\s+sure|definitely"
+                          r"|should\s+have|would\s+love|really\s+want|insist)\b", re.IGNORECASE)
+_AVOID_CUE = re.compile(r"\b(?:no|avoid|skip|not|without|hate|don'?t\s+want|nothing|except|away\s+from|stay\s+away)\b",
+                        re.IGNORECASE)
+_SUPPORT_POSITIVE: dict[str, str] = {  # key -> words that support it when not negated
+    "diet:vegetarian": r"(?<!non[- ])(?<!non)\b(?:pure[- ]?)?veg(?:etarian|gie)?\b|\bno\s+(?:meat|non[- ]?veg)\b"
+                       r"|\bmeat[- ]free\b",
+    "diet:vegan": r"\bvegan\b|\bplant[- ]based\b|\bdairy[- ]free\b|\bno\s+dairy\b",
+    "diet:jain": r"\bjain\b",
+    "access:wheelchair": r"\bwheel\s?chair|\bstep[- ]free\b|\bmobility\b|\bdisab(?:led|ility)\b|\bwalker\b|\bcrutches\b",
+    "crowd:avoid": r"\buncrowded\b|\bquiet\s+(?:place|spot|area)s?\b|\bpeaceful\b|\bcalm\s+(?:place|spot)s?\b",
+    "setting:indoors_only": r"\bindoors?\s+only\b|\bonly\s+indoors?\b|\binside\s+only\b|\bstay(?:ing)?\s+(?:in|inside"
+                            r"|indoors)\b|\bjust\s+indoors?\b|\bnothing\s+outdoors?\b|\bno\s+outdoor",
+    "setting:outdoors_only": r"\boutdoors?\s+only\b|\bonly\s+outdoors?\b|\boutside\s+only\b|\bjust\s+outdoors?\b"
+                             r"|\bnothing\s+indoors?\b|\bno\s+indoor|\bopen[- ]air\s+only\b",
+    "alcohol:avoid": r"\bsober\b|\bteetotal(?:er|ler)?\b|\balcohol[- ]free\b|\bdon'?t\s+drink\b|\bno\s+(?:alcohol"
+                     r"|drinks|booze)\b",
+}
+_SUPPORT_AVOID_WORDS: dict[str, str] = {  # key -> words that support it after an avoid cue in the same clause
+    "crowd:avoid": r"\bcrowd(?:s|ed)?\b|\bbusy\b|\bpacked\b|\brush\b",
+    "alcohol:avoid": r"\balcohol\b|\bdrinks?\b|\bdrinking\b|\bbooze\b|\bbars?\b|\bpubs?\b",
+    "access:wheelchair": r"\bstairs\b|\bsteps\b",
+}
+_TARGET_WORDS: dict[str, str] = {  # must_include / must_avoid value -> words for it
+    "sit_down_meal": r"\bsit[- ]down\b|\bmeal\b|\blunch\b|\bdinner\b|\brestaurant\b",
+    "outdoor_walk": r"\bwalks?\b|\bstroll\b", "live_music": r"\blive\s+music\b|\bgigs?\b|\bconcerts?\b|\bbands?\b",
+    "coffee": r"\bcoffee\b|\bcaf[eé]s?\b", "museum": r"\bmuseums?\b",
+    "art": r"\bart(?:s|sy|y|istic)?\b|\bgaller(?:y|ies)\b|\bexhibitions?\b", "books": r"\bbook",
+    "park": r"\bparks?\b|\bgardens?\b", "event": r"\bevents?\b|\bshows?\b|\bfestivals?\b|\bconcerts?\b",
+    "shopping": r"\bshop(?:s|ping)?\b|\bmarkets?\b|\bmalls?\b", "dessert": r"\bdesserts?\b|\bice\s?creams?\b|\bsweets\b",
+    "mall": r"\bmalls?\b", "bar": r"\bbars?\b|\bpubs?\b", "brewery": r"\bbrewer(?:y|ies)\b|\bmicrobrewer",
+    "market": r"\bmarkets?\b|\bbazaars?\b", "cinema": r"\bcinemas?\b|\bmovies?\b|\bfilms?\b",
+    "alcohol": r"\balcohol\b|\bdrinks?\b|\bbooze\b",
+}
+
+
+def _user_constraint_texts(request: PlanRequest) -> tuple[list[str], list[str]]:
+    """(sources, clauses): structured constraint entries and free-text sentences, and their clauses. Instruction-like
+    text is excluded."""
+    sources = [e for e in request.constraints if not _is_instruction_like(e)]
+    sources += [s for s in _sentences(_normalize_text(request.free_text)) if not _is_instruction_like(s)]
+    clauses = [c.strip() for source in sources
+               for c in re.split(r"[,;]|\s+(?:but|then|also|plus)\s+", source, flags=re.IGNORECASE) if c.strip()]
+    return sources, clauses
+
+
+def _clause_supports(c: Constraint, clause: str) -> bool:
+    low = clause.lower()
+    if c.key in {x.key for x in map_constraint_text(clause)}:
+        return True
+    if c.kind == "diet" and diet_negated(low, c.value):
+        return False
+    positive = _SUPPORT_POSITIVE.get(c.key)
+    if positive:
+        for m in re.finditer(positive, low):
+            if c.kind == "diet" or not _LLM_NEGATED_BEFORE.search(low[:m.start()]):
+                return True
+    avoid_words = _SUPPORT_AVOID_WORDS.get(c.key)
+    if avoid_words:
+        for m in re.finditer(avoid_words, low):
+            if _AVOID_CUE.search(low[:m.start()]):
+                return True
+    if c.kind in ("must_include", "must_avoid") and c.value in _TARGET_WORDS:
+        cue = _INCLUDE_CUE if c.kind == "must_include" else _AVOID_CUE
+        for m in re.finditer(_TARGET_WORDS[c.value], low):
+            before = low[:m.start()]
+            if cue.search(before) and (c.kind == "must_avoid" or not _LLM_NEGATED_BEFORE.search(before)):
+                return True
+    return False
+
+
+def _supported_llm_constraints(constraints: list[Constraint], request: PlanRequest) -> list[Constraint]:
+    """Model-proposed hard constraints that the user's own words support: the rules mapping of a whole sentence or
+    entry yields it, or the per-key lexicon matches inside one clause (cues never reach across clauses)."""
+    sources, clauses = _user_constraint_texts(request)
+    mapped = {x.key for source in sources for x in map_constraint_text(source)}
+    return [c for c in constraints
+            if is_valid(c) and (c.key in mapped or any(_clause_supports(c, clause) for clause in clauses))]
 
 
 def _grounded_interests(llm_interests: list[str], rules_interests: list[str], request: PlanRequest) -> list[str]:

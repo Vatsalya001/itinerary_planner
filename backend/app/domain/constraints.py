@@ -59,11 +59,22 @@ def map_constraint_text(text: str) -> list[Constraint]:
     for pattern, kind, value in _RULES:
         if kind == "diet" and diet_negated(lowered, value):
             continue
+        if kind == "access" and _access_negated(lowered):
+            continue
         if re.search(pattern, lowered):
             c = Constraint(kind=kind, value=value, source_text=text)  # type: ignore[arg-type,unused-ignore]
             if c not in found:
                 found.append(c)
     return _collapse_diets(found)
+
+
+def _access_negated(lowered: str) -> bool:
+    """ "no need for wheelchair access", "wheelchair not needed", "don't need step-free" """
+    access = r"(wheel ?chair|step[- ]free|accessib\w*|disabled access)"
+    return bool(
+        re.search(rf"\b(no need for|don'?t need|do not need|not need|no)\s+(a\s+|any\s+)?{access}", lowered)
+        or re.search(rf"{access}\s+(access\s+)?(is\s+)?(not|isn'?t)\s+(needed|required|necessary)", lowered)
+    )
 
 
 _DIET_WORDS = {"vegetarian": r"(veg|vegetarian|veggie)", "vegan": r"vegan", "jain": r"jain"}

@@ -168,3 +168,10 @@ async def test_structured_output_written_as_text_is_recovered() -> None:
     assert out["parsed"].city == "Pune" and out["model_id"] == "ollama:qwen3.5:9b"
     with pytest.raises(registry.StructuredOutputError):
         tag({"raw": AIMessage(content="no json here"), "parsed": None, "parsing_error": None})
+
+
+def test_every_ollama_row_caps_output_tokens() -> None:
+    settings = fixture_settings()
+    for model_id in ("ollama:qwen3.5:9b", "ollama:gemma4:e4b", "ollama:granite4:tiny-h", "ollama:llama3.2:3b"):
+        model = get_chat_model(model_id, "agent", settings)
+        assert isinstance(model, ChatOllama) and model.num_predict == 2048, model_id

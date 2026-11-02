@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import date, datetime
+from functools import lru_cache
 from typing import Any
 
 import httpx
+import yaml
 
-from app.domain.categories import currency_for_country
+from app.domain.categories import DATA_DIR, currency_for_country, load_countries
+from app.domain.parser_rules import GazPlace, lookup_place
 from app.domain.schemas import Location, Weather
 from app.providers.base import ProviderError
-from app.providers.normalize import weather_summary
+from app.providers.normalize import haversine_m, weather_summary
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +34,90 @@ CITY_ALIASES: dict[str, str] = {
     "allahabad": "Prayagraj", "simla": "Shimla", "belgaum": "Belagavi", "hubli": "Hubballi", "nyc": "New York",
     "new york city": "New York", "sf": "San Francisco",
 }
+
+
+GAZETTEER_MATCH_KM = 50.0  # a geocoder result this close to the gazetteer centre is the same city
+MAX_GAZETTEER_QUERIES = 3
+
+# Country words a user may add after a comma ("Bangalore, India"). Two-letter codes are accepted as-is.
+COUNTRY_WORDS: dict[str, str] = {
+    "india": "IN", "uk": "GB", "united kingdom": "GB", "england": "GB", "britain": "GB", "great britain": "GB",
+    "scotland": "GB", "wales": "GB", "usa": "US", "united states": "US", "america": "US", "uae": "AE",
+    "united arab emirates": "AE", "singapore": "SG", "germany": "DE", "france": "FR", "netherlands": "NL",
+    "holland": "NL", "spain": "ES", "italy": "IT", "japan": "JP", "australia": "AU", "canada": "CA",
+    "ireland": "IE", "portugal": "PT", "austria": "AT", "czechia": "CZ", "czech republic": "CZ",
+    "switzerland": "CH", "denmark": "DK", "sweden": "SE", "turkey": "TR", "mexico": "MX", "new zealand": "NZ",
+    "qatar": "QA",
+}
+
+
+def _fold(text: str) -> str:
+    """Case- and accent-insensitive comparison key."""
+    plain = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", plain.lower())).strip()
+
+
+def _country_code(hint: str) -> str | None:
+    key = _fold(hint)
+    if not key:
+        return None
+    if len(key) == 2 and key.isalpha():
+        return key.upper()
+    return COUNTRY_WORDS.get(key) or (key.upper() if key.upper() in load_countries() else None)
+
+
+@lru_cache(maxsize=1)
+def _gazetteer_aliases() -> dict[str, list[str]]:
+    """Canonical gazetteer city -> its aliases (data/gazetteer.yaml), for geocoder queries."""
+    raw: dict[str, Any] = yaml.safe_load((DATA_DIR / "gazetteer.yaml").read_text(encoding="utf-8")) or {}
+    return {str(name): [str(a) for a in (info.get("aliases") or [])] for name, info in (raw.get("cities") or {}).items()}
+
+
+def gazetteer_city(name: str) -> GazPlace | None:
+    """The gazetteer city for a city name or alias; a neighbourhood resolves to its city. None if unknown."""
+    place = lookup_place(name)
+    if place is None:
+        return None
+    if not place.is_city:
+        parent = lookup_place(place.city)
+        return parent if parent is not None and parent.is_city else None
+    return place
+
+
+def _query_names(typed: str, place: GazPlace) -> list[str]:
+    """Names to send to the geocoder, in gazetteer spelling: the one the user typed first, then the canonical
+    name, then other aliases. All-caps acronyms (BLR, NYC) are never sent: they match unrelated places."""
+    known = [place.name, *_gazetteer_aliases().get(place.name, [])]
+    typed_key = _fold(typed)
+    known.sort(key=lambda n: _fold(n) != typed_key)  # stable: the typed spelling first
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in known:
+        name = name.strip()
+        if len(name) < 3 or (name.isupper() and len(name) <= 5) or _fold(name) in seen:
+            continue
+        seen.add(_fold(name))
+        out.append(name)
+    return out
+
+
+def location_from_gazetteer(place: GazPlace) -> Location:
+    slug = re.sub(r"[^a-z0-9]+", "-", _fold(place.name)).strip("-")
+    return Location(
+        id=f"gazetteer:{slug}",
+        name=place.name,
+        country_code=place.country_code,
+        lat=place.lat,
+        lng=place.lng,
+        timezone=place.timezone,
+        currency=currency_for_country(place.country_code),
+    )
+
+
+def rank_locations(results: list[Location], names: list[str]) -> list[Location]:
+    """Exact (case/accent-insensitive) name matches first, then larger population; stable otherwise."""
+    wanted = {_fold(n) for n in names}
+    return sorted(results, key=lambda r: (_fold(r.name) not in wanted, -(r.population or 0)))
 
 
 def _unavailable() -> Weather:
@@ -69,8 +157,10 @@ class OpenMeteoGeocoder:
     def __init__(self, client: httpx.AsyncClient) -> None:
         self._client = client
 
-    async def _search(self, name: str) -> list[Location]:
-        params: dict[str, str | int] = {"name": name, "count": 5, "language": "en", "format": "json"}
+    async def _search(self, name: str, country_code: str | None = None) -> list[Location]:
+        params: dict[str, str | int] = {"name": name, "count": 10, "language": "en", "format": "json"}
+        if country_code:
+            params["countryCode"] = country_code
         try:
             resp = await self._client.get(GEOCODE_URL, params=params, timeout=TIMEOUT_S)
         except httpx.TimeoutException as exc:
@@ -98,23 +188,54 @@ class OpenMeteoGeocoder:
                 out.append(loc)
         return out
 
+    async def _resolve_known(self, typed: str, place: GazPlace) -> list[Location]:
+        """A gazetteer city: ask Open-Meteo in that country under each known spelling and accept a result
+        only if it carries one of those names and is the same city (same country, within 50 km of the
+        gazetteer centre); other nearby places ("Dharavi" for "Bombay") are kept only as runners-up.
+        Falls back to a Location built from the gazetteer when no spelling matches or Open-Meteo fails."""
+        names = _query_names(typed, place)
+        wanted = {_fold(n) for n in names}
+        try:
+            for name in names[:MAX_GAZETTEER_QUERIES]:
+                results = await self._search(name, place.country_code)
+                same_city = [
+                    r for r in results
+                    if r.country_code == place.country_code
+                    and haversine_m(r.lat, r.lng, place.lat, place.lng) <= GAZETTEER_MATCH_KM * 1000
+                ]
+                if any(_fold(r.name) in wanted for r in same_city):
+                    return rank_locations(same_city, names)
+        except ProviderError as exc:
+            log.info("open-meteo geocoding failed (%s); using the gazetteer entry", exc.code)
+        return [location_from_gazetteer(place)]
+
     async def resolve(self, city: str) -> list[Location]:
+        """Matching locations, best first. Cities in the shared gazetteer (data/gazetteer.yaml) are resolved
+        in their own country first ("Bangalore" is Bengaluru, India, not Bangalore Town, Pakistan); other
+        names are ranked by exact name match, then population. ``"City, Country"`` narrows the search."""
         text = re.sub(r"\s+", " ", (city or "").strip())
         if not text:
             return []
-        name, _, country_hint = (part.strip() for part in text.partition(","))
+        name, _, hint = (part.strip() for part in text.partition(","))
         if len(name) < 2:
             return []
-        results = await self._search(name)
+        hint_cc = _country_code(hint) if hint else None
+        place = gazetteer_city(name)
+        if place is not None and (not hint or hint_cc == place.country_code):
+            return await self._resolve_known(name, place)
+
+        names = [name]
+        results = await self._search(name, hint_cc)
         if not results:
             alias = CITY_ALIASES.get(name.lower())
             if alias:
-                results = await self._search(alias)
-        if country_hint and results:
-            hint = country_hint.lower()
-            narrowed = [r for r in results if r.country_code.lower() == hint or hint in (r.admin1 or "").lower()]
+                names.append(alias)
+                results = await self._search(alias, hint_cc)
+        if hint and not hint_cc and results:  # a region rather than a country ("London, Ontario")
+            key = _fold(hint)
+            narrowed = [r for r in results if key in _fold(r.admin1 or "")]
             results = narrowed or results
-        return results
+        return rank_locations(results, names)
 
 
 def _local_minutes(value: Any, day: date) -> int | None:
