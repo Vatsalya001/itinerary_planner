@@ -70,7 +70,8 @@ def build_deps(settings: Settings, http: httpx.AsyncClient | None = None) -> Dep
         case "google":
             from app.providers.google_places import GooglePlaces
 
-            assert settings.google_maps_api_key is not None and client is not None
+            if settings.google_maps_api_key is None or client is None:
+                raise ValueError("PLACES_PROVIDER=google needs GOOGLE_MAPS_API_KEY (or use auto/osm_snapshot)")
             places = GooglePlaces(settings.google_maps_api_key.get_secret_value(), client)
         case "fixture":
             places = FixturePlaces()
@@ -82,7 +83,8 @@ def build_deps(settings: Settings, http: httpx.AsyncClient | None = None) -> Dep
         case "tavily":
             from app.providers.events_web import TavilyEvents
 
-            assert settings.tavily_api_key is not None and client is not None
+            if settings.tavily_api_key is None or client is None:
+                raise ValueError("EVENTS_PROVIDER=tavily needs TAVILY_API_KEY (or use auto/none)")
             events = TavilyEvents(settings.tavily_api_key.get_secret_value(), client)
         case "fixture":
             events = FixtureEvents()

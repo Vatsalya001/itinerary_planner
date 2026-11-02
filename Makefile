@@ -1,8 +1,8 @@
 # Perfect Saturday Planner developer commands. Run `make` (or `make help`) to list them.
 # Written for GNU make 3.81 (the version macOS ships) and bash. Needs uv and Node.js 22+.
 #
-# Configuration: backend/.env (copy .env.example). dev, serve and eval pass it to `uv run --env-file`, so keys
-# that config.py does not declare (ANTHROPIC_API_KEY, ...) reach the process; your shell's variables win.
+# Configuration: backend/.env (copy .env.example). dev, serve and eval also pass it to `uv run --env-file`;
+# the app itself exports provider keys from it at startup (Settings.export_provider_env). Shell variables win.
 # test and lint do not export it (tests build their own settings), so they behave the same here and in CI.
 
 SHELL := /bin/bash
@@ -21,6 +21,9 @@ PORT ?= 8000
 WEB_PORT ?= 5173
 # Extra arguments for pytest (test) or the eval runner (eval, eval-offline), e.g. ARGS="-k validator"
 ARGS ?=
+# Output directory for eval-offline (default: git-ignored scratch, so local runs don't touch committed results).
+# Use OUT=evals/results to record an official offline session.
+OUT ?= evals/results/tmp
 
 # Evals (the harness lives in backend/evals/)
 SUITE ?= models
@@ -116,7 +119,7 @@ endef
 
 eval-offline: ## Offline eval suite (scripted fake model, frozen world; what CI runs)
 	$(call require_eval,runner)
-	cd $(BACKEND) && $(UV_RUN) python -m evals.runner --suite offline $(ARGS)
+	cd $(BACKEND) && $(UV_RUN) python -m evals.runner --suite offline --out $(OUT) $(ARGS)
 
 eval: ## Model evals on the frozen world: make eval MODELS=ollama:gemma4:e4b,anthropic:claude-opus-5-5 REPEATS=3
 	$(call require_eval,runner)
