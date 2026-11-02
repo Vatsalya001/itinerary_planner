@@ -5,6 +5,11 @@ every case of its suite, else the latest), and writes
 ``<results>/summary.json`` (the /evals page contract: ``{generated_at, git_sha, rows, categories}``, extended only
 additively) and ``docs/EVAL_REPORT.md``. Every number is computed from the JSONL records; nothing is typed by hand.
 ``--publish`` also stores the summary through app.store (``DATABASE_URL``) so a deployed /evals page can serve it.
+
+Older records: every record is read through ``evals.metrics.upgrade_record``, which accepts every schema up to
+``evals.RECORD_SCHEMA`` (fields a schema did not record read as "not recorded"); records from a newer schema are
+skipped with a warning. ``summary.record_schemas`` counts the versions read and the provenance table shows each row's
+schema.
 """
 
 from __future__ import annotations
@@ -18,9 +23,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from evals import DATE_DIR, REPORT_PATH, RESULTS_DIR
+from evals import DATE_DIR, RECORD_SCHEMA, REPORT_PATH, RESULTS_DIR
 from evals.cases import load_cases, load_spec
-from evals.metrics import by_category, by_split, failures, model_metrics, run_records
+from evals.metrics import (
+    HARNESS_EXCEPTION,
+    by_category,
+    by_split,
+    failures,
+    model_metrics,
+    record_schema,
+    run_records,
+    upgrade_record,
+)
 
 KIND_ORDER = {"baseline": 0, "api": 1, "local": 2, "fake": 3}
 FAILURE_EXAMPLES_PER_MODEL = 40
@@ -32,9 +46,11 @@ FAILURE_EXAMPLES_PER_MODEL = 40
 
 
 def load_records(results_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    """All records from dated subdirectories (scratch dirs such as tmp/ are ignored), plus warnings."""
+    """All records from dated subdirectories (scratch dirs such as tmp/ are ignored), upgraded to the current schema
+    (``upgrade_record``), plus warnings. Records from a newer schema than this report understands are skipped."""
     records: list[dict[str, Any]] = []
     warnings: list[str] = []
+    newer: dict[str, int] = defaultdict(int)
     if not results_dir.is_dir():
         return records, [f"results directory {results_dir} does not exist"]
     for day in sorted(p for p in results_dir.iterdir() if p.is_dir() and DATE_DIR.match(p.name)):
@@ -47,8 +63,18 @@ def load_records(results_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
                 except ValueError:
                     warnings.append(f"{path.name}:{lineno}: not JSON, skipped")
                     continue
-                rec["_file"] = f"{day.name}/{path.name}"
-                records.append(rec)
+                if not isinstance(rec, dict):
+                    warnings.append(f"{path.name}:{lineno}: not a record object, skipped")
+                    continue
+                upgraded = upgrade_record(rec)
+                if upgraded is None:
+                    newer[f"{day.name}/{path.name}"] += 1
+                    continue
+                upgraded["_file"] = f"{day.name}/{path.name}"
+                records.append(upgraded)
+    for name, count in sorted(newer.items()):
+        warnings.append(f"{name}: {count} record(s) use a schema newer than {RECORD_SCHEMA}, skipped (update the "
+                        "report code)")
     return records, warnings
 
 
@@ -110,7 +136,7 @@ def _row(recs: list[dict[str, Any]], suite_cases: int | None) -> dict[str, Any]:
     row["suite"] = first.get("suite")
     row["coverage"] = {"cases": row["cases"], "suite_cases": suite_cases,
                        "partial": bool(suite_cases and row["cases"] < suite_cases)}
-    row["provenance"] = {k: first.get(k) for k in ("git_sha", "git_dirty", "prompt_hash", "registry_hash",
+    row["provenance"] = {k: first.get(k) for k in ("schema", "git_sha", "git_dirty", "prompt_hash", "registry_hash",
                                                     "fixture_hash", "eval_cases_hash", "harness_hash")}
     stamps = sorted(str(r.get("timestamp")) for r in recs if r.get("timestamp"))
     row["started_at"], row["finished_at"] = (stamps[0], stamps[-1]) if stamps else (None, None)
@@ -182,11 +208,30 @@ def build_summary(records: list[dict[str, Any]], generated_at: str | None = None
         "superseded_sessions": superseded_sessions(records, runs),
         "not_run": not_run(models_block["rows"], skips),
         "stopped_early": stopped_early(records, all_rows),
+        "harness_exceptions": harness_exceptions(runs),
+        "record_schemas": record_schemas(records),
     }
 
 
+def harness_exceptions(runs: dict[tuple[str, str], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Runs in the sessions shown that the harness could not finish (counted as hard failures in every rate)."""
+    out = [{"suite": r.get("suite"), "model": r.get("model"), "session": r.get("session"), "case": r.get("case"),
+            "repeat": r.get("repeat"), "error": r.get("error"), "timestamp": r.get("timestamp")}
+           for recs in runs.values() for r in recs
+           if r.get("status") == "error" or HARNESS_EXCEPTION in (r.get("error_categories") or [])]
+    return sorted(out, key=lambda e: (str(e["suite"]), str(e["model"]), str(e["case"]), str(e["repeat"])))
+
+
+def record_schemas(records: list[dict[str, Any]]) -> dict[str, int]:
+    """How many records of each schema version were read (older versions are upgraded on load)."""
+    counts: dict[str, int] = defaultdict(int)
+    for r in records:
+        counts[str(record_schema(r))] += 1
+    return dict(sorted(counts.items()))
+
+
 def stopped_early(records: list[dict[str, Any]], rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """--max-minutes stops in the sessions shown, while those sessions are still incomplete."""
+    """Budget stops (--max-minutes or --max-cost-usd) in the sessions shown, while those sessions are incomplete."""
     partial = {(str(r.get("suite")), str(r.get("model")), str(r.get("session"))): r for r in rows
                if (r.get("coverage") or {}).get("partial")}
     latest: dict[tuple[str, str], dict[str, Any]] = {}
@@ -197,7 +242,9 @@ def stopped_early(records: list[dict[str, Any]], rows: list[dict[str, Any]]) -> 
         if key in partial and str(rec.get("timestamp")) >= str(latest.get(key[:2], {}).get("timestamp", "")):
             latest[key[:2]] = rec
     return [{"suite": r.get("suite"), "model": r.get("model"), "session": r.get("session"),
-             "max_minutes": r.get("max_minutes"), "remaining": r.get("remaining"), "timestamp": r.get("timestamp")}
+             "reason": r.get("reason") or "max_minutes", "max_minutes": r.get("max_minutes"),
+             "max_cost_usd": r.get("max_cost_usd"), "spent_usd": r.get("spent_usd"), "remaining": r.get("remaining"),
+             "timestamp": r.get("timestamp")}
             for _, r in sorted(latest.items())]
 
 
@@ -249,10 +296,11 @@ def _ms(value: Any) -> str:
     return f"{value / 1000:.1f} s" if value >= 1000 else f"{value} ms"
 
 
-def _cost(value: Any) -> str:
+def _cost(value: Any, n: Any = None) -> str:
     if value is None:
         return "—"
-    return f"${value:.4f}" if 0 < value < 0.01 else f"${value:.2f}"
+    text = f"${value:.4f}" if 0 < value < 0.01 else f"${value:.2f}"
+    return f"{text} (n={n})" if n is not None else text
 
 
 def _esc(text: Any) -> str:
@@ -268,7 +316,7 @@ def _table(header: list[str], rows: list[list[str]]) -> list[str]:
 def leaderboard_lines(rows: list[dict[str, Any]]) -> list[str]:
     header = ["Model", "Kind", "Cases", "Hard pass", "Status acc.", "Agent success", "1st submit valid",
               "Repairs/plan", "Tool errors/run", "Clarif. precision", "Clarif. recall", "Parse acc.",
-              "Security", "Judge (1-5)", "p50", "p95", "Cost/run"]
+              "Security", "Judge (1-5)", "p50", "p95", "Cost/plan", "Cost/run"]
     body = []
     for r in rows:
         n = r.get("n") or {}
@@ -289,7 +337,8 @@ def leaderboard_lines(rows: list[dict[str, Any]]) -> list[str]:
             _pct(r.get("parse_matches"), n.get("parse_fields")),
             _pct(r.get("security_passes"), n.get("security_runs")),
             _num(r.get("judge_quality"), 2, n.get("judged_runs")) if r.get("judge_quality") is not None else "—",
-            _ms(r.get("latency_p50_ms")), _ms(r.get("latency_p95_ms")), _cost(r.get("cost_per_plan_usd")),
+            _ms(r.get("latency_p50_ms")), _ms(r.get("latency_p95_ms")),
+            _cost(r.get("cost_per_plan_usd"), n.get("plans")), _cost(r.get("cost_per_run_usd"), r.get("runs")),
         ])
     return _table(header, body)
 
@@ -361,10 +410,20 @@ def failure_lines(fails: list[dict[str, Any]], per_model: int = FAILURE_EXAMPLES
             out.append(head)
             if f.get("error"):
                 out.append(f"  - harness: {_esc(f['error'])[:300]}")
+            if f.get("status") == "error":
+                out.append("  - no assertions ran (harness exception); counted as a hard failure")
             for a in f.get("failed") or []:
                 out.append(f"  - `{a.get('name')}`: {_esc(a.get('detail') or '')[:300]}")
         out.append("")
     return out
+
+
+def _budget_text(stop: dict[str, Any]) -> str:
+    if stop.get("reason") == "max_cost_usd" and stop.get("max_cost_usd") is not None:
+        spent = f" ({_cost(stop['spent_usd'])} spent)" if stop.get("spent_usd") is not None else ""
+        return f"the {_cost(stop['max_cost_usd'])} cost budget{spent}"
+    minutes = stop.get("max_minutes")
+    return f"a {minutes:g}-minute budget" if isinstance(minutes, int | float) else "a budget stop"
 
 
 def provenance_lines(rows: list[dict[str, Any]]) -> list[str]:
@@ -372,10 +431,11 @@ def provenance_lines(rows: list[dict[str, Any]]) -> list[str]:
     for r in rows:
         p = r.get("provenance") or {}
         dirty = " (dirty tree)" if p.get("git_dirty") else ""
-        body.append([f"`{r['model']}`", str(r.get("suite")), str(r.get("session")), f"{p.get('git_sha')}{dirty}",
+        body.append([f"`{r['model']}`", str(r.get("suite")), str(r.get("session")), str(p.get("schema") or 1),
+                     f"{p.get('git_sha')}{dirty}",
                      str(p.get("prompt_hash")), str(p.get("registry_hash")), str(p.get("fixture_hash")),
                      str(p.get("eval_cases_hash")), str(p.get("harness_hash") or "—"), ", ".join(r.get("files") or [])])
-    return _table(["Model", "Suite", "Session", "Git SHA", "Prompt hash", "Registry hash", "Fixture hash",
+    return _table(["Model", "Suite", "Session", "Schema", "Git SHA", "Prompt hash", "Registry hash", "Fixture hash",
                    "eval_cases hash", "Harness hash", "Results file"], body)
 
 
@@ -399,9 +459,11 @@ def render_markdown(summary: dict[str, Any]) -> str:
     if rows:
         lines += leaderboard_lines(rows)
         lines += ["", "Rates show `(passed/n)`; `n/a` means the metric does not apply to the row (the baseline has no "
-                  "agent); `—` means nothing was measured (n = 0). Cost is per run from registry pricing; local and "
-                  "baseline rows cost $0, so compare them on wall time. Baseline, API and local rows are separate "
-                  "populations: local rows run with a longer deadline and are not production candidates.", ""]
+                  "agent); `—` means nothing was measured (n = 0). Cost/plan is the planner's registry-priced cost "
+                  "of all runs divided by the runs that produced a plan (complete or fallback; n = plans); Cost/run "
+                  "divides the same total by every run. Local and baseline rows cost $0, so compare them on wall "
+                  "time. Baseline, API and local rows are separate populations: local rows run with a longer "
+                  "deadline and are not production candidates.", ""]
         lines += ["### Dev vs holdout", "", *split_lines(rows), ""]
         lines += ["### Repeats", "", *pass_k_lines(rows), ""]
         lines += ["### By category (hard pass)", "", *category_lines(rows), ""]
@@ -422,9 +484,16 @@ def render_markdown(summary: dict[str, Any]) -> str:
         lines += ["None.", ""]
     stops = summary.get("stopped_early") or []
     if stops:
-        lines += ["Stopped early by `--max-minutes` (rows above are partial; finish with `--resume`):", ""]
-        lines += [f"- `{st['model']}` ({st['suite']}, session {st['session']}): {st['remaining']} run(s) left after a "
-                  f"{st['max_minutes']:g}-minute budget" for st in stops] + [""]
+        lines += ["Stopped early by `--max-minutes` or `--max-cost-usd` (rows above are partial; finish with "
+                  "`--resume`):", ""]
+        lines += [f"- `{st['model']}` ({st['suite']}, session {st['session']}): {st['remaining']} run(s) left after "
+                  f"{_budget_text(st)}" for st in stops] + [""]
+    exceptions = summary.get("harness_exceptions") or []
+    if exceptions:
+        lines += ["Harness exceptions (the harness could not finish these runs; each is recorded with status "
+                  "`error` and no assertions, and counts as a hard failure):", ""]
+        lines += [f"- `{e['model']}` ({e['suite']}) `{e['case']}` #{e['repeat']}: {_esc(e.get('error') or '')[:300]}"
+                  for e in exceptions] + [""]
     missing = summary.get("not_run") or []
     if missing:
         lines += ["Model-matrix rows with no `models` results in this report:", ""]
@@ -461,7 +530,12 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "keyword proxies for \"the text mentions X\" (marked in their detail). Assertions that need a browser or "
         "judgement are marked `judge` and never count toward the hard pass rate.",
         "- **Hard pass** requires every applicable code assertion, including the status being in the case's "
-        "expected set: a deterministic fallback on a feasible case is a failure for a model row.",
+        "expected set: a deterministic fallback on a feasible case is a failure for a model row. A run the harness "
+        "could not finish (harness exception) is recorded with status `error` and no assertions, and counts as a "
+        "hard failure in every rate (error category `harness_exception`).",
+        "- **Cost.** Registry-priced tokens of the planner's model calls (judge calls excluded). Cost/plan divides "
+        "the total over all runs by the runs that produced a plan (complete or fallback), so clarifications, "
+        "rejections and failed runs are charged to the plans delivered; Cost/run divides it by every run.",
         "- **Clarification precision/recall** count one instance per planner call; the first call of a case that "
         "supplies `clarification_answers` counts as blocking (the spec provides answers because a question is "
         "expected), its resume call as non-blocking.",
@@ -480,6 +554,13 @@ def render_markdown(summary: dict[str, Any]) -> str:
         extra = f" (requested but unavailable: {', '.join(judge['unavailable'])})" if judge and judge.get(
             "unavailable") else ""
         lines.append(f"- **Judge.** No judge model ran{extra}, so judge quality is null (shown as —).")
+    older = [v for v in summary.get("record_schemas") or {} if v != str(RECORD_SCHEMA)]
+    if older:
+        lines.append(f"- **Older records.** Some records use schema {', '.join(older)} (current: {RECORD_SCHEMA}; "
+                     "see the Schema column in the provenance table). Fields they did not record "
+                     "(harness hash, parsed preferences, message) read as missing; their dirty-tree flag also counted "
+                     "results being written and their prompt hash covered app/graph/prompts.py only, so neither is "
+                     "comparable with newer rows.")
     lines += ["", "## Provenance", ""]
     prov_rows = rows + [r for b in suites.values() for r in b.get("rows") or []]
     lines += provenance_lines(prov_rows) if prov_rows else ["No results."]

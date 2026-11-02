@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from evals import RECORD_SCHEMA
 from evals.assertions import SENTINEL_SETTINGS, Observation
 from evals.cases import EvalCase, load_cases, load_spec
 from evals.runner import Session, run_graph_case
@@ -35,8 +36,8 @@ def record(case: str = "c1", *, model: str = "m:1", kind: str = "local", status:
            error_categories: list[str] | None = None, feasible: bool | None = None) -> dict[str, Any]:
     """A synthetic JSONL run record with just the fields metrics and the report read."""
     return {
-        "record_type": "run", "schema": 1, "session": session_id, "suite": suite, "case": case, "split": split,
-        "category": category, "repeat": repeat, "model": model, "kind": kind, "status": status, "mode": mode,
+        "record_type": "run", "schema": RECORD_SCHEMA, "session": session_id, "suite": suite, "case": case,
+        "split": split, "category": category, "repeat": repeat, "model": model, "kind": kind, "status": status, "mode": mode,
         "expected_statuses": list(expected), "status_ok": status in expected,
         "feasible": ("complete" in expected and "no_feasible_plan" not in expected) if feasible is None else feasible,
         "blocking": tuple(expected) == ("needs_clarification",),
@@ -52,5 +53,5 @@ def record(case: str = "c1", *, model: str = "m:1", kind: str = "local", status:
         "parse": parse, "node_ms": {"plan_agent": latency_ms // 2}, "judge": judge, "error": error,
         "error_categories": error_categories or [], "timestamp": "2026-11-07T00:00:00+00:00",
         "git_sha": "abc123", "git_dirty": False, "prompt_hash": "p", "registry_hash": "r", "fixture_hash": "f",
-        "eval_cases_hash": "e",
+        "eval_cases_hash": "e", "harness_hash": "h", "preferences": None, "message": None,
     }

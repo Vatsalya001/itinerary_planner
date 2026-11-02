@@ -133,10 +133,12 @@ def test_budget_stop_is_reported_while_the_session_is_partial(tmp_path: Path) ->
     summary = build_summary(load_records(root)[0])
     assert summary["rows"][0]["coverage"]["partial"] is True
     assert summary["stopped_early"] == [{"suite": "models", "model": "ollama:granite4:tiny-h", "session": NEW,
-                                         "max_minutes": 30.0, "remaining": 25,
+                                         "reason": "max_minutes", "max_minutes": 30.0, "max_cost_usd": None,
+                                         "spent_usd": None, "remaining": 25,
                                          "timestamp": "2026-11-07T01:00:00+00:00"}]
     md = render_markdown(summary)
-    assert "Stopped early by `--max-minutes`" in md and "25 run(s) left" in md and "(partial)" in md
+    assert "Stopped early by `--max-minutes`" in md and "25 run(s) left after a 30-minute budget" in md
+    assert "(partial)" in md
 
 
 def test_a_newer_partial_session_does_not_hide_the_last_complete_one(tmp_path: Path) -> None:
