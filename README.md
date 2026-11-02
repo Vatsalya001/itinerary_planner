@@ -52,7 +52,7 @@ Choosing a model (in `backend/.env`; IDs come from `backend/app/llm/models.yaml`
 | Model | Settings |
 |---|---|
 | Cerebras + Groq (production) | `CEREBRAS_API_KEY=csk-...`, `GROQ_API_KEY=gsk_...`, `PRIMARY_MODEL=cerebras:gpt-oss-120b`, `FALLBACK_MODEL=groq:openai/gpt-oss-120b`. Cerebras Free Trial: card on file, $5 credit for 30 days, 5 requests/minute and 1M tokens/day. Groq free tier: 8K tokens/minute and 200K tokens/day, so it serves as the fallback; the rule-based planner covers anything both miss |
-| Groq only | `PRIMARY_MODEL=groq:openai/gpt-oss-120b` with no fallback. On the free tier one plan takes about 2 minutes of throttling and usually hits the 60 s deadline |
+| Groq only | `PRIMARY_MODEL=groq:openai/gpt-oss-120b` with no fallback. Not recommended on the free tier: its 8K tokens/minute limit is below one plan's prompt size, so in the eval subset no plan finished in agent mode (the rule-based planner answered) |
 | Other registry providers (optional, not used) | Gemini (`google_genai:gemini-3.6-flash`, `gemini-3.8-flash`; `GOOGLE_API_KEY`), Claude (`anthropic:claude-opus-5-5`; `ANTHROPIC_API_KEY`), xAI (`xai:<pending>` placeholder) |
 | A second provider as fallback | `FALLBACK_MODEL=<registry ID>` |
 | Local model | `PRIMARY_MODEL=ollama:granite4:tiny-h` (or any pulled `ollama:<tag>`) |
@@ -143,9 +143,21 @@ shows, per model, hard pass rate, status accuracy, agent success, first-submissi
 clarification precision and recall, parse accuracy, security, latency and cost, with dev and holdout cases reported
 separately and every number shown with its `n`. Baseline, hosted-API and local-model rows are separate populations,
 and all comparisons run on the synthetic frozen world. The generator shows cost per plan and per run and counts runs
-the harness could not finish as failures, not dropped; the committed report predates those changes (it shows cost per
-run only) until `make eval-report` regenerates it. The same summary feeds the `/evals` page. Read the report for
-the current numbers and the list of models that have not been run yet.
+the harness could not finish as failures, not dropped. The same summary feeds the `/evals` page.
+
+Latest results (2026-11-03, `models` suite, one run per case, no judge; full details in the report):
+
+| Model | Hard pass | Agent success | p50 latency | Notes |
+|---|---|---|---|---|
+| `baseline:deterministic` (no LLM) | 26/26 | n/a | 15 ms | The floor every model is compared with |
+| `cerebras:gpt-oss-120b` (production) | 20/26 | 14/17 | 3.4 s | Free Trial, paced 65 s between runs; 0 rate-limit failures with the client-side limiter; 5 runs hit the 4-turn cap |
+| `ollama:qwen3.5:9b` (local) | 19/26 | 15/17 | 75 s | Was 6/26 before the batched-tool redesign (it ran out of time) |
+| `ollama:gemma4:e4b` (local) | 16/26 | 15/17 | 44 s | |
+| `ollama:granite4:tiny-h` (local) | 7/26 | 4/17 | 16 s | Submits plans but rarely fixes scheduling violations |
+| `groq:openai/gpt-oss-120b` (fallback) | 2/5 subset | 0/3 | — | Free tier: 8K tokens/minute is below one plan's prompt size, so it mostly times out; a backup only |
+
+Offline suite (scripted fake model): 32/32. Every security-case miss in every row is a fallback status; no model
+leaked secrets or followed an injected instruction.
 
 ## Deployment (Render + Neon)
 
