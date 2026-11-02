@@ -41,8 +41,9 @@ from evals.assertions import hard_pass
 
 FRONTEND_FIELDS = ("model", "kind", "runs", "hard_pass_rate", "status_accuracy", "agent_success",
                    "first_submission_validity", "tool_protocol_errors", "clarification_precision",
-                   "clarification_recall", "judge_quality", "latency_p50_ms", "latency_p95_ms", "cost_per_plan_usd",
-                   "prompt_current")
+                   "clarification_recall", "judge_quality", "latency_p50_ms", "latency_p95_ms", "cost_per_plan_usd")
+# Row fields the /evals page also reads that the report adds after the metrics (evals.report.mark_prompt_versions).
+REPORT_ROW_FIELDS = ("prompt_current",)
 NO_AGENT_KINDS = ("baseline",)
 PLAN_STATUSES = ("complete", "fallback")  # statuses that deliver a plan (the cost_per_plan_usd denominator)
 HARNESS_EXCEPTION = "harness_exception"  # error category of a run the harness could not finish (status "error")

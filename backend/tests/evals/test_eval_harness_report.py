@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from evals import REPO_ROOT
-from evals.metrics import FRONTEND_FIELDS
+from evals.metrics import FRONTEND_FIELDS, REPORT_ROW_FIELDS
 from evals.report import build_summary, load_records, main, render_markdown, select_latest
 from tests.evals.helpers import record
 
@@ -62,7 +62,7 @@ def test_summary_matches_the_frontend_contract(tmp_path: Path) -> None:
     rows = summary["rows"]
     assert [r["model"] for r in rows] == ["baseline:deterministic", "ollama:granite4:tiny-h"]  # baseline first
     for row in rows:
-        assert set(FRONTEND_FIELDS) <= set(row)
+        assert set(FRONTEND_FIELDS) | set(REPORT_ROW_FIELDS) <= set(row)
         assert row["kind"] in {"baseline", "api", "local"}
         for key in ("runs", "latency_p50_ms", "latency_p95_ms"):
             assert row[key] is None or isinstance(row[key], int)
@@ -121,7 +121,7 @@ def test_row_fields_cover_the_frontend_eval_row_type() -> None:
     block = re.search(r"export interface EvalRow \{(.*?)\n\}", text, re.S)
     assert block is not None
     fields = set(re.findall(r"^\s+(\w+)\?:", block.group(1), re.M))
-    assert fields == set(FRONTEND_FIELDS)
+    assert fields == set(FRONTEND_FIELDS) | set(REPORT_ROW_FIELDS)
 
 
 def test_budget_stop_is_reported_while_the_session_is_partial(tmp_path: Path) -> None:
