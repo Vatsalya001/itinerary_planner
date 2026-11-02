@@ -4,7 +4,8 @@ One connection guarded by a lock; WAL mode for file databases. Timestamps are st
 
 Rate limits use a two-window sliding estimate (``previous * (1 - elapsed/window) + current``) over windows aligned
 to multiples of ``window_s``. That avoids the 2x burst a plain fixed window allows across a boundary. Denied hits
-are not counted, so a client retrying after a 429 doesn't extend its own lockout.
+are not counted, so a client retrying after a 429 doesn't extend its own lockout. ``hit_limits`` checks several
+windows and the daily cap in one transaction and counts the request only when every limit allows it.
 
 Retention (``purge_expired``, ``stale_paused_threads``) is driven by ``app.store.retention``.
 """
@@ -16,12 +17,12 @@ import json
 import math
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
-from app.store.base import RunRecord
+from app.store.base import LimitDecision, RateWindow, RunRecord
 
 T = TypeVar("T")
 Clock = Callable[[], datetime]
@@ -268,22 +269,50 @@ class SQLiteStore:
     # -- abuse and spend controls -------------------------------------------------------------------------
 
     async def hit_rate_limit(self, key: str, window_s: int, limit: int) -> tuple[bool, int]:
-        now_ts = self._now().timestamp()
-        start, prev_start, elapsed = window_bounds(now_ts, window_s)
+        allowed, retry_after, _ = await self.hit_limits([(key, window_s, limit)])
+        return allowed, retry_after
 
-        def op(c: sqlite3.Connection) -> tuple[bool, int]:
-            current = int(c.execute(
-                "INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1) "
-                "ON CONFLICT (key, window_start) DO UPDATE SET count = count + 1 RETURNING count",
-                (key, start),
-            ).fetchone()[0])
-            row = c.execute("SELECT count FROM rate_limits WHERE key = ? AND window_start = ?",
-                            (key, prev_start)).fetchone()
-            previous = int(row[0]) if row else 0
-            if sliding_estimate(previous, current, elapsed, window_s) <= limit + 1e-9:
-                return True, 0
-            c.execute("UPDATE rate_limits SET count = count - 1 WHERE key = ? AND window_start = ?", (key, start))
-            return False, sliding_retry_after(previous, current - 1, limit, elapsed, window_s)
+    async def hit_limits(self, windows: Sequence[RateWindow], daily_key: str | None = None,
+                         daily_cap: int | None = None) -> LimitDecision:
+        """All limits in one ``BEGIN IMMEDIATE`` transaction under the connection lock: count the hit everywhere,
+        then roll every count back if any limit refuses it (see ``Store.hit_limits``)."""
+        now = self._now()
+        now_ts = now.timestamp()
+        day = utc_day(now)
+        planned = [(key, window_s, limit, *window_bounds(now_ts, window_s)) for key, window_s, limit in windows]
+
+        def op(c: sqlite3.Connection) -> LimitDecision:
+            c.execute("BEGIN IMMEDIATE")
+            try:
+                denials: list[tuple[int, str]] = []
+                for key, window_s, limit, start, prev_start, elapsed in planned:
+                    current = int(c.execute(
+                        "INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1) "
+                        "ON CONFLICT (key, window_start) DO UPDATE SET count = count + 1 RETURNING count",
+                        (key, start),
+                    ).fetchone()[0])
+                    row = c.execute("SELECT count FROM rate_limits WHERE key = ? AND window_start = ?",
+                                    (key, prev_start)).fetchone()
+                    previous = int(row[0]) if row else 0
+                    if sliding_estimate(previous, current, elapsed, window_s) > limit + 1e-9:
+                        denials.append((sliding_retry_after(previous, current - 1, limit, elapsed, window_s), key))
+                if daily_key is not None and daily_cap is not None:
+                    count = int(c.execute(
+                        "INSERT INTO daily_counters (key, day, count) VALUES (?, ?, 1) "
+                        "ON CONFLICT (key, day) DO UPDATE SET count = count + 1 RETURNING count",
+                        (daily_key, day),
+                    ).fetchone()[0])
+                    if count > daily_cap:
+                        denials.append((seconds_until_utc_midnight(now), daily_key))
+            except BaseException:
+                c.execute("ROLLBACK")
+                raise
+            if denials:
+                c.execute("ROLLBACK")
+                retry_after, denied_by = max(denials)
+                return False, retry_after, denied_by
+            c.execute("COMMIT")
+            return True, 0, None
 
         return await self._run(op)
 

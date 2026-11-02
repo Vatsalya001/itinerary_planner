@@ -3,7 +3,12 @@
 No LLM ever reads page text. Only structured JSON-LD fields become candidates; descriptions are never
 copied, names are cleaned and truncated to 120 characters, and every event must fall on ``ctx.date`` in
 the city's timezone and carry an https source URL. Fetching is polite: identified user agent, robots.txt
-respected, 5 s timeout, 1 MB cap, at most three pages per search.
+respected, 5 s timeout (4 s to connect), 1 MB cap, at most three pages per search.
+
+Timing: the result pages are fetched concurrently (at most ``PAGE_CONCURRENCY``), and the whole ``search`` (Tavily
+call plus pages) has a ``SEARCH_DEADLINE_S`` budget; when it runs out, the events parsed from pages that already
+arrived are returned and the remaining fetches are cancelled. robots.txt is cached per origin: 24 hours after a
+successful read, 1 hour after a failure (so a transient error does not switch a site off until a restart).
 """
 
 from __future__ import annotations
@@ -15,7 +20,8 @@ import json
 import logging
 import math
 import re
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
 from html.parser import HTMLParser
 from typing import Any
@@ -48,9 +54,17 @@ DEFAULT_ALLOWED_DOMAINS: tuple[str, ...] = ("district.in",)
 MAX_PAGES = 3
 PAGE_TIMEOUT_S = 5.0
 SEARCH_TIMEOUT_S = 8.0
+CONNECT_TIMEOUT_S = 4.0
+# Per-request Timeouts with their own connect limit (a bare float would set connect to the full value too).
+PAGE_TIMEOUT = httpx.Timeout(PAGE_TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
+SEARCH_TIMEOUT = httpx.Timeout(SEARCH_TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
 MAX_PAGE_BYTES = 1_000_000
 ROBOTS_MAX_BYTES = 64_000
 FETCH_DEADLINE_S = 8.0  # wall-clock cap per robots.txt or page fetch (slow-drip servers)
+SEARCH_DEADLINE_S = 15.0  # wall-clock budget for one search(): Tavily call plus all page fetches
+PAGE_CONCURRENCY = 3
+ROBOTS_TTL_S = 24 * 3600  # a robots.txt that was read (or is absent: other 4xx)
+ROBOTS_FAILURE_TTL_S = 3600  # a failed robots.txt fetch (network, timeout, 401/403, 3xx, 5xx): disallow for 1 h
 APPROX_LOCATION_TAG = "approx_location"
 APPROX_ADDRESS_PREFIX = "Location approximate - check the venue"
 NAME_MAX = 120
@@ -530,24 +544,38 @@ class TavilyEvents:
         client: httpx.AsyncClient,
         allowed_domains: list[str] | tuple[str, ...] | None = None,
         max_pages: int = MAX_PAGES,
+        deadline_s: float = SEARCH_DEADLINE_S,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._api_key = api_key
         self._client = client
         self._allowed: tuple[str, ...] = tuple(d.lower().strip() for d in (allowed_domains or DEFAULT_ALLOWED_DOMAINS))
         self._max_pages = max(0, min(max_pages, MAX_PAGES))
-        self._robots: dict[str, RobotFileParser] = {}
+        self._deadline_s = deadline_s
+        self._clock = clock  # robots.txt cache expiry (monotonic seconds)
+        self._robots: dict[str, tuple[RobotFileParser, float]] = {}  # origin -> (rules, expires at)
+        self._robots_locks: dict[str, asyncio.Lock] = {}
 
     def __repr__(self) -> str:  # never expose the key
         return f"TavilyEvents(allowed_domains={list(self._allowed)})"
 
     async def search(self, interests: list[str], ctx: WorldContext, max_price: int | None = None) -> list[Candidate]:
+        """Events on ``ctx.date`` from at most ``MAX_PAGES`` allow-listed pages, fetched concurrently. The whole
+        call is bounded by ``deadline_s``: pages still loading then are dropped and the rest is returned."""
         when = f"{ctx.date.day} {ctx.date:%B %Y}"
         query = f"events in {ctx.location.name} on {when} {_safe_interests(interests)}".strip()
-        urls = await self._search_urls(query)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._deadline_s
+        try:
+            async with asyncio.timeout_at(deadline):
+                urls = await self._search_urls(query)
+        except TimeoutError as exc:
+            raise ProviderError("tavily", "timeout", "search timed out", retryable=True) from exc
+        pages = urls[: self._max_pages]
+        htmls = await self._fetch_pages(pages, deadline)
         events: list[Candidate] = []
         seen: set[str] = set()
-        for index, url in enumerate(urls[: self._max_pages]):
-            html = await self._fetch_page(url)
+        for index, (url, html) in enumerate(zip(pages, htmls, strict=True)):
             if html is None:
                 continue
             try:
@@ -560,6 +588,37 @@ class TavilyEvents:
                     seen.add(cand.id)
                     events.append(cand)
         return filter_and_rank_events(events, interests, max_price)
+
+    async def _fetch_pages(self, urls: list[str], deadline: float) -> list[str | None]:
+        """Fetch ``urls`` concurrently (``PAGE_CONCURRENCY`` at a time) until the loop-time ``deadline``; a page
+        that failed or was still loading at the deadline is None. Results keep the order of ``urls``."""
+        if not urls:
+            return []
+        gate = asyncio.Semaphore(PAGE_CONCURRENCY)
+
+        async def one(url: str) -> str | None:
+            async with gate:
+                return await self._fetch_page(url)
+
+        tasks = [asyncio.create_task(one(url)) for url in urls]
+        try:
+            remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+            _done, pending = await asyncio.wait(tasks, timeout=remaining)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if pending:
+            log.info("tavily events: %d page(s) dropped at the %.0f s search deadline", len(pending),
+                     self._deadline_s)
+        out: list[str | None] = []
+        for task in tasks:
+            if task in pending or task.cancelled() or task.exception() is not None:
+                out.append(None)
+            else:
+                out.append(task.result())
+        return out
 
     async def _search_urls(self, query: str) -> list[str]:
         body = {
@@ -576,7 +635,7 @@ class TavilyEvents:
                 TAVILY_URL,
                 json=body,
                 headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
-                timeout=SEARCH_TIMEOUT_S,
+                timeout=SEARCH_TIMEOUT,
             )
         except httpx.TimeoutException as exc:
             raise ProviderError("tavily", "timeout", "search timed out", retryable=True) from exc
@@ -600,36 +659,43 @@ class TavilyEvents:
                 urls.append(url)
         return urls
 
-    async def _load_robots(self, origin: str) -> RobotFileParser:
-        """robots.txt for ``origin``: streamed with a 64 KB cap and a wall-clock deadline. 401/403, 5xx,
-        redirects, timeouts and network errors all mean "disallow"; other 4xx mean "no rules"."""
+    async def _load_robots(self, origin: str) -> tuple[RobotFileParser, bool]:
+        """(rules, read_ok) for ``origin``: streamed with a 64 KB cap and a wall-clock deadline. 401/403, 5xx,
+        redirects, timeouts and network errors are failures that mean "disallow"; other 4xx mean "no rules"."""
         parser = RobotFileParser()
         try:
             async with asyncio.timeout(FETCH_DEADLINE_S):
                 async with self._client.stream(
-                    "GET", origin + "/robots.txt", headers={"User-Agent": USER_AGENT}, timeout=PAGE_TIMEOUT_S
+                    "GET", origin + "/robots.txt", headers={"User-Agent": USER_AGENT}, timeout=PAGE_TIMEOUT
                 ) as resp:
                     status = resp.status_code
                     body = await _read_capped(resp, ROBOTS_MAX_BYTES) if status == 200 else b""
         except (httpx.HTTPError, TimeoutError):
             parser.parse(_DISALLOW_ALL)
-            return parser
+            return parser, False
         if status == 200:
             parser.parse(body.decode("utf-8", errors="replace").splitlines())
         elif status in (401, 403) or not 400 <= status < 500:
             parser.parse(_DISALLOW_ALL)
+            return parser, False
         else:
             parser.parse([])
-        return parser
+        return parser, True
 
     async def _robots_allows(self, url: str) -> bool:
+        """Cached per origin: ``ROBOTS_TTL_S`` after a successful read, ``ROBOTS_FAILURE_TTL_S`` after a failure.
+        Concurrent page fetches for one origin share a single robots.txt request."""
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
-        parser = self._robots.get(origin)
-        if parser is None:
-            parser = await self._load_robots(origin)
-            self._robots[origin] = parser
-        return parser.can_fetch(USER_AGENT, url)
+        lock = self._robots_locks.setdefault(origin, asyncio.Lock())
+        async with lock:
+            cached = self._robots.get(origin)
+            if cached is None or self._clock() >= cached[1]:
+                parser, ok = await self._load_robots(origin)
+                ttl = ROBOTS_TTL_S if ok else ROBOTS_FAILURE_TTL_S
+                cached = (parser, self._clock() + ttl)
+                self._robots[origin] = cached
+        return cached[0].can_fetch(USER_AGENT, url)
 
     async def _fetch_page(self, url: str) -> str | None:
         """Fetch one allow-listed https page politely; None on any failure (never raises)."""
@@ -639,7 +705,7 @@ class TavilyEvents:
                 return None
             async with asyncio.timeout(FETCH_DEADLINE_S):
                 async with self._client.stream(
-                    "GET", url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"}, timeout=PAGE_TIMEOUT_S
+                    "GET", url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"}, timeout=PAGE_TIMEOUT
                 ) as resp:
                     if resp.status_code != 200:
                         return None

@@ -151,15 +151,18 @@ async def _fetch(places: Any, cid: str, ctx: WorldContext, timeout_s: float) -> 
 
 
 def _restore(cand: Candidate, fresh: Candidate | None) -> Candidate:
+    """Copy only the redacted display fields (``GOOGLE_DISPLAY_FIELDS``) and the source URL from ``fresh``.
+
+    Everything we computed when planning (category, cost, evidence, tags, pacing and duration fields, event
+    times) stays as stored, so the plan's checks, totals and schedule still describe what was validated."""
     if fresh is None:
         return cand.model_copy(update={"name": UNAVAILABLE_NAME, "maps_url": google_place_url(cand.id)})
     source = cand.source.model_copy(update={"url": fresh.source.url, "attribution": fresh.source.attribution
                                             or cand.source.attribution})
-    return cand.model_copy(update={
-        "name": fresh.name, "address": fresh.address, "neighbourhood": fresh.neighbourhood,
-        "rating": fresh.rating, "rating_count": fresh.rating_count, "hours": fresh.hours,
-        "maps_url": fresh.maps_url or google_place_url(cand.id), "source": source,
-    })
+    update: dict[str, Any] = {key: getattr(fresh, key) for key in GOOGLE_DISPLAY_FIELDS}
+    update["maps_url"] = fresh.maps_url or google_place_url(cand.id)
+    update["source"] = source
+    return cand.model_copy(update=update)
 
 
 async def rehydrate(record: dict[str, Any], places: Any, *, now: datetime | None = None,

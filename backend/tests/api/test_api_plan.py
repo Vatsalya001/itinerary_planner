@@ -221,6 +221,22 @@ async def test_global_daily_cap(make_client: Any, fake_runner: FakeRunner,
         assert len(fake_runner.calls) == 1
 
 
+async def test_refused_plan_does_not_use_up_the_10min_window(make_client: Any, fake_runner: FakeRunner,
+                                                              clocked_store: Any) -> None:
+    async with make_client(store=clocked_store, rate_limit_per_10min=2, rate_limit_per_day=5,
+                           daily_plan_cap=1) as (client, _app, deps):
+        assert (await client.post("/api/plan", json=BRIEF)).status_code == 200
+        refused = await client.post("/api/plan", json=BRIEF)  # the 10-minute window has room; the daily cap has not
+        assert refused.status_code == 429 and "today" in refused.json()["detail"]
+        assert await clocked_store.incr_daily("plans") == 2  # the refused request was not counted either
+        deps.settings.daily_plan_cap = 10  # an operator raises the cap
+        # Had the refused request been counted in the 10-minute window, this third plan would be over its limit.
+        assert (await client.post("/api/plan", json=BRIEF)).status_code == 200
+        limited = await client.post("/api/plan", json=BRIEF)
+        assert limited.status_code == 429 and limited.json()["detail"].startswith("Too many plans")
+        assert len(fake_runner.calls) == 2
+
+
 async def test_validation_errors_do_not_consume_rate_limit(make_client: Any, fake_runner: FakeRunner,
         clocked_store: Any) -> None:
     async with make_client(store=clocked_store, rate_limit_per_10min=1) as (client, _app, _deps):
@@ -296,7 +312,11 @@ async def test_resumes_do_not_count_toward_plan_limits_or_daily_cap(make_client:
             assert resp.status_code == 200, resp.text
         assert await clocked_store.incr_daily("plans") == 2  # only the one new plan was counted
         resp = await client.post("/api/plan", json=BRIEF)
-        assert resp.status_code == 429 and resp.json()["detail"].startswith("Too many plans")
+        # Both the 10-minute window and the (now exceeded) daily cap refuse; the longer wait is reported.
+        assert resp.status_code == 429 and resp.json()["detail"].startswith("The planner has reached today's limit")
+        rows = await clocked_store._run(lambda c: c.execute("SELECT key, count FROM rate_limits").fetchall())
+        # one plan in each plan window, the three resumes in their own bucket, nothing from the refused request
+        assert {str(r[0]).rsplit(":", 1)[-1]: r[1] for r in rows} == {"10m": 1, "day": 1, "resume": 3}
 
 
 async def test_resumes_have_their_own_limit(make_client: Any, fake_runner: FakeRunner, clocked_store: Any,
@@ -440,7 +460,9 @@ async def test_rate_limit_store_failure_fails_open(make_client: Any, fake_runner
             raise RuntimeError("db down")
 
         deps.store.hit_rate_limit = fail
+        deps.store.hit_limits = fail
         assert (await client.post("/api/plan", json=BRIEF)).status_code == 200
+        assert (await client.post("/api/plan/t_abcdef12/resume", json={"answers": {"city": "Pune"}})).status_code == 200
 
 
 async def test_client_disconnect_still_persists(make_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:

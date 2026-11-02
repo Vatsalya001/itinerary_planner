@@ -102,6 +102,69 @@ async def test_rate_limit_day_window(store: SQLiteStore, clock: MutableClock) ->
     assert (await store.hit_rate_limit(key, 86400, 2))[0] is True
 
 
+async def _counts(store: SQLiteStore) -> dict[str, int]:
+    rows = await store._run(lambda c: c.execute(
+        "SELECT key, count FROM rate_limits UNION ALL SELECT 'daily:' || key, count FROM daily_counters").fetchall())
+    return {str(k): int(n) for k, n in rows}
+
+
+async def test_hit_limits_counts_only_when_every_limit_allows(store: SQLiteStore) -> None:
+    windows = [("ip:x:10m", 600, 3), ("ip:x:day", 86400, 1)]
+    assert await store.hit_limits(windows, daily_key="plans", daily_cap=5) == (True, 0, None)
+    assert await _counts(store) == {"ip:x:10m": 1, "ip:x:day": 1, "daily:plans": 1}
+    # the 10-minute window has room but the day window does not: nothing is counted anywhere
+    allowed, retry_after, denied_by = await store.hit_limits(windows, daily_key="plans", daily_cap=5)
+    assert (allowed, denied_by) == (False, "ip:x:day") and retry_after == 11 * 3600 + 55 * 60 + 86400
+    assert await _counts(store) == {"ip:x:10m": 1, "ip:x:day": 1, "daily:plans": 1}
+
+
+async def test_hit_limits_daily_cap_refusal_is_not_counted(store: SQLiteStore) -> None:
+    windows = [("ip:y:10m", 600, 10)]
+    assert (await store.hit_limits(windows, daily_key="plans", daily_cap=1))[0] is True
+    allowed, retry_after, denied_by = await store.hit_limits(windows, daily_key="plans", daily_cap=1)
+    assert (allowed, denied_by) == (False, "plans")
+    assert retry_after == seconds_until_utc_midnight(START)
+    assert await _counts(store) == {"ip:y:10m": 1, "daily:plans": 1}
+    # several refusals: the longest wait is reported
+    allowed, retry_after, denied_by = await store.hit_limits([("ip:y:10m", 600, 1)], daily_key="plans",
+                                                             daily_cap=1)
+    assert (allowed, denied_by, retry_after) == (False, "plans", seconds_until_utc_midnight(START))
+
+
+async def test_hit_limits_without_a_daily_cap_and_hit_rate_limit_agree(store: SQLiteStore) -> None:
+    assert await store.hit_limits([("k", 600, 1)]) == (True, 0, None)
+    assert await store.hit_limits([("k", 600, 1)]) == (False, 900, "k")
+    assert await store.hit_rate_limit("k", 600, 1) == (False, 900)
+    assert await _counts(store) == {"k": 1}
+
+
+async def test_hit_limits_concurrent_requests_never_exceed_any_limit(tmp_path: Path, clock: MutableClock) -> None:
+    import asyncio
+
+    s = SQLiteStore(str(tmp_path / "race.db"), clock=clock)
+    await s.init()
+    try:
+        windows = [("ip:z:10m", 600, 7), ("ip:z:day", 86400, 50)]
+        results = await asyncio.gather(*(s.hit_limits(windows, daily_key="plans", daily_cap=4) for _ in range(20)))
+        assert sum(1 for allowed, _, _ in results if allowed) == 4
+        assert await _counts(s) == {"ip:z:10m": 4, "ip:z:day": 4, "daily:plans": 4}
+    finally:
+        await s.close()
+
+
+async def test_hit_limits_rolls_back_on_error(store: SQLiteStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.store.sqlite as sqlite_module
+
+    def boom(*args: object) -> int:
+        raise RuntimeError("bad clock maths")
+
+    monkeypatch.setattr(sqlite_module, "seconds_until_utc_midnight", boom)
+    assert (await store.hit_limits([("a", 600, 5)], daily_key="plans", daily_cap=1))[0] is True
+    with pytest.raises(RuntimeError):
+        await store.hit_limits([("a", 600, 5)], daily_key="plans", daily_cap=1)
+    assert await _counts(store) == {"a": 1, "daily:plans": 1}  # rolled back, and the connection still works
+
+
 async def test_daily_counter_per_key_and_utc_day(store: SQLiteStore, clock: MutableClock) -> None:
     assert [await store.incr_daily("plans") for _ in range(3)] == [1, 2, 3]
     assert await store.incr_daily("other") == 1
@@ -177,6 +240,69 @@ def test_helpers() -> None:
     assert sqlite_path_from_url("sqlite:////abs/app.db") == "/abs/app.db"
     assert normalize_pg_url("postgres://u:p@h/db") == "postgresql://u:p@h/db"
     assert normalize_pg_url("postgresql+psycopg://u:p@h/db") == "postgresql://u:p@h/db"
+
+
+class _FakePgContext:
+    def __init__(self, pool: _FakePgPool, role: str) -> None:
+        self.pool, self.role = pool, role
+
+    async def __aenter__(self) -> _FakePgPool:
+        if self.role == "transaction":
+            self.pool.work = dict(self.pool.committed)
+        return self.pool
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        import psycopg
+
+        if self.role != "transaction":
+            return False
+        if exc is None:
+            self.pool.committed = dict(self.pool.work)
+        return isinstance(exc, psycopg.Rollback)  # psycopg swallows Rollback(tx) after rolling back
+
+
+class _FakePgPool:
+    """Just enough of psycopg's pool/connection/transaction/cursor to run PostgresStore.hit_limits offline:
+    the transaction works on a copy of the counters and commits it only when the block ends cleanly."""
+
+    def __init__(self) -> None:
+        self.committed: dict[tuple[str, object], int] = {}
+        self.work: dict[tuple[str, object], int] = {}
+        self._row: tuple[int, ...] | None = None
+
+    def connection(self) -> _FakePgContext:
+        return _FakePgContext(self, "connection")
+
+    def transaction(self) -> _FakePgContext:
+        return _FakePgContext(self, "transaction")
+
+    def cursor(self) -> _FakePgContext:
+        return _FakePgContext(self, "cursor")
+
+    async def execute(self, sql: str, params: tuple[object, ...]) -> None:
+        key = (str(params[0]), params[1])
+        if sql.startswith("INSERT"):
+            self.work[key] = self.work.get(key, 0) + 1
+            self._row = (self.work[key],)
+        else:
+            self._row = (self.work[key],) if key in self.work else None
+
+    async def fetchone(self) -> tuple[int, ...] | None:
+        return self._row
+
+
+async def test_postgres_hit_limits_rolls_back_a_refused_request(clock: MutableClock) -> None:
+    pool = _FakePgPool()
+    store = PostgresStore("postgresql://offline/test", clock=clock)
+    store._pool = pool
+    windows = [("ip:p:10m", 600, 3), ("ip:p:day", 86400, 1)]
+    assert await store.hit_limits(windows, daily_key="plans", daily_cap=5) == (True, 0, None)
+    allowed, retry_after, denied_by = await store.hit_limits(windows, daily_key="plans", daily_cap=5)
+    assert (allowed, denied_by) == (False, "ip:p:day") and retry_after == 11 * 3600 + 55 * 60 + 86400
+    assert sorted(n for n in pool.committed.values()) == [1, 1, 1]  # the refused request left no trace
+    assert await store.hit_rate_limit("solo", 600, 1) == (True, 0)
+    assert await store.hit_rate_limit("solo", 600, 1) == (False, 900)
+    store._pool = None
 
 
 def test_factory() -> None:

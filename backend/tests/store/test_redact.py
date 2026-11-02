@@ -82,6 +82,67 @@ async def test_rehydrate_restores_names_and_prose() -> None:
     assert {cid for cid, _ in places.get_calls} == {GOOGLE_ID, GOOGLE_PLAN_B_ID}
 
 
+async def test_rehydrate_restores_hours_and_rating_but_never_our_computed_fields() -> None:
+    from app.domain.schemas import CostRange, Hours
+
+    class Drifted(FakePlaces):
+        """Fresh details whose category, cost and other computed fields differ from what was planned."""
+
+        async def get(self, candidate_id: str, ctx: Any) -> Any:
+            fresh = await super().get(candidate_id, ctx)
+            return fresh.model_copy(update={
+                "category": "event", "cost": CostRange(min=9000, max=9999, currency="INR", basis="listed_price_range"),
+                "duration_range": (5, 5, 5), "tags": ["drifted"], "seated": False,
+                "hours": Hours(status="known", periods=[(600, 1200)]), "rating": 3.9, "rating_count": 77,
+            })
+
+    original = make_result()
+    restored = await redact.rehydrate(redact.for_storage(original), Drifted(), now=NOW)
+    assert restored.plan is not None and original.plan is not None
+    cafe, stored = restored.plan.stops[0].candidate, original.plan.stops[0].candidate
+    # display fields come from the fresh details (hours and rating included)
+    assert (cafe.hours.periods, cafe.rating, cafe.rating_count) == ([(600, 1200)], 3.9, 77)
+    # what we computed and validated is kept exactly
+    for key in ("category", "cost", "duration_range", "tags", "seated", "diet", "lat", "lng", "city_id"):
+        assert getattr(cafe, key) == getattr(stored, key), key
+    assert restored.plan.stops[0].start_min == original.plan.stops[0].start_min
+    assert restored.plan.totals == original.plan.totals
+
+
+async def test_rehydrate_through_google_places_details() -> None:
+    import httpx
+    import respx
+
+    from app.providers.google_places import DETAILS_FIELD_MASK, GooglePlaces
+
+    def details(pid: str, name: str, types: list[str]) -> dict[str, Any]:
+        return {
+            "id": pid, "displayName": {"text": name}, "formattedAddress": "Synthetic address",
+            "location": {"latitude": 12.9716, "longitude": 77.5946}, "types": types,
+            "googleMapsUri": f"https://maps.google.com/?cid={pid}", "businessStatus": "OPERATIONAL",
+            "rating": 4.7, "userRatingCount": 2100,
+            "regularOpeningHours": {"periods": [{"open": {"day": 6, "hour": 8, "minute": 0},
+                                                 "close": {"day": 6, "hour": 22, "minute": 0}}]},
+        }
+
+    cafe_pid, plan_b_pid = GOOGLE_ID.removeprefix("gp:"), GOOGLE_PLAN_B_ID.removeprefix("gp:")
+    with respx.mock(assert_all_called=True) as mock:
+        cafe_route = mock.get(f"https://places.googleapis.com/v1/places/{cafe_pid}").mock(
+            return_value=httpx.Response(200, json=details(cafe_pid, GOOGLE_NAME, ["cafe"])))
+        # types that map to none of our categories: the place is still shown, with its stored category
+        mock.get(f"https://places.googleapis.com/v1/places/{plan_b_pid}").mock(
+            return_value=httpx.Response(200, json=details(plan_b_pid, GOOGLE_PLAN_B_NAME, ["point_of_interest"])))
+        async with httpx.AsyncClient() as client:
+            restored = await redact.rehydrate(redact.for_storage(make_result()), GooglePlaces("k", client), now=NOW)
+    assert cafe_route.calls.last.request.headers["X-Goog-FieldMask"] == DETAILS_FIELD_MASK
+    assert restored.plan is not None
+    cafe, plan_b = restored.plan.stops[0].candidate, restored.plan.stops[0].plan_b
+    assert cafe.name == GOOGLE_NAME and cafe.rating == 4.7 and cafe.rating_count == 2100
+    assert cafe.hours.status == "known" and cafe.hours.periods == [(480, 1320)]
+    assert plan_b is not None and plan_b.name == GOOGLE_PLAN_B_NAME and plan_b.category == "cafe"
+    assert redact.UNAVAILABLE_WARNING not in restored.warnings
+
+
 async def test_rehydrate_failure_and_no_provider() -> None:
     record = redact.for_storage(make_result())
     for places in (FakePlaces(fail=True), None):
