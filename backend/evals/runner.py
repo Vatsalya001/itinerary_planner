@@ -825,12 +825,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-cost-usd", type=float, default=None,
                    help="estimated-cost budget (planner + judge, registry pricing) for this whole invocation, checked "
                         "between runs; once exceeded the remaining runs are left for --resume")
+    p.add_argument("--pace-s", type=float, default=0.0,
+                   help="seconds to wait between runs (rate-limited free tiers, e.g. Cerebras 5 requests/minute); "
+                        "the wait is not counted in run latency")
     p.add_argument("--verbose", action="store_true", help="show warnings from the app and harness tracebacks")
     args = p.parse_args(argv)
     if args.repeats < 1:
         p.error("--repeats must be at least 1")
     if args.max_minutes is not None and args.max_minutes < 0:
         p.error("--max-minutes must not be negative")
+    if args.pace_s < 0:
+        p.error("--pace-s must not be negative")
     if args.max_cost_usd is not None and not args.max_cost_usd >= 0:
         p.error("--max-cost-usd must not be negative")
     return args
@@ -955,6 +960,8 @@ async def run(args: argparse.Namespace) -> int:
                 print(f"STOP {model_id}: {used}; {remaining} run(s) left (finish with --resume)", flush=True)
                 break
             done += 1
+            if args.pace_s and done > 1:
+                await asyncio.sleep(args.pace_s)  # spacing for rate-limited providers; not part of run latency
             t0 = time.perf_counter()
             try:
                 rec = await run_one(sess, case, model_id, kind, repeat)

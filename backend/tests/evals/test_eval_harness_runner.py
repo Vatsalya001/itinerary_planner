@@ -194,3 +194,10 @@ def test_ctrl_c_exits_130_with_a_resume_hint(monkeypatch: pytest.MonkeyPatch, ca
     monkeypatch.setattr(runner, "_configure_logging", lambda verbose: None)
     assert runner.main(["--suite", "offline"]) == 130
     assert "--resume" in capsys.readouterr().err
+
+
+def test_pace_s_flag_parses_and_rejects_negative() -> None:
+    assert parse_args(["--suite", "offline", "--pace-s", "15"]).pace_s == 15.0
+    assert parse_args(["--suite", "offline"]).pace_s == 0.0
+    with pytest.raises(SystemExit):
+        parse_args(["--suite", "offline", "--pace-s", "-1"])
