@@ -3,6 +3,7 @@ import type { CanonicalPlan } from '../types'
 import { downloadIcs } from '../lib/ics'
 import { copyText, planToText, whatsappUrl } from '../lib/share'
 import { safeHttpsUrl } from '../lib/urls'
+import { ExternalLink } from './ExternalLink'
 import { Icon } from './Icon'
 import { btnPrimary, btnSecondary } from './ui'
 
@@ -34,11 +35,10 @@ export function PlanActions({
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         {routeUrl ? (
-          <a className={btnPrimary} href={routeUrl} target="_blank" rel="noopener noreferrer">
+          <ExternalLink className={btnPrimary} href={routeUrl}>
             <Icon name="route" />
             Open full route in Google Maps
-            <span className="sr-only"> (opens in a new tab)</span>
-          </a>
+          </ExternalLink>
         ) : null}
         <button
           type="button"
@@ -58,11 +58,10 @@ export function PlanActions({
             Copy share link
           </button>
         ) : null}
-        <a className={btnSecondary} href={whatsappUrl(text)} target="_blank" rel="noopener noreferrer">
+        <ExternalLink className={btnSecondary} href={whatsappUrl(text)}>
           <Icon name="message" />
           Share on WhatsApp
-          <span className="sr-only"> (opens in a new tab)</span>
-        </a>
+        </ExternalLink>
         <button
           type="button"
           className={btnSecondary}

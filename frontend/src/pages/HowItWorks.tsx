@@ -3,42 +3,109 @@ import { Link } from 'react-router-dom'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { linkClass } from '../components/ui'
 
+// Every statement on this page describes backend/app (graph/build.py, graph/nodes/*, domain/*) as documented in
+// docs/LLD.md sections 3, 4 and 7. Keep it in step with the code; make no claims the code does not back.
 const NODES: Array<[string, string, string]> = [
-  ['guard_input', 'code', 'Input bounds (body size, budget, 30–720 minutes, list sizes, text length), Unicode normalisation, and rejecting anything that is not leisure planning.'],
-  ['parse_preferences', 'LLM, structured output', 'Free text and form fields become normalised preferences: city, budget, currency, start, duration, mood, energy, interests, hard constraints and soft preferences. A rule-based parser is the fallback.'],
-  ['resolve_location', 'code', 'City to coordinates, timezone, country and currency, with aliases such as Bengaluru and Bangalore.'],
-  ['check_clarity', 'code', 'Looks only for blocking gaps: no city, ambiguous currency, contradictory or unmappable hard constraints, city not found. At most one round of questions; after that, visible defaults.'],
-  ['ask_clarification', 'code + interrupt', 'Pauses the run with up to two questions and quick replies, then resumes with your answers.'],
-  ['build_context', 'code', 'The coming Saturday in the city’s timezone, start and end, meal and daylight windows, pacing for your energy, and the forecast for the day: rain probability, temperature and sunset.'],
-  ['plan_agent', 'LLM with tools', 'Searches, composes, checks and submits a plan.'],
-  ['tools', 'code', 'Runs the tools, records every returned place or event in a per-run ledger, emits trace events and enforces per-tool caps.'],
-  ['validate_plan', 'code', 'Rebuilds the plan from the ledger, computes the schedule and costs, and runs every check below.'],
-  ['fallback_planner', 'code', 'A search over the same candidates (gathering places and events itself if needed) with the same constraints and pacing, used when the model fails or repairs run out.'],
-  ['explain_infeasible', 'code', 'Which constraint removed what, the cheapest workable budget and time found, and one-tap relaxations.'],
-  ['finalize', 'code', 'Builds the result, saves the plan for share links, writes the run record and deletes the paused-run checkpoint.'],
+  [
+    'guard_input',
+    'code',
+    'Cleans the request: Unicode normalisation, removal of control, zero-width and direction-override characters, and per-field length limits. Clamps the time you have to 30–720 minutes, with a visible note when it changes it. Flags instruction-like text (such as “ignore previous instructions”) in the trace, and adds a note when you ask it to book, pay or contact someone. It never rejects a request: malformed, oversized or rate-limited requests are refused by the API (HTTP 400, 413 or 429) before the graph starts.',
+  ],
+  [
+    'parse_preferences',
+    'rules + LLM',
+    'The rule-based parser always reads your request. Except in the no-LLM baseline, the model reads it too, grounded in your words: it can only keep interests and hard constraints that your text supports, never re-adds a constraint you dropped, and its time and budget count only when your text mentions a time or an amount. The two readings are merged: fields you filled in win, then the model, then the rules, and hard constraints are combined. If the model fails or times out, the rule-based reading is used and the trace says so.',
+  ],
+  [
+    'resolve_location',
+    'code',
+    'Looks up the city in a built-in list of cities first, then with Open-Meteo geocoding: coordinates, timezone, country and currency. A transient failure is retried once.',
+  ],
+  [
+    'check_clarity',
+    'code',
+    'Asks only about blocking gaps: a missing or unknown city, contradictory constraints, an ambiguous currency, missing budget and time when the city is also missing, or a constraint it can’t map. At most two questions, asked once. If the city still can’t be found, it says so instead of guessing.',
+  ],
+  [
+    'ask_clarification',
+    'code + interrupt',
+    'Pauses the run with the questions and quick replies. Your answers (up to 200 characters each) are folded into the request and parsing runs again.',
+  ],
+  [
+    'build_context',
+    'code',
+    'Applies visible defaults (such as a 3:00 PM start), then sets up the day: the coming Saturday in the city’s timezone, the start and end, meal windows, pacing for your energy, and the forecast (rain probability, temperature, sunset). With under 15 seconds left it goes straight to the rule-based planner.',
+  ],
+  [
+    'plan_agent',
+    'LLM with tools',
+    'The model takes a turn: it calls tools or replies. A model error, timeout or refusal, the turn cap, or running low on time hands over to the rule-based planner. A turn that ends without submitting a plan gets one nudge; a second one hands over too.',
+  ],
+  [
+    'tools',
+    'code',
+    'Runs the model’s tool calls, records every place or event they return in this run’s ledger, enforces per-tool caps and counts protocol errors (malformed calls, unknown tools, IDs no tool returned).',
+  ],
+  [
+    'validate_plan',
+    'code',
+    'Rebuilds the submitted plan from the ledger, computes the schedule and costs, and runs every check below. A failing plan goes back to the model with one-line fixes while submissions (three in total) and time remain; otherwise the rule-based planner takes over.',
+  ],
+  [
+    'fallback_planner',
+    'code',
+    'If the model stopped for time or turns, or didn’t submit, after a draft it checked had passed, that draft is checked again and used. Otherwise a deterministic search plans over the places and events found so far, running its own searches if needed, with the same constraints and pacing. A plan it builds is shown as a backup plan; if nothing fits, explain_infeasible runs.',
+  ],
+  [
+    'explain_infeasible',
+    'code',
+    'Finds what blocks a plan by retrying with the budget ignored, more time, other start times, each constraint dropped and each pacing rule relaxed, then names the blocking constraints and offers the changes that work as one-tap options.',
+  ],
+  [
+    'finalize',
+    'code',
+    'Checks the plan again from the ledger (a plan that fails is never shown), builds the result with names for the places left out, and emits the run metrics and the result. After it, the API saves shareable plans and the run log, and the runner deletes the finished run’s checkpoint.',
+  ],
 ]
 
 const TOOLS: Array<[string, string, string]> = [
-  ['search_places', 'Up to 8 normalised places: name, category, distance, price range and its basis, rating, hours on the day, diet and accessibility evidence, crowd hint, source.', '6'],
-  ['search_events', 'Events on the target date with title, start, venue, price if listed and source link.', '2'],
-  ['estimate_travel', 'Minutes, mode and fare range between consecutive stops.', '4'],
-  ['check_plan', 'Computed schedule, totals and violations for a draft, with no side effects.', '4'],
-  ['submit_plan', 'Ends the loop and sends the plan to validation.', '3 (first try + 2 repairs)'],
+  [
+    'search_places',
+    'Up to 8 places in a compact form: name, category, distance, price with its basis, rating, hours on the day, diet and wheelchair evidence, a likely-busy flag, typical visit length and source.',
+    '6',
+  ],
+  ['search_events', 'Events on the target date in the same form, with start time and price.', '2'],
+  ['estimate_travel', 'Mode, distance, minutes and fare range between consecutive stops.', '4'],
+  ['check_plan', 'Schedule, totals, errors and warnings for a draft, and the next step to take. Nothing is submitted.', '4'],
+  ['submit_plan', 'Sends the plan to validate_plan.', '3 (first try + 2 repairs)'],
 ]
 
 const CHECKS: Array<[string, string]> = [
   ['Budget', 'Worst case (stop costs + fares + 10% contingency) must be within your per-person budget.'],
-  ['Time', 'Elapsed time from the first stop to the last must fit the time you have.'],
-  ['Opening hours', 'No visit may overlap a known closed period; unknown hours give a warning, not a pass.'],
-  ['Diet', 'Strict diets need positive evidence; contrary evidence is a conflict.'],
-  ['Accessibility', 'A wheelchair constraint needs positive evidence.'],
-  ['Crowds', 'With “avoid crowds”, no likely-busy stop at its scheduled time (a heuristic, labelled as such).'],
-  ['Pacing', 'Stops, walking and long legs within the profile for your energy level.'],
-  ['Daylight and weather', 'No outdoor walk after sunset; an outdoor stop on a rainy day needs a Plan B.'],
-  ['Events', 'Event start must be on the target date in the city’s timezone.'],
-  ['Grounding', 'Every stop must come from a tool result in this run and carry a source; no duplicates; within 40 km of the city.'],
-  ['Prose', 'Explanations may not contain prices, durations or clock times; those come from data.'],
-  ['Constraints kept', 'Every hard constraint you gave must still be enforced, even if the parser dropped it.'],
+  ['Time', 'From your start time to the end of the last stop must fit the time you have.'],
+  [
+    'Opening hours',
+    'No visit while a place is known to be closed, and no arriving after an event starts. Unknown hours give a warning; venues that are only worth visiting when a show is on need known hours.',
+  ],
+  ['Diet', 'Strict diets need positive evidence at every food stop; contrary evidence is a conflict.'],
+  ['Accessibility', 'A wheelchair constraint needs positive evidence at every stop.'],
+  ['No alcohol', 'No bars or breweries; a venue that serves alcohol gets a warning.'],
+  ['Indoors / outdoors only', 'Every stop needs positive evidence of the setting.'],
+  ['Must include / avoid', 'At least one stop satisfies each “include”; no stop matches an “avoid”.'],
+  ['Crowds', 'With “avoid crowded places”, no likely-busy stop at its scheduled time (a heuristic, labelled as such).'],
+  ['Pacing', 'Stops, walking, long legs and seated stops within the profile for your energy level.'],
+  ['Visit lengths', 'Each visit stays within a sensible range for its category.'],
+  [
+    'Daylight and weather',
+    'No outdoor walk ending after sunset. An outdoor stop when rain is likely gets a warning unless it has a valid indoor Plan B.',
+  ],
+  ['Events', 'An event must be on the target date in the city’s timezone.'],
+  [
+    'Grounding',
+    'Every stop comes from a tool result in this run, appears once, is priced in the plan’s currency and is within 40 km of the city. Source links must be https, and an event needs an https source page.',
+  ],
+  ['Prose', 'Explanations may not state prices, durations, distances or clock times; those come from data.'],
+  ['Constraints kept', 'Every hard constraint you gave is enforced, even if the parser missed it.'],
 ]
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
@@ -59,15 +126,17 @@ export default function HowItWorks() {
       <div className="space-y-2">
         <h1 className="text-3xl font-bold tracking-tight text-stone-900">How it works</h1>
         <p className="max-w-3xl text-stone-700">
-          A LangGraph agent chooses and explains the plan using place, weather and event tools, while deterministic code
-          owns the arithmetic, the checks and the fallback. No plan reaches you without passing those checks. The model
-          never produces a price, a clock time, an address or a validation verdict that you see.
+          A LangGraph agent chooses and explains the plan using place and event search tools, while deterministic code
+          fetches the weather and owns the arithmetic, the checks and the fallback. No plan reaches you without passing
+          those checks. Prices, clock times and addresses in a plan come from data, and the model’s explanations are
+          checked so they can’t state them.
         </p>
       </div>
 
       <Section id="graph" title="The graph">
         <p className="text-stone-700">
-          Each run goes through these steps. You can watch them live in “How I planned this” on the planner.
+          Each run goes through these steps, in this order where they apply. You can watch them live in “How I planned
+          this” on the planner.
         </p>
         <ol className="space-y-3">
           {NODES.map(([name, kind, text], i) => (
@@ -89,8 +158,9 @@ export default function HowItWorks() {
 
       <Section id="tools" title="The agent's tools">
         <p className="text-stone-700">
-          The model decides which tools to call and in what order. Every call carries a short reason, shown in the trace
-          as the agent’s note. The model can only use places and events that a tool returned in this run.
+          The model decides which tools to call and in what order. Searches and travel estimates carry a short reason
+          (required; optional for the plan tools), shown in the trace as the agent’s note. The model can only use places
+          and events that a tool returned in this run.
         </p>
         <div role="region" aria-label="Agent tools" tabIndex={0} className="overflow-x-auto">
           <table className="w-full min-w-[32rem] border-collapse text-sm">
@@ -115,14 +185,20 @@ export default function HowItWorks() {
           </table>
         </div>
         <ul className="list-disc space-y-1 pl-5 text-sm text-stone-800">
-          <li>At most 10 model turns and a 60-second run deadline.</li>
-          <li>If a submitted plan fails a check, the violations go back to the model, which gets up to two repairs.</li>
-          <li>If the model errors, times out, refuses or runs out of repairs, the deterministic planner takes over and the result says so.</li>
+          <li>By default, at most 10 model turns and a 60-second deadline per run.</li>
+          <li>If a submitted plan fails a check, the problems go back to the model, which gets up to two repairs.</li>
+          <li>
+            If the model errors, times out, refuses or runs out of repairs, the rule-based planner takes over and the
+            result says so.
+          </li>
         </ul>
       </Section>
 
       <Section id="pacing" title="Pacing by energy">
-        <p className="text-stone-700">Your mood maps to a pacing profile in code, and the validator enforces it.</p>
+        <p className="text-stone-700">
+          Your mood maps to an energy level and a pacing profile, and the validator enforces it. Walking counts walk legs
+          plus walking stops; the buffer is added between stops.
+        </p>
         <div role="region" aria-label="Pacing profiles" tabIndex={0} className="overflow-x-auto">
           <table className="w-full min-w-[30rem] border-collapse text-sm">
             <thead className="text-left text-xs text-stone-700">
@@ -131,7 +207,8 @@ export default function HowItWorks() {
                 <th scope="col" className="py-2 pr-3 text-right font-semibold">Max stops</th>
                 <th scope="col" className="py-2 pr-3 text-right font-semibold">Max walking</th>
                 <th scope="col" className="py-2 pr-3 text-right font-semibold">Buffer</th>
-                <th scope="col" className="py-2 font-semibold">Other</th>
+                <th scope="col" className="py-2 pr-3 text-right font-semibold">Legs over 15 min</th>
+                <th scope="col" className="py-2 text-right font-semibold">Seated stops</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100 text-stone-800">
@@ -140,21 +217,24 @@ export default function HowItWorks() {
                 <td className="py-2 pr-3 text-right tabular-nums">3</td>
                 <td className="py-2 pr-3 text-right tabular-nums">45 min</td>
                 <td className="py-2 pr-3 text-right tabular-nums">15 min</td>
-                <td className="py-2">At least one seated stop; at most one leg over 15 min</td>
+                <td className="py-2 pr-3 text-right tabular-nums">at most 1</td>
+                <td className="py-2 text-right tabular-nums">at least 1</td>
               </tr>
               <tr>
                 <th scope="row" className="py-2 pr-3 text-left font-medium">Medium</th>
                 <td className="py-2 pr-3 text-right tabular-nums">4</td>
                 <td className="py-2 pr-3 text-right tabular-nums">75 min</td>
                 <td className="py-2 pr-3 text-right tabular-nums">10 min</td>
-                <td className="py-2">—</td>
+                <td className="py-2 pr-3 text-right tabular-nums">at most 2</td>
+                <td className="py-2 text-right tabular-nums">—</td>
               </tr>
               <tr>
                 <th scope="row" className="py-2 pr-3 text-left font-medium">High</th>
                 <td className="py-2 pr-3 text-right tabular-nums">6</td>
                 <td className="py-2 pr-3 text-right tabular-nums">150 min</td>
                 <td className="py-2 pr-3 text-right tabular-nums">10 min</td>
-                <td className="py-2">—</td>
+                <td className="py-2 pr-3 text-right tabular-nums">at most 3</td>
+                <td className="py-2 text-right tabular-nums">—</td>
               </tr>
             </tbody>
           </table>
@@ -176,8 +256,11 @@ export default function HowItWorks() {
         </dl>
         <ul className="list-disc space-y-1 pl-5 text-sm text-stone-800">
           <li>Unknown is never treated as yes: hard constraints need positive evidence.</li>
-          <li>Your text, tool output and event titles are passed to the model as data, not instructions.</li>
-          <li>The tools are read-only. The planner can’t book, pay or contact anyone.</li>
+          <li>
+            Your text, tool output and event names are passed to the model as data, not instructions; event descriptions
+            are never read. Instruction-like sentences never set a field in the rule-based parser.
+          </li>
+          <li>The tools only search, estimate, check and submit. The planner can’t book, pay or contact anyone.</li>
           <li>Pages render text only (no raw HTML) and only link to https addresses.</li>
         </ul>
       </Section>
@@ -185,46 +268,61 @@ export default function HowItWorks() {
       <Section id="data" title="Where the data comes from">
         <ul className="list-disc space-y-2 pl-5 text-sm text-stone-800">
           <li>
-            <span className="font-semibold">Places:</span> Google Places, shown with “Google Maps” attribution and a link to
-            each place on Google Maps. When that is unavailable, a curated Bangalore snapshot built from OpenStreetMap
-            (© OpenStreetMap contributors) and official venue sites, badged as curated.
+            <span className="font-semibold">Places:</span> Google Places when a key is configured, shown with “Google
+            Maps” attribution and a link to each place. Otherwise, or when Google fails, a curated snapshot built from
+            OpenStreetMap (© OpenStreetMap contributors), badged as curated; it covers Bengaluru only.
           </li>
           <li>
-            <span className="font-semibold">City, timezone and weather:</span> Open-Meteo geocoding and forecast.
+            <span className="font-semibold">City, timezone and weather:</span> a built-in list of cities, then Open-Meteo
+            geocoding; the forecast comes from Open-Meteo.
           </li>
           <li>
-            <span className="font-semibold">Events:</span> a web search limited to an allow-list of sites, then structured
-            event data read in code from at most three pages. Events link back to their source; check before you go.
+            <span className="font-semibold">Events:</span> when enabled, a web search limited to an allow-list of sites,
+            then structured event data read in code from at most three pages that robots.txt allows. Events link back to
+            their page; check before you go.
           </li>
           <li>
-            <span className="font-semibold">Travel:</span> distance-based estimates per city and mode, with fares from a
-            per-city table. Always labelled as estimates.
+            <span className="font-semibold">Travel:</span> distance-based estimates with per-city speeds, pickup times and
+            fare tables (or a default table). Always labelled as estimates.
           </li>
           <li>
-            <span className="font-semibold">Costs:</span> a listed price range when available, otherwise a price-level
-            band, a ticket price for events, free for parks and walks, or the category’s upper default. Each cost shows
-            its basis.
+            <span className="font-semibold">Costs:</span> a listed price range when there is one, otherwise a band for the
+            price level, a ticket price for events, free where the data says so, or a typical range for the category.
+            Each cost shows its basis.
           </li>
           <li>
-            <span className="font-semibold">Crowds:</span> there is no live crowd data. “Likely busy” is a heuristic from
-            rating count, category and weekend peak hours.
+            <span className="font-semibold">Crowds:</span> there is no live crowd data. “Likely busy” is a heuristic:
+            popularity (from the number of ratings, or curated) combined with the category’s typical Saturday busy hours.
           </li>
         </ul>
       </Section>
 
       <Section id="failures" title="When something goes wrong">
         <ul className="list-disc space-y-1 pl-5 text-sm text-stone-800">
-          <li>Model failure or invalid submissions: a backup plan, with the reason shown.</li>
-          <li>Places unavailable: the curated snapshot where available, badged; otherwise an honest message.</li>
+          <li>
+            A request the API can’t accept (malformed, too large, or over the rate limit) gets a clear error before any
+            planning starts.
+          </li>
+          <li>Model failure or invalid submissions: a backup plan from the rule-based planner, with the reason shown.</li>
+          <li>
+            Places unavailable: the curated snapshot where it covers the city, badged; otherwise an honest “try again”
+            message.
+          </li>
           <li>Weather or events unavailable: the plan goes ahead and says what wasn’t checked.</li>
-          <li>Nothing satisfies your hard constraints: the blocking constraint, the cheapest workable budget or time, and one-tap changes.</li>
+          <li>
+            Nothing satisfies your hard constraints: the blocking constraints, the cheapest workable budget or shortest
+            time found, and one-tap changes.
+          </li>
         </ul>
       </Section>
 
       <Section id="privacy" title="Privacy">
         <p className="text-sm text-stone-800">
-          No accounts. Your free text lives only in the run’s checkpoint, which is deleted when the run finishes, and is
-          never logged. Shared plans hold no free text and expire after 30 days.
+          No accounts. Your description is sent to the AI model to read your request, and is kept only in the run’s
+          checkpoint, which is deleted when the run finishes, or after 24 hours if a question is never answered. It is
+          never written to the logs. Shared plans don’t store
+          your description, mood or constraint wording, and expire after 30 days. Feedback comments are kept for up to 90
+          days. Optional LangSmith tracing is off by default and hides inputs and outputs in production.
         </p>
       </Section>
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -11,6 +12,8 @@ import httpx
 
 from app.config import Settings
 from app.providers.base import EventsProvider, Geocoder, PlacesProvider, TravelEstimator, WeatherProvider
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,7 +70,8 @@ def build_deps(settings: Settings, http: httpx.AsyncClient | None = None) -> Dep
         case "google":
             from app.providers.google_places import GooglePlaces
 
-            assert settings.google_maps_api_key is not None and client is not None
+            if settings.google_maps_api_key is None or client is None:
+                raise ValueError("PLACES_PROVIDER=google needs GOOGLE_MAPS_API_KEY (or use auto/osm_snapshot)")
             places = GooglePlaces(settings.google_maps_api_key.get_secret_value(), client)
         case "fixture":
             places = FixturePlaces()
@@ -79,7 +83,8 @@ def build_deps(settings: Settings, http: httpx.AsyncClient | None = None) -> Dep
         case "tavily":
             from app.providers.events_web import TavilyEvents
 
-            assert settings.tavily_api_key is not None and client is not None
+            if settings.tavily_api_key is None or client is None:
+                raise ValueError("EVENTS_PROVIDER=tavily needs TAVILY_API_KEY (or use auto/none)")
             events = TavilyEvents(settings.tavily_api_key.get_secret_value(), client)
         case "fixture":
             events = FixtureEvents()
@@ -103,19 +108,19 @@ def build_deps(settings: Settings, http: httpx.AsyncClient | None = None) -> Dep
         assert client is not None
         weather = OpenMeteoWeather(client)
 
-    fault = settings.active_fault()
-    if fault == "places_http_503":
-        from app.providers.faults import FailingPlaces
+    fault = settings.active_fault()  # None in prod
+    if fault is not None:
+        from app.providers.faults import KNOWN_FAULTS, FailingEvents, FailingGeocoder, FailingPlaces
 
-        places = FailingPlaces(places)
-    elif fault == "events_search_error":
-        from app.providers.faults import FailingEvents
-
-        events = FailingEvents(events)
-    elif fault == "geocoder_down":
-        from app.providers.faults import FailingGeocoder
-
-        geocoder = FailingGeocoder()
+        if fault == "places_http_503":
+            places = FailingPlaces(places)
+        elif fault == "events_search_error":
+            if events is not None:  # events disabled: nothing to fail
+                events = FailingEvents(events)
+        elif fault == "geocoder_down":
+            geocoder = FailingGeocoder()
+        elif fault not in KNOWN_FAULTS:
+            log.warning("unknown FAULT %r ignored", fault[:60], extra={"fault": fault[:60]})
 
     return Deps(
         settings=settings,

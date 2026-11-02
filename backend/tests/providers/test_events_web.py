@@ -459,3 +459,114 @@ async def test_tavily_skips_userinfo_and_hostless_urls(blr_ctx: WorldContext) ->
         async with httpx.AsyncClient() as client:
             assert await TavilyEvents(KEY, client).search([], blr_ctx) == []
     assert not robots.called
+
+
+# ---------------------------------------------------------------------------
+# Timeouts, robots.txt cache lifetime, concurrency and the search deadline
+# ---------------------------------------------------------------------------
+
+
+async def test_requests_use_timeouts_with_a_connect_limit(blr_ctx: WorldContext) -> None:
+    a = "https://www.district.in/events/a"
+    with respx.mock(assert_all_called=True) as mock:
+        search = mock.post(TAVILY_URL).mock(return_value=tavily_results(a))
+        robots = mock.get(ROBOTS).mock(return_value=httpx.Response(404))
+        page_a = mock.get(a).mock(return_value=html_response(page(ev(url=a))))
+        async with httpx.AsyncClient() as client:
+            await TavilyEvents(KEY, client).search([], blr_ctx)
+    assert search.calls.last.request.extensions["timeout"] == {"connect": 4.0, "read": 8.0, "write": 8.0,
+                                                               "pool": 8.0}
+    for route in (robots, page_a):
+        assert route.calls.last.request.extensions["timeout"] == {"connect": 4.0, "read": 5.0, "write": 5.0,
+                                                                  "pool": 5.0}
+
+
+async def test_robots_failure_is_cached_for_an_hour_and_success_for_a_day(blr_ctx: WorldContext) -> None:
+    from app.providers.events_web import ROBOTS_FAILURE_TTL_S, ROBOTS_TTL_S
+
+    a = "https://www.district.in/events/a"
+    now = [1000.0]
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(TAVILY_URL).mock(return_value=tavily_results(a))
+        robots = mock.get(ROBOTS).mock(side_effect=[httpx.Response(503), httpx.Response(404), httpx.Response(404)])
+        route = mock.get(a).mock(return_value=html_response(page(ev(url=a))))
+        async with httpx.AsyncClient() as client:
+            provider = TavilyEvents(KEY, client, clock=lambda: now[0])
+            assert await provider.search([], blr_ctx) == []  # 503: disallow
+            now[0] += ROBOTS_FAILURE_TTL_S - 1
+            assert await provider.search([], blr_ctx) == []  # still within the failure TTL: not re-fetched
+            assert robots.call_count == 1 and not route.called
+            now[0] += 2  # the failure expired: robots.txt is fetched again (404 = no rules)
+            assert [e.name for e in await provider.search([], blr_ctx)] == ["Sitar & Strings"]
+            assert robots.call_count == 2
+            now[0] += ROBOTS_TTL_S - 1  # a successful read is kept for a day
+            await provider.search([], blr_ctx)
+            assert robots.call_count == 2
+            now[0] += 2
+            await provider.search([], blr_ctx)
+            assert robots.call_count == 3
+
+
+async def test_pages_are_fetched_concurrently_with_one_robots_request(blr_ctx: WorldContext) -> None:
+    import asyncio
+
+    urls = [f"https://www.district.in/events/{n}" for n in ("a", "b", "c")]
+    active = [0]
+    peak = [0]
+
+    async def slow_page(request: httpx.Request) -> httpx.Response:
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        await asyncio.sleep(0.05)
+        active[0] -= 1
+        url = str(request.url)
+        return html_response(page(ev(name=f"Gig {url[-1]}", url=url)))
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.post(TAVILY_URL).mock(return_value=tavily_results(*urls))
+        robots = mock.get(ROBOTS).mock(return_value=httpx.Response(404))
+        for url in urls:
+            mock.get(url).mock(side_effect=slow_page)
+        async with httpx.AsyncClient() as client:
+            events = await TavilyEvents(KEY, client).search([], blr_ctx)
+    assert peak[0] == 3  # all three pages in flight at once
+    assert robots.call_count == 1  # concurrent fetches share one robots.txt request
+    assert sorted(e.name for e in events) == ["Gig a", "Gig b", "Gig c"]
+
+
+async def test_search_deadline_returns_what_arrived(blr_ctx: WorldContext) -> None:
+    import asyncio
+    import time
+
+    fast, stuck = "https://www.district.in/events/fast", "https://www.district.in/events/stuck"
+
+    async def never(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        raise AssertionError("cancelled at the deadline")
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(TAVILY_URL).mock(return_value=tavily_results(stuck, fast))
+        mock.get(ROBOTS).mock(return_value=httpx.Response(404))
+        mock.get(fast).mock(return_value=html_response(page(ev(name="Quick Gig", url=fast))))
+        mock.get(stuck).mock(side_effect=never)
+        async with httpx.AsyncClient() as client:
+            started = time.monotonic()
+            events = await TavilyEvents(KEY, client, deadline_s=0.3).search([], blr_ctx)
+            elapsed = time.monotonic() - started
+    assert [e.name for e in events] == ["Quick Gig"]
+    assert elapsed < 2.0
+
+
+async def test_search_deadline_on_the_tavily_call_is_a_provider_timeout(blr_ctx: WorldContext) -> None:
+    import asyncio
+
+    async def slow_search(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        raise AssertionError("cancelled at the deadline")
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(TAVILY_URL).mock(side_effect=slow_search)
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(ProviderError) as info:
+                await TavilyEvents(KEY, client, deadline_s=0.2).search([], blr_ctx)
+    assert info.value.code == "timeout" and info.value.retryable

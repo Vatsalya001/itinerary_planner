@@ -4,6 +4,7 @@ import { classifyDegradation, omissionLabel } from '../lib/labels'
 import { legAfter, providersIn } from '../lib/plan'
 import { ChecksPanel } from './ChecksPanel'
 import { DegradationNotices } from './DegradationNotices'
+import { ExternalLink } from './ExternalLink'
 import { Feedback } from './Feedback'
 import { PlanActions } from './PlanActions'
 import { LegRow, StopCard } from './StopCard'
@@ -166,9 +167,9 @@ export function PlanView({
         {providers.has('curated_snapshot') ? (
           <span>
             Curated places:{' '}
-            <a className={linkClass} href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">
-              © OpenStreetMap contributors
-            </a>
+            <ExternalLink className={linkClass} href="https://www.openstreetmap.org/copyright">
+              <span>© OpenStreetMap contributors</span>
+            </ExternalLink>
             .{' '}
           </span>
         ) : null}

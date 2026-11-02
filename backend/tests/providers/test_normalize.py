@@ -91,8 +91,31 @@ def test_price_level_band_inr() -> None:
 def test_price_level_band_other_currencies() -> None:
     gbp = price_level_band("PRICE_LEVEL_EXPENSIVE", "GBP")
     assert gbp is not None and (gbp.min, gbp.max, gbp.currency) == (35, 70, "GBP")
-    unknown = price_level_band("PRICE_LEVEL_INEXPENSIVE", "THB")
+    unknown = price_level_band("PRICE_LEVEL_INEXPENSIVE", "ISK")
     assert unknown is not None and unknown.currency == "USD"  # never priced in a currency we have no band for
+
+
+def test_every_gazetteer_country_has_currency_band_rate_and_fare() -> None:
+    import yaml
+
+    from app.domain.categories import DATA_DIR, currency_for_country, load_countries
+    from app.domain.parser_rules import convert_amount
+
+    gazetteer = yaml.safe_load((DATA_DIR / "gazetteer.yaml").read_text(encoding="utf-8"))
+    countries = load_countries()
+    gazetteer_codes = {str(c["country_code"]) for c in gazetteer["cities"].values()}
+    assert gazetteer_codes <= set(countries), sorted(gazetteer_codes - set(countries))
+    rates = yaml.safe_load((DATA_DIR / "fx.yaml").read_text(encoding="utf-8"))["units_per_usd"]
+    fares = yaml.safe_load((DATA_DIR / "cities.yaml").read_text(encoding="utf-8"))["default"]["fares_by_currency"]
+    bands = nz.load_price_bands()["bands"]
+    for code, entry in countries.items():
+        currency = entry["currency"]
+        assert currency_for_country(code) == currency and entry["symbol"].strip(), code
+        assert currency in bands, currency  # priced in the local currency, never in USD by fallback
+        assert currency in rates and rates[currency] > 0, currency
+        assert currency in fares, currency  # motorised legs can be priced
+        assert category_default_cost("restaurant", currency).currency == currency
+    assert convert_amount(2000, "INR", "THB") == 709  # 2000 * 33.70 / 95.0 = 709.47, rounded down
 
 
 def test_price_bands_are_monotonic_and_cover_all_categories() -> None:

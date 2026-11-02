@@ -1,7 +1,7 @@
 # Perfect Saturday Planner: High-Level Design
 
-This document describes the system as it is implemented at commit `053ba54` (plus this documentation). Where the
-code differs from [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md), the code is described and the difference is
+This document describes the system as implemented on the `integration` branch at `14a871e` (main plus the
+hardening merges), plus this documentation. Where the code differs from [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md), the code is described and the difference is
 listed in [Plan vs implementation](#16-plan-vs-implementation). Module-level detail is in [LLD.md](LLD.md).
 
 ## 1. Purpose and scope
@@ -71,7 +71,8 @@ stay on the server (`app.config.Settings`; secrets are `SecretStr`).
 | 0. Scaffold and contracts | `5086126`, `624d9b4` | Plan v2, eval spec, engineering guide; Pydantic contracts, provider protocols, settings; timeutil, constraint vocabulary, categories, pacing; stubs |
 | 1. Deterministic core | `a461315` (pre-verification checkpoint), `00142cd` (verified) | Evidence, travel, schedule, costs, validator, scoring, fallback planner, infeasibility; rules parser and clarification policy; providers; baseline and CLI. `a461315` also contained the first API/storage and frontend. `00142cd` fixed D-01..D-27 and R-1..R-12 from [PHASE1.md](verification/PHASE1.md) (currency conversion and `CURRENCY_MISMATCH`, diet negation, dotted times, astronomical sunset, meal windows, Plan B rules) |
 | 2. Agent and product | `6b75075` | LangGraph graph with interrupt/resume, agent loop, ledger, caps, deadline, validate and repair, fallback, finalize; model registry (Claude, Ollama, fake; Gemini/Grok placeholders); API fixes from [PHASE2.md](verification/PHASE2.md) (bounded `available_time`, `relaxed_constraints`, resume-safe rate limits, retention sweeper, keep-alive comments, IPv6 /64 keys, per-DB checkpoint files, single resume per thread, checked-draft salvage) |
-| 3. Evals, hardening, docs | `fe378a3` (ops), `053ba54` (evals) | Dockerfile, compose, Render blueprint, CI, Makefile, `.env.example`; eval harness, first results and [EVAL_REPORT.md](EVAL_REPORT.md); eval-driven fixes (LLM constraints need textual support, Ollama `num_predict` cap, salvage on text-only endings, gazetteer-first live geocoding, distances in the prose check). This HLD/LLD/README complete the phase |
+| 3. Evals, hardening, docs | `fe378a3` (ops), `053ba54` (evals) | Dockerfile, compose, Render blueprint, CI, Makefile, `.env.example`; eval harness, first results and [EVAL_REPORT.md](EVAL_REPORT.md); eval-driven fixes (LLM constraints need textual support, Ollama `num_predict` cap, salvage on text-only endings, gazetteer-first live geocoding, distances in the prose check). The first HLD/LLD/README followed in `bcd5695` |
+| 3b. Hardening | Frontend `28d963d` (merge `93c67ad`); evals `c27314b` (merge `b99e885`), then `7d56159`; backend `f3f6a15`, `ae3786c`, `8a19d97` (merge `14a871e`) | Fixes for the issues found while documenting. Backend: Place Details with hours and rating for share links, `/api/health` 503 on DB failure and a `places` status, `httpx.Timeout` with a 4 s connect limit everywhere, concurrent event pages under a 15 s budget, robots.txt cache with expiry, one ERROR log for a rejected Maps key, atomic multi-limit rate checks, newest eval summary served, currencies, fares and price bands for every gazetteer country, known-fault list. Evals: `JUDGE_MODEL` default judge, record schema 2, wider prompt hash, dirty-tree resume key, harness-error records, `backend/.env` loading, cost per plan and per run, `--max-cost-usd`. Frontend: owned aborts, legs matched by ID, shared-plan focus, honest calendar status, per-currency digit grouping |
 
 ## 5. End-to-end flows
 
@@ -210,7 +211,7 @@ graph TD
 |---|---|
 | Deterministic guardrails around a model | The model never computes a price, time, address or verdict. `validate_plan` recomputes schedule and totals from ledger records; `finalize` re-validates every draft and replaces a failing one with `no_feasible_plan` |
 | Numbers only from data | `PROSE_NUMERIC_CLAIM` rejects currency amounts, durations, distances and clock times in `why`, `tradeoff`, `summary_note` and omission reasons (place names from the ledger are blanked first). Template prose in the fallback planner is checked with the same function |
-| Unknown is never yes | `Evidence.CONFIRMED` is required for diet, wheelchair, setting; `LIKELY`/`UNKNOWN` fail with `*_UNVERIFIED`. Unknown hours are `HOURS_UNVERIFIED` (an error for concert halls, theatres and cinemas) |
+| Unknown is never yes | `Evidence.CONFIRMED` is required for diet and wheelchair (`LIKELY`/`UNKNOWN` fail with `DIET_UNVERIFIED`/`ACCESSIBILITY_UNVERIFIED`); an indoor/outdoor constraint needs a known `indoor` value (unknown is `SETTING_CONFLICT`). Unknown hours are `HOURS_UNVERIFIED` (an error for live-music venues, theatres and cinemas) |
 | Grounding | The ledger holds every candidate any tool returned in this run; unknown IDs are `UNKNOWN_ID`. Plan B must also be a ledger ID |
 | Append-only messages | `messages` uses `add_messages`; AIMessages are stored unchanged (Claude thinking blocks), every tool call gets one ToolMessage, repairs arrive as the `submit_plan` error result |
 | Constraints only tighten | Original constraints are mapped from the raw request and always enforced (`CONSTRAINT_DROPPED` warns if a parser lost one). LLM-proposed constraints are kept only with textual support in the user's words |
@@ -242,12 +243,12 @@ Timeouts per call: api 45 s per agent turn and 15 s per parse; local 150 s and 2
 
 | Source | Use | Implementation notes and limits |
 |---|---|---|
-| Google Places API (New) | Live places (`PLACES_PROVIDER=google`, or `auto` with a key) | Text Search with a field mask; Place Details for share-link rehydration. Google display fields are never stored: share records keep place IDs, computed fields and coordinates (30-day TTL), and re-fetch display fields (name, address, Maps link) on view. Not used for model evals |
+| Google Places API (New) | Live places (`PLACES_PROVIDER=google`, or `auto` with a key) | Text Search with a field mask; Place Details (Enterprise SKU fields: hours, rating, price) for share-link rehydration. Google display fields are never stored: share records keep place IDs, computed fields and coordinates (30-day TTL), and re-fetch name, address, rating, hours and the Maps link on view. A rejected key is logged once at ERROR and reported by `/api/health`. Not used for model evals |
 | OSM snapshot | Keyless places for Bangalore (`osm_snapshot`, `auto` without a key) and the fallback when the live provider fails | 41 curated places from Overpass, retrieved 2 Nov 2026, ODbL, "© OpenStreetMap contributors" on every candidate with `last_checked`. Costs are category estimates |
 | Open-Meteo | Geocoding (gazetteer first) and daily forecast | Keyless; free tier is non-commercial. Weather failure degrades to "Weather not checked" with an astronomical sunset minus a 15-minute margin |
-| Tavily + JSON-LD | Events on the target date | Allow-listed search, at most three https pages fetched with robots.txt respected, 1 MB cap, schema.org Event parsed in code, descriptions never kept, events link back to the source |
+| Tavily + JSON-LD | Events on the target date | Allow-listed search; at most three https pages fetched concurrently within a 15 s budget for the whole search; robots.txt respected and cached per site (24 h after a read, 1 h after a failure); 1 MB cap; schema.org Event parsed in code; descriptions never kept; events link back to the source |
 | Fixtures | Frozen world for tests and evals | Bengaluru and Mumbai candidates with synthetic attributes, fixed weather variants, fixture events with deliberate bad cases, clock frozen to Thursday 2026-11-05 10:00 IST |
-| `cities.yaml`, `price_bands.yaml`, `fx.yaml`, `countries.yaml`, `gazetteer.yaml` | Fares, price-level bands, reference FX rates, currencies, city/neighbourhood names | Labelled estimates with sources and dates; fares and FX rates are never presented as live |
+| `cities.yaml`, `price_bands.yaml`, `fx.yaml`, `countries.yaml`, `gazetteer.yaml` | Fares, price-level bands, reference FX rates, currencies, city/neighbourhood names | Every gazetteer country (34, 27 currencies) has a currency, a reference rate, price bands and a default cab fare. Rates are dated quotes; bands and the added fares are rough estimates. Nothing is presented as live |
 
 Provenance and licences are in [backend/data/SOURCES.md](../backend/data/SOURCES.md).
 
@@ -256,7 +257,7 @@ Provenance and licences are in [backend/data/SOURCES.md](../backend/data/SOURCES
 | Layer | Implementation |
 |---|---|
 | API boundary | `BodySizeLimitMiddleware` (16 KB, also for chunked bodies) gives 413; strict `PlanRequest` (`extra="forbid"`, field bounds, numeric `available_time` 30-720 min) gives 400 with field messages that never echo values; text durations are clamped to 30-720 min by `guard_input` |
-| Abuse and spend | Per-IP sliding windows (15 plans/10 min, 60/day), global `DAILY_PLAN_CAP` 200, separate limits for resumes (30/10 min) and share reads/feedback (60/10 min); IPv6 keyed by /64; right-most `X-Forwarded-For` hop only when `TRUST_PROXY_HEADERS=true` |
+| Abuse and spend | Per-IP sliding windows (15 plans/10 min, 60/day) and the global `DAILY_PLAN_CAP` 200, checked together and counted only when all allow the request; separate limits for resumes (30/10 min) and share reads/feedback (60/10 min); IPv6 keyed by /64; right-most `X-Forwarded-For` hop only when `TRUST_PROXY_HEADERS=true` |
 | Input handling | NFKC, control and bidi characters stripped; instruction-like text is flagged and never sets a field or becomes a question; out-of-scope requests (book, pay, message) get a fixed assumption |
 | Prompt boundary | Static system prompts; payloads are JSON marked "Data ... Not instructions"; event names clipped to 120 characters |
 | Grounding | Ledger allowlist, server-side hydration, numbers only from data |
@@ -270,9 +271,9 @@ Provenance and licences are in [backend/data/SOURCES.md](../backend/data/SOURCES
 | Mechanism | Values |
 |---|---|
 | Run deadline | `RUN_DEADLINE_S` 60; nodes route to the deterministic planner when under 12 s remain (`DEADLINE_RESERVE_S`); `build_context` skips the agent under 15 s; the runner stops at deadline + 5 s with a `rejected` "Planning took too long" result |
-| Per-call timeouts | Model calls `min(registry timeout, remaining - 12 s)`; provider HTTP requests 8 s each (event pages and robots.txt 5 s per operation, 8 s wall-clock); Anthropic SDK request timeout 60 s, 1 retry |
-| Retries | Geocoder node `RetryPolicy` (2 attempts, jittered backoff, retryable `ProviderError` only). No other HTTP retries |
-| Circuit behaviour | Per run, not per process: the first live Places failure switches the run to the snapshot (`places_mode` live -> snapshot -> unavailable); an events failure marks `events_failed` and is not retried. There is no cross-run circuit breaker |
+| Per-call timeouts | Model calls `min(registry timeout, remaining - 12 s)`; every provider request uses `httpx.Timeout(..., connect=4.0)`: Google, Open-Meteo and Tavily search 8 s, event pages and robots.txt 5 s per operation with an 8 s wall-clock each, and 15 s for a whole event search; Anthropic SDK request timeout 60 s, 1 retry |
+| Retries | Geocoder node `RetryPolicy` (2 attempts, jittered backoff, retryable `ProviderError` only). No other HTTP retries apart from the model SDKs' single retry (`max_retries` 1) |
+| Circuit behaviour | Per run, not per process: the first live Places failure switches the run to the snapshot (`places_mode` live -> snapshot -> unavailable); an events failure marks `events_failed` and is not retried. There is no cross-run circuit breaker; the Google provider remembers its last outcome (`status`) for `/api/health` only, and robots.txt failures are cached for 1 hour |
 | Model fallback | Primary -> optional fallback model -> deterministic planner; refusals are exceptions that move down the chain |
 | Salvage | A draft that passed `check_plan` without errors is re-validated and used (`complete`, `agent`) when the loop stops for time, the turn cap or a text-only ending |
 | Degradations | Parser, agent stop reasons, model switch, snapshot use, places unavailable, events unavailable, weather unavailable; each is a visible string and a `degraded` event |
@@ -290,7 +291,9 @@ Provenance and licences are in [backend/data/SOURCES.md](../backend/data/SOURCES
 * **Sentry:** only with `SENTRY_DSN`; release = git SHA, `send_default_pii=False`, no locals, no request bodies.
 * **LangSmith:** only with `TRACING_ENABLED=true` and an API key; project `saturday-planner-<env>`; inputs and
   outputs hidden in prod.
-* **Health:** `GET /api/health` reports DB status, version, env, primary model and resolved providers.
+* **Health:** `GET /api/health` reports DB status, version, env, primary model, resolved providers and the live
+  places status (`unknown`, `ok`, `auth_error`, `unavailable`); it answers 503 when the DB ping fails.
+* **Key problems:** a Google key rejection (401, 403, or 400 `API_KEY_INVALID`) is logged once per process at ERROR.
 
 ## 13. Deployment topology and CI/CD
 
@@ -305,10 +308,10 @@ flowchart LR
 
 * **Image:** three stages (Node 22 builds the UI; uv installs locked dependencies without dev tools; Python 3.12
   slim runtime as uid 1000 with only `/app/var` writable). One uvicorn worker, `--proxy-headers`, image
-  `HEALTHCHECK` on `/api/health`.
+  `HEALTHCHECK` on `/api/health` (503 when the database is unreachable).
 * **Render:** `render.yaml` defines one Docker web service, `autoDeployTrigger: checksPass`, health check path, prod
   limits and `sync: false` secrets (`DATABASE_URL` is the Neon connection string).
-* **Local:** `docker compose up` (SQLite volume) or `--profile postgres` (Postgres 17); Ollama stays on the host.
+* **Local:** `docker compose up` (SQLite volume) or `--profile postgres` with `COMPOSE_DATABASE_URL=postgresql://planner:planner@postgres:5432/planner` (Postgres 17); Ollama stays on the host.
 * **CI:** on push and PR: ruff, mypy, pytest and the offline eval suite; Postgres store and checkpointer tests
   against a service container; frontend typecheck, lint, Vitest and build; Docker build plus a container smoke test
   (health, SPA, headers, plan JSON and SSE, share link, 400). A manual `workflow_dispatch` job runs model evals with
@@ -324,9 +327,15 @@ JSONL record per run under `backend/evals/results/<date>/`. `python -m evals.rep
 `/evals` page serve. Suites: `offline` (scripted fake model and injected faults, run in CI), `models` (the
 baseline and real models) and `live` (the production model on real providers, five cases, reported separately).
 Baseline, API and local rows are reported as separate populations, holdout cases separately from dev cases.
+An optional LLM judge (`JUDGE_MODEL` by default for the `models` and `live` suites, `--judge-model none` to turn it
+off) scores plan quality on a versioned rubric; hard checks never depend on it. Records use schema 2 (older records
+are upgraded on read), harness exceptions are recorded as failed runs, cost is reported per plan and per run, and
+`--max-minutes`/`--max-cost-usd` budgets stop a run early for a later `--resume`.
 
-Latest committed results: the report generated 2026-11-02T15:53:14Z (commit `053ba54`) covers the baseline and
-`ollama:granite4:tiny-h` on the `models` suite and `fake:agent` on the `offline` suite, one repeat per case, no judge.
+Latest committed results: the report generated 2026-11-02T15:53:14Z (runs on a dirty tree at `6b75075`, committed
+in `053ba54`) covers the baseline and `ollama:granite4:tiny-h` on the `models` suite and `fake:agent` on the `offline`
+suite, one repeat per case, no judge. It predates the eval-harness hardening, so it shows cost per run only until
+`make eval-report` regenerates it.
 Claude, qwen3.5 and gemma4 have no committed results, and Gemini and Grok are not pinned. Read the report for the
 numbers.
 
@@ -334,18 +343,17 @@ numbers.
 
 | Area | Limitation |
 |---|---|
-| Live data | Live Google Places, Tavily, Open-Meteo, Claude, Postgres/Neon and the Render deploy were not exercised by the verifiers (no keys or services); see PHASE1 §6 and PHASE2 §7 |
+| Live data | Live Google Places, Tavily, Claude, Postgres/Neon and the Render deploy were not exercised by the verifiers (no keys or services); see PHASE1 §6 and PHASE2 §7. The keyless Open-Meteo forecast was exercised once by the docs verification ([DOCS.md](verification/DOCS.md)) |
 | Coverage | The keyless snapshot covers Bangalore only; elsewhere a Places outage gives `no_feasible_plan`. Fixtures cover Bengaluru and Mumbai |
 | Local models | Small Ollama models often fall back (text-only endings, timeouts); see the report's error categories |
 | Single instance | Resume locks, compiled-graph cache and the in-memory default checkpointer are per process; multi-instance deployments need a shared claim |
-| Estimates | Fares, price bands and FX rates are dated estimates; fare tariffs were checked against news reports only |
+| Estimates | Fares, price bands and FX rates are dated estimates; the Indian auto tariffs were checked against news reports only |
 | Crowds | "Likely busy" is a heuristic from popularity and busy windows, not live data |
 | Rate limits | Fail open when the store errors (logged) |
 | Terms | Passing Google Places results to a third-party LLM at inference time is a grey area (plan §6); mitigations: no storage of display fields, hidden LangSmith IO in prod, evals only on the frozen world |
-| Judge | No judge model has run, so plan quality beyond hard checks is unmeasured |
-| Shared Google plans | The Place Details field mask used for rehydration has no hours or rating, so re-opened Google stops show hours as unknown and no rating |
-| Events | A failed robots.txt fetch is cached as "disallow" for the life of the process, which turns event fetching off for that site until a restart |
-| Health check | `/api/health` answers 200 with `status: "degraded"` when the DB ping fails, so HTTP-status health checks do not detect a DB outage |
+| Judge | No judge model has run in the committed results, so plan quality beyond hard checks is unmeasured there |
+| Events | A search returns only the pages that arrived within its 15 s budget, and a failed robots.txt fetch disables that site for an hour |
+| Rough data | Price bands and cab fares for the currencies added in the hardening pass are hand-set estimates, not checked against venues or tariffs |
 
 ## 16. Plan vs implementation
 
@@ -357,21 +365,22 @@ numbers.
 | `tools` is a `ToolNode` wrapper | Custom executor `run_tools` (caps, argument models, protocol-error accounting); `submit_plan` is answered by `validate_plan` |
 | LLM parse with regex parser as fallback | Rules parse always runs; the LLM parse is merged (`merge_parse`), LLM constraints need textual support and LLM interests must be grounded |
 | `RetryPolicy` on every node calling external services | Only `resolve_location` |
-| HTTP retries for GETs, 60 s circuit breaker after 3 failures, weather cache 1 h, events cache 6 h | Not implemented; per-run sticky provider modes instead |
+| HTTP retries for GETs, 60 s circuit breaker after 3 failures, weather cache 1 h, events cache 6 h | Not implemented; per-run sticky provider modes instead. Only robots.txt is cached (24 h after a read, 1 h after a failure) |
 | Heartbeat `TraceEvent` every 10 s | SSE comment `: keep-alive` after 10 s of silence; the `heartbeat` type exists in `TraceType` but is never emitted |
-| Per-IP 5 plans/10 min and 30/day, fixed windows | 15/10 min and 60/day, two-window sliding estimate; resumes and share reads have their own limits |
+| Per-IP 5 plans/10 min and 30/day | 15/10 min and 60/day, two-window sliding estimate, checked together with the daily cap and counted only when all allow; resumes and share reads have their own limits |
 | Production model from `models.yaml` `production.primary` | Runtime uses `PRIMARY_MODEL` (config default `ollama:qwen3.5:9b`); `production.primary` is read by the eval runner |
 | Gemini and Grok pinned in the registry | `pending: true` placeholders |
 | Validator code list | 31 codes, including `HOURS_UNVERIFIED`, `PLAN_B_INVALID`, `CURRENCY_MISMATCH`, `LOCATION_APPROXIMATE`, `IDLE_WAIT`, `PACING_RELAXED`; `CONSTRAINT_DROPPED` is a warning (the constraint is still enforced) |
 | Budgets in the user's currency | Budgets are converted to the location currency with dated reference rates (`data/fx.yaml`); costs in another currency are `CURRENCY_MISMATCH` |
 | Plans table stores IDs and computed fields | Stores a redacted `PlanResult` JSON: Google display fields removed, Google names in prose tokenised, rehydrated with `PlacesProvider.get` on view |
+| Place Details with the Pro field mask for share links | The details mask adds hours, rating and price (Enterprise SKU), so re-opened stops keep hours and rating; only display fields are copied back |
 | Snapshot of ~30 places | 41 places |
 | `PLACES_PROVIDER=google\|osm_snapshot\|fixture`, `EVENTS_ENABLED` | `auto\|google\|osm_snapshot\|fixture`; `EVENTS_PROVIDER=auto\|tavily\|fixture\|none` |
 | Low energy: at most one leg over 15 min (no rule stated for medium/high) | `max_long_legs` 1 / 2 / 3 for low / medium / high |
 | Agent never uses a draft it did not submit | Checked-draft salvage (D-P2-10) |
 | CI lints with eslint and deploys to Render | oxlint; Render deploys itself after checks pass (`autoDeployTrigger: checksPass`); Playwright e2e is not in CI |
 | Preview environments for PRs | Not enabled (commented in `render.yaml`) |
-| Eval results loaded into Postgres for `/evals` | `evals.report` can save the summary to the store; the API reads the store, then falls back to `backend/evals/results/summary.json` |
+| Eval results loaded into Postgres for `/evals` | `evals.report --publish` saves the summary to the store; the API serves whichever of the stored row and the bundled `backend/evals/results/summary.json` has the newer `generated_at` |
 | Docs `ARCHITECTURE.md`, `GUARDRAILS.md`, `RUNBOOK.md`, ... | `docs/HLD.md`, `docs/LLD.md`, `docs/EVAL_REPORT.md`, `docs/verification/` |
 
 ## 17. Key decisions and trade-offs
@@ -382,7 +391,8 @@ numbers.
 | Rules parser always runs under the LLM parse | Duplicated extraction logic, but constraints can never be lost and the baseline shares the parser |
 | Deterministic beam-search planner as fallback and baseline | Template prose is plainer than model prose; it guarantees an answer when the model fails |
 | Frozen world for all model evals | Scores describe a small synthetic world, not live data quality; no Google content is used to test models |
-| Redacted share records with rehydration | Shared plans need a Place Details call per Google stop on view (rate limited per IP) |
+| Redacted share records with rehydration | Shared plans need a Place Details call per Google stop on view, at the Enterprise SKU so hours and rating come back (rate limited per IP) |
+| Health check fails only on the database | A rejected Maps key or a Places outage shows in `/api/health` `places` but keeps 200, because searches fall back to the snapshot (where it covers the city) rather than the service being down |
 | SQLite locally, Postgres in production behind one `Store` protocol | Two implementations to keep in sync; CI tests both |
 | SSE over `fetch` with a background producer task | Runs survive disconnects, but cannot be cancelled by the client ("Stop" only aborts the reader) |
 | One process, one worker | Simple drain and in-process locks; horizontal scaling needs shared claims |

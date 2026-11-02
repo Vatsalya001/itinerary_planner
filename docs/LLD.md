@@ -1,6 +1,7 @@
 # Perfect Saturday Planner: Low-Level Design
 
-Module-by-module description of everything implemented, as of commit `053ba54` plus this documentation. The
+Module-by-module description of everything implemented, as of the `integration` branch at `14a871e` (main plus the
+hardening merges) plus this documentation. The
 architecture, flows and design rationale are in [HLD.md](HLD.md); differences from
 [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md) are listed in HLD §16 and, for lower-level details, in §16 below.
 Paths are relative to the repository root unless they start with `app/`, `data/`, `evals/` or `tests/` (relative to
@@ -29,6 +30,7 @@ Paths are relative to the repository root unless they start with `app/`, `data/`
 
 ```text
 .
+├── README.md                      Overview, features, quick start, deployment, configuration
 ├── AGENTS.md                      Engineering guide: phases, ownership, units, evidence and test rules
 ├── IMPLEMENTATION_PLAN.md         Design plan v2 (see HLD §16 for where the code differs)
 ├── eval_cases.json                Behaviour spec: eval suites, model matrix, 44 cases, validator unit cases
@@ -43,7 +45,7 @@ Paths are relative to the repository root unless they start with `app/`, `data/`
 │   ├── HLD.md                     High-level design
 │   ├── LLD.md                     This document
 │   ├── EVAL_REPORT.md             Generated eval report (python -m evals.report)
-│   └── verification/PHASE1.md, PHASE2.md   Independent verification reports
+│   └── verification/PHASE1.md, PHASE2.md, DOCS.md   Independent verification reports
 ├── backend/
 │   ├── pyproject.toml, uv.lock    Python 3.12 project, dependencies, pytest/ruff/mypy config
 │   ├── app/
@@ -150,7 +152,8 @@ Paths are relative to the repository root unless they start with `app/`, `data/`
 │       │                          test_eval_cases_offline, test_ollama_e2e (ollama)
 │       ├── api/                   conftest, plan_factories, test_api_plan, test_api_security, test_api_app,
 │       │                          test_api_observability, test_api_share
-│       ├── evals/                 conftest, helpers, test_eval_harness_{assertions,cases,judge,metrics,report,runner}
+│       ├── evals/                 conftest, helpers, test_eval_harness_{assertions,cases,hardening,judge,metrics,report,
+│       │                          runner}
 │       └── verification/          independent_checks, test_phase1_adversarial, test_phase1_baseline_evals,
 │                                  test_phase1_reverify, test_phase2_api_graph
 └── frontend/
@@ -167,7 +170,7 @@ Paths are relative to the repository root unless they start with `app/`, `data/`
         ├── api/errors.ts          ApiError, StreamError, error parsing, PlanResult normalisation
         ├── api/sse.ts             SSE parser, postPlan, resumePlan
         ├── api/sse.test.ts        SSE parser and client tests
-        ├── hooks/usePlanRun.ts    Run state machine and aborts
+        ├── hooks/usePlanRun.ts    Run state machine and owned aborts (+ usePlanRun.test.tsx)
         ├── hooks/useDocumentTitle.ts   Document title
         ├── components/            Layout, PlannerForm, TracePanel, DegradationNotices, PreferencesSummary,
         │                          PlanView, StopCard, SummaryBar, ChecksPanel, ClarificationCard, InfeasibleCard,
@@ -336,7 +339,7 @@ hash use `key`.
 |---|---|---|---|
 | `run_id` | `str` | | `r_` + 12 hex chars |
 | `status` | `Status` | | |
-| `mode` | `Mode \| None` | None | None for clarification and rejected results |
+| `mode` | `Mode \| None` | None | None for clarification, rejected and location-failure (`check_clarity` -> `finalize`) results; the graph-free `app/baseline.py` sets `deterministic` on every result |
 | `model` | `str \| None` | None | Model that produced the plan, or `baseline:deterministic` |
 | `plan` | `CanonicalPlan \| None` | None | Only for `complete`/`fallback` |
 | `checks` | `list[CheckItem]` | [] | Checks panel |
@@ -537,7 +540,7 @@ Helpers:
 | `PROGRAMME_CATEGORIES` | `live_music_venue`, `theatre`, `cinema`: only worth visiting when something is on |
 | `calm_at(c, start, end)` | `popularity == "low"` and no busy-window overlap (backs "usually calm" claims) |
 | `is_outdoor(c)` | `indoor is False`, or category not indoor when `indoor` is None |
-| `opening_status(c, start, end)` | Events: `open` if inside `[event_start, event_end]` (end defaults to start + max duration), else `closed`; places: `unknown` without known hours, `open` if the visit fits one period (close <= open means after midnight), else `closed` |
+| `opening_status(c, start, end)` | Events: `unknown` without a start time, `open` if inside `[event_start, event_end]` (end defaults to start + max duration), else `closed`; places: `unknown` without known hours, `open` if the visit fits one period (close <= open means after midnight), else `closed` |
 | `open_overlap_minutes` | Longest known-open stretch inside a window (None when unknown) |
 | `busy_most_of_day(c, ctx)` | High popularity and busy windows covering more than half of `[min(start, 10:00), max(end, 22:00)]` |
 | `has_approx_location(c)` | Tag `approx_location` or address starting with `Location approximate - check the venue` |
@@ -563,7 +566,8 @@ otherwise `default_IN` for India, else `default`. Leg currency = `location.curre
 
 `cities.yaml` schema per entry: `country`, `aliases`, `speeds_kmh` (`walk`, `auto`, `cab`), `pickup_min` (per motor
 mode), `motor_mode`, and either `fares` (per mode: `currency`, `base`, `included_km`, `per_km`, `source`, `as_of`) or,
-for `default`, `fares_by_currency` (one cab tariff per currency: USD, GBP, EUR, AED, SGD, JPY, AUD, CAD, INR).
+for `default`, `fares_by_currency` (one cab tariff per currency, for all 27 currencies in `countries.yaml`; all
+labelled `estimate (unverified)`).
 
 | Entry | Speeds walk/auto/cab km/h | Pickup auto/cab | Auto tariff (base, included km, per km) | Cab tariff |
 |---|---|---|---|---|
@@ -571,7 +575,7 @@ for `default`, `fares_by_currency` (one cab tariff per currency: USD, GBP, EUR, 
 | `mumbai` (IN) | 4.5 / 17 / 18 | 4 / 6 | ₹27, 1.5, ₹18.22 (Sep 2026 reports) | ₹33, 1.5, ₹21.9 |
 | `delhi` (IN) | 4.5 / 20 / 22 | 4 / 7 | ₹30, 1.5, ₹11 (2022/2023 reports) | ₹100, 2.0, ₹20 (estimate) |
 | `default_IN` | 4.5 / 18 / 20 | 5 / 8 | ₹30, 1.5, ₹16 (estimate) | ₹100, 2.0, ₹22 (estimate) |
-| `default` | 4.5 / - / 22 | - / 6 | none (cab only) | per currency, e.g. USD 4 + 2.0/km, GBP 4 + 2.2/km |
+| `default` | 4.5 / - / 22 | - / 6 | none (cab only) | per currency (27), e.g. USD 4 + 2.0/km, GBP 4 + 2.2/km |
 
 ### 3.8 Costs (`costs.py`)
 
@@ -716,8 +720,8 @@ Constants: `BEAM_WIDTH = 30`, `POOL_LIMIT = 40`, `POOL_PER_NEED = 5`, `FINALISTS
 4. **Ranking** (`_quality`): node base score + 6 per covered interest + 6 per included requirement - 0.08 per leg
    minute - 0.03 per idle minute; meal credit (snack 1.5; main meal 7.0 when the window spans it by 60+ min, else
    3.0); -2 per early meal; -4 per wait over 20 min; -4 per required meal at an odd time; time use
-   `4 * min(1, used / 0.6) + 3 * min(1, (used - 0.6) / 0.25)`; -4 per outdoor stop when rain is likely; -2.5 per
-   repeated category; -5 per missing seated stop; plus the stated-order score. `cheapest` ranks by (unmet, worst
+   `4 * min(1, used / 0.6) + 3 * min(1, max(0, used - 0.6) / 0.25)` (used = share of the window at stops or
+   travelling, idle waits excluded); -4 per outdoor stop when rain is likely; -2.5 per repeated category; -5 per missing seated stop; plus the stated-order score. `cheapest` ranks by (unmet, worst
    case, -quality) and `shortest` by (unmet, elapsed, -quality).
 5. **Durations** (`_stretch`): for objective `best`, each stop is stretched from its default toward its maximum by
    `STRETCH_SHARE[energy]`; if the plan uses under 60% of the window, a second pass stretches fully.
@@ -753,7 +757,8 @@ draft passes `validate_plan`), `ledger_of`.
    stops to 6) and, for a low-energy day, the medium profile; if nothing single works, budget and time together;
    and, when the start is not 15:00 and meal timing was not the fix, a 15:00 start.
 4. `binding_constraints` lists what binds (`budget`, `time`, `meal_timing`, constraint keys, `pacing:<rule>`,
-   `start_time`); when nothing was found, the two constraints that remove the most candidates.
+   `start_time`); when nothing was found, the (up to) three constraints that remove the most candidates (the reason
+   text names the top two).
 5. `reason` sentences are computed by code (cheapest valid worst case, shortest valid duration, meal timing, pacing
    rule, start time, "X rules out N of M places", "Dropping 'X' would make a plan possible").
 
@@ -763,7 +768,7 @@ Relaxation patches use `PlanRequest` fields:
 |---|---|
 | Raise budget to X | `{"budget": X}` (plus `currency` in the empty-pool case) |
 | Allow N h M min | `{"available_time": minutes}` |
-| Start at H:MM | `{"start_time": "HH:MM"}` |
+| Start at H:MM AM/PM (e.g. `Start at 3:00 PM`) | `{"start_time": "HH:MM"}` |
 | Drop 'X' | `{"relaxed_constraints": ["kind:value"]}` (the client unions it with keys already relaxed) |
 | Plan at a moderate pace | `{"mood": "feeling okay, happy with a moderate pace"}` |
 | Raise budget and allow time | `{"budget": X, "available_time": N}` |
@@ -792,7 +797,7 @@ unlimited budget, `you are now`, `act as`, jailbreak, reveal prompt/secrets, ...
 | Interests | Structured interests normalised (`normalize_interest`), else `_INTEREST_LEXICON` over text with places blanked; an interest preceded by a negation in its clause is skipped. `CANONICAL_INTERESTS`: coffee, books, music, live music, food, walks, art, museums, history, nature, shopping, movies, games, theatre, dessert, street food, drinks, nightlife, wellness, views, events, culture, relax, outdoors |
 | Group size | Structured value if not 1; else "with my 3 friends" (n + 1), "for 4 people"/"party of"/"we are", or partner/date words (2); max 20 |
 | Hard constraints | `original_constraints(request)`: `map_constraint_text` over each constraint entry and each free-text sentence (source text narrowed to the triggering clause), merged, minus `relaxed_constraints`; relaxed keys add `Dropped: <label> (as you chose)` |
-| Unmapped, soft | Constraint entries and clauses that map to nothing: diet negations become soft notes (`No diet restriction`); instruction-like or hard-sounding text (`_HARD_RE`: must, only, no, not, never, avoid, need, allergic, strictly, ...) not consumed by another field becomes `unmapped_constraints`; `_SOFT_RE` text (prefer, ideally, would like, if possible) becomes `soft_preferences`; `_BENIGN_RE` phrases (no idea, not sure, don't mind, only have, need ideas) are ignored |
+| Unmapped, soft | Constraint entries and clauses that map to nothing: diet negations become soft notes (`No diet restriction`); instruction-like or hard-sounding text (`_HARD_RE`: must, only, no, not, never, avoid, need, allergic, strictly, ...) not consumed by another field becomes `unmapped_constraints`; `_SOFT_RE` free-text clauses (prefer, ideally, would like, if possible) and structured constraint entries that are neither hard-sounding nor instruction-like become `soft_preferences`; `_BENIGN_RE` phrases (no idea, not sure, don't mind, only have, need ideas) are ignored |
 | Order hint | "X then Y" / "followed by" / "after that": first activity per part, stored as soft preference `order: x > y` |
 | Date | `_usable_date`: a date before today or more than 60 days ahead is dropped with "That date has passed..." or "That date is more than 60 days away..." |
 | `missing` | `city`, `budget`, `available_time` when absent |
@@ -892,8 +897,11 @@ modules):
 | `GEOCODER` | `open_meteo`, `fixture` | `OpenMeteoGeocoder`, `FixtureGeocoder` |
 
 * One shared `httpx.AsyncClient` is created only when a live provider needs it: `Timeout(8.0, connect=4.0)`,
-  `Limits(max_connections=20, max_keepalive_connections=10)`, header `User-Agent: SaturdayPlanner/0.1`. Providers pass
-  a float `timeout` per request, which overrides the client timeout.
+  `Limits(max_connections=20, max_keepalive_connections=10)`, header `User-Agent: SaturdayPlanner/0.1`. Every provider
+  request passes its own `httpx.Timeout(<seconds>, connect=4.0)` (a bare float would also set the connect limit to
+  the full value).
+* Faults (`FAULT`, ignored in prod) are applied after wiring (§4.9); an unknown value is logged as a warning and
+  ignored.
 * `Deps.snapshot` is the `SnapshotPlaces` instance unless it is already the places provider; it is the fallback used
   by `pipeline.search_places` and the `search_places` tool when the live provider raises `ProviderError`.
 * `Deps` also carries `travel` (`HeuristicTravel`), `clock` (`make_clock`: `FIXED_NOW` outside prod, else UTC now),
@@ -907,12 +915,13 @@ modules):
 |---|---|
 | Search | `POST https://places.googleapis.com/v1/places:searchText` |
 | Details | `GET https://places.googleapis.com/v1/places/{place_id}` (IDs `gp:<id>`, `^[A-Za-z0-9_-]{4,300}$`) |
-| Headers | `X-Goog-Api-Key`, `X-Goog-FieldMask`; timeout 8 s |
+| Headers | `X-Goog-Api-Key`, `X-Goog-FieldMask`; `TIMEOUT = httpx.Timeout(8.0, connect=4.0)` |
 | Search field mask | `places.` + `id, displayName, formattedAddress, location, types, primaryType, googleMapsUri, businessStatus, accessibilityOptions, priceLevel, priceRange, rating, userRatingCount, regularOpeningHours, currentOpeningHours, servesVegetarianFood, liveMusic, outdoorSeating` |
-| Details field mask | `id,displayName,formattedAddress,location,types,googleMapsUri,businessStatus` |
+| Details field mask | `id,displayName,formattedAddress,location,types,primaryType,googleMapsUri,businessStatus,regularOpeningHours,currentOpeningHours,rating,userRatingCount,priceLevel,priceRange` (hours, rating and price fields are billed at the Place Details Enterprise SKU) |
 | Request body | `textQuery` (`text_query`: "<intent> in <hood>, <city>", "<intent>, <city>" or "<intent> in <city>"), `pageSize = min(limit, 10)`, `locationBias.circle` (centre: `near_lat/lng`, else the neighbourhood centroid, else the city; radius `radius_m`), `languageCode "en"`, `regionCode` |
 | Client-side filters | `open_at_min` drops places known to be closed (unknown hours kept); `max_price_level` drops places above the level, or whose `cost.min` exceeds the level's band cap when the level is unknown; at most `limit` results |
-| Errors | Timeout -> `timeout`; other `httpx` errors -> `network`; 400/401/403/404/429 -> `bad_request`/`unauthorized`/`forbidden`/`not_found`/`rate_limited`, else `http_<n>`; invalid JSON -> `bad_response`. A details 404 returns None. Logs carry the status only; `__repr__` hides the key |
+| Errors | Timeout -> `timeout`; other `httpx` errors -> `network`; 400/401/403/404/429 -> `bad_request`/`unauthorized`/`forbidden`/`not_found`/`rate_limited`, else `http_<n>`; invalid JSON -> `bad_response`. A details 404 returns None. Logs carry the status only; `__repr__` hides the key. A rejected key (401, 403, or 400 with reason `API_KEY_INVALID`) is logged once per process at ERROR (later ones at WARNING) |
+| Status | `GooglePlaces.status`: `unknown` before the first call, then `ok`, `auth_error` (rejected key) or `unavailable` (timeout, network, other HTTP errors, bad JSON) from the last call; reported by `/api/health` |
 
 `place_to_candidate(place, ctx, wanted_category, now)` skips (returns None) places without an ID, not
 `OPERATIONAL`, with invalid coordinates, more than 40 km away, without a mappable category or without a name.
@@ -922,15 +931,16 @@ Malformed shapes raise `MalformedPlace`; `search` skips any place that raises.
 |---|---|
 | `id` | `gp:<id>` |
 | `category` | `google_types_to_categories(primaryType, types)` (table in `normalize._GOOGLE_TYPE_MAP`; any `*_restaurant`, `diner`, `steak_house` -> `restaurant`), filtered by the wanted category or group; a place whose types map to nothing takes the wanted category |
-| `cost` | `priceRange` in the location currency -> `listed_price_range` (an open-ended range takes the band or category max); else `priceLevel` -> `price_bands.yaml` band (`price_level_estimate`); else `category_default_cost` (`category_estimate`) |
+| `cost` | `priceRange` in the location currency -> `listed_price_range` (an open-ended range takes the band or category max when that is in the same currency; otherwise the range is not used); else `priceLevel` -> `price_bands.yaml` band (`price_level_estimate`); else `category_default_cost` (`category_estimate`) |
 | `hours` | `currentOpeningHours` when its periods are dated and cover the day, else `regularOpeningHours` for the weekday; a period without a close is 24/7 (`(0, 2880)`); overnight closes run past 1440; a period reaching midnight is joined with a next-day 00:00 opening |
 | `diet` | Food and drinks only: `servesVegetarianFood` true/false -> vegetarian `CONFIRMED`/`NO`; `vegetarian_restaurant` type -> vegetarian `CONFIRMED`; `vegan_restaurant` -> vegan and vegetarian `CONFIRMED`; Jain always `UNKNOWN` |
 | `wheelchair` | `accessibilityOptions.wheelchairAccessibleEntrance` true -> `CONFIRMED`, false -> `NO`, else `UNKNOWN` |
 | `popularity` | `popularity_from_rating_count`: none -> medium, >= 5000 -> high, >= 800 -> medium, else low; `busy_windows` from the category when not low |
 | Other | `indoor`, `seated`, `effort`, `duration_range` from the category; `serves_alcohol` true for alcohol categories; `live_music` from `liveMusic`; tags add `live music`/`outdoor seating`; `maps_url` = `googleMapsUri` (https) or a Maps search URL; `Source(provider="google_places", url=googleMapsUri, retrieved_at, attribution="Google Maps")` |
 
-`get(candidate_id, ctx)` re-fetches with the details mask (used by `store.redact.rehydrate`). There is no response
-caching. Google terms are enforced at storage time (§9.3).
+`get(candidate_id, ctx)` re-fetches with the details mask (used by `store.redact.rehydrate`); a place whose types map
+to no category is returned under `DETAILS_PLACEHOLDER_CATEGORY = "event"` instead of being dropped (rehydration keeps
+the stored category). There is no response caching. Google terms are enforced at storage time (§9.3).
 
 ### 4.4 Open-Meteo (`open_meteo.py`)
 
@@ -950,7 +960,7 @@ caching. Google terms are enforced at storage time (§9.3).
 
 **Weather** (`OpenMeteoWeather.forecast`): `GET https://api.open-meteo.com/v1/forecast` with `latitude`/`longitude`
 (4 decimals), `daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset`,
-`timezone=auto`, `start_date=end_date=<day>`; timeout 8 s. It never raises: any failure, a different day, or all-null
+`timezone=auto`, `start_date=end_date=<day>`; `httpx.Timeout(8.0, connect=4.0)` (the geocoder uses the same). It never raises: any failure, a different day, or all-null
 values give `Weather(status="unavailable", summary="Weather not available")`. Sunrise and sunset become local
 minutes. `summary` = `weather_summary(code, tmax, precip)`, e.g. "Moderate rain, high 24°C, 85% chance of rain"
 (WMO text from `normalize.wmo_description`). No caching.
@@ -959,10 +969,11 @@ minutes. `summary` = `weather_summary(code, tmax, precip)`, e.g. "Moderate rain,
 
 | Item | Value |
 |---|---|
-| Search | `POST https://api.tavily.com/search`, `Authorization: Bearer <key>`, body `query = "events in <city> on <d Month YYYY> <up to 3 interests>"`, `search_depth "basic"`, `max_results 5`, `topic "general"`, `include_domains` = `DEFAULT_ALLOWED_DOMAINS ("district.in",)`, no answer or raw content; timeout 8 s |
-| Result URLs | https, host equal to or a subdomain of an allowed domain, de-duplicated; the first `MAX_PAGES = 3` are fetched sequentially |
-| robots.txt | Streamed GET of `<origin>/robots.txt` with `User-Agent: SaturdayPlanner/0.1`, capped at 64 KB, 8 s wall-clock; 401/403, 3xx, 5xx and errors disallow everything; other 4xx allow; cached per origin for the provider's lifetime |
-| Page fetch | Streamed GET, `Accept: text/html`, 5 s per operation, 8 s wall-clock, 1 MB cap, status 200 and HTML only, redirects not followed, final URL still https and allow-listed |
+| Search | `POST https://api.tavily.com/search`, `Authorization: Bearer <key>`, body `query = "events in <city> on <d Month YYYY> <up to 3 interests>"`, `search_depth "basic"`, `max_results 5`, `topic "general"`, `include_domains` = `DEFAULT_ALLOWED_DOMAINS ("district.in",)`, no answer or raw content; `httpx.Timeout(8.0, connect=4.0)` |
+| Result URLs | https, host equal to or a subdomain of an allowed domain, de-duplicated; the first `MAX_PAGES = 3` are fetched concurrently (`PAGE_CONCURRENCY = 3`) |
+| Search budget | `SEARCH_DEADLINE_S = 15` for the whole `search()` (Tavily call plus pages): a Tavily call still running at the deadline raises `ProviderError("tavily", "timeout")`; pages still loading are cancelled and the events from pages that arrived are returned |
+| robots.txt | Streamed GET of `<origin>/robots.txt` with `User-Agent: SaturdayPlanner/0.1`, capped at 64 KB, `httpx.Timeout(5.0, connect=4.0)` and 8 s wall-clock; 401/403, 3xx, 5xx and errors disallow everything; other 4xx allow. Cached per origin for `ROBOTS_TTL_S = 24 h` after a read (or an allowing 4xx) and `ROBOTS_FAILURE_TTL_S = 1 h` after a failure; a per-origin lock makes concurrent page fetches share one robots.txt request |
+| Page fetch | Streamed GET, `Accept: text/html`, `httpx.Timeout(5.0, connect=4.0)`, 8 s wall-clock, 1 MB cap, status 200 and HTML only, redirects not followed, final URL still https and allow-listed |
 | Parsing | `<script type="application/ld+json">` blocks; nested `@graph`, `itemListElement`, `mainEntity`, `subEvent`, ... up to depth 8; `@type` in `EVENT_TYPES` (Event, MusicEvent, FoodEvent, TheaterEvent, Festival, ...) |
 | Errors | Provider `tavily`: `timeout`, `network`, `rate_limited`, `http_<n>`, `bad_response`. Page failures are skipped silently |
 
@@ -1020,7 +1031,7 @@ seated, diet, wheelchair) only re-rank; neighbourhood match +0.5; sort by score,
   vegetarian); wheelchair `yes` -> `CONFIRMED`, `no` -> `NO`, `limited`/missing -> `UNKNOWN`; `Source(provider=
   "curated_snapshot", url="https://www.openstreetmap.org/<type>/<id>", last_checked, attribution="© OpenStreetMap
   contributors")`.
-* Built offline by `backend/scripts/snapshot/build_snapshot.py` from `query.overpassql` (§13.5).
+* Built offline by `backend/scripts/snapshot/build_snapshot.py` from `query.overpassql` (§13.8).
 
 ### 4.8 Frozen world (`fixture.py`, `data/fixtures/`)
 
@@ -1033,16 +1044,19 @@ seated, diet, wheelchair) only re-rank; neighbourhood match +0.5; sort by score,
 
 ### 4.9 Fault wrappers (`faults.py`)
 
-Active only when `settings.active_fault()` is set (`FAULT`, ignored in prod); applied in `build_deps`:
+Active only when `settings.active_fault()` is set (`FAULT`, ignored in prod). `KNOWN_FAULTS = PROVIDER_FAULTS |
+LLM_FAULTS`; `build_deps` applies the provider faults and logs any value outside `KNOWN_FAULTS` as a warning (then
+ignores it):
 
 | `FAULT` | Wrapper | Behaviour |
 |---|---|---|
-| `places_http_503` | `FailingPlaces(inner)` | `search`/`get` raise `ProviderError(code="http_503", retryable=True)`; `covers` delegates |
-| `events_search_error` | `FailingEvents(inner)` | `search` raises `ProviderError(code="search_error", retryable=True)` |
+| `places_http_503` | `FailingPlaces(inner)` | `search`/`get` raise `ProviderError(code="http_503", retryable=True)`; `covers` delegates; `status = "unavailable"` |
+| `events_search_error` | `FailingEvents(inner)` | Applied only when events are enabled; `search` raises `ProviderError(code="search_error", retryable=True)` (a `FailingEvents(None)` returns `[]`) |
 | `geocoder_down` | `FailingGeocoder()` | `resolve` raises `ProviderError("geocoder", "http_503", retryable=True)` |
 
-Model faults (`llm_timeout`, `llm_refusal`, ...) are read by the fake model (§6.4). `UnavailableWeather` exists but is
-not wired; unavailable weather comes from `FIXTURE_WEATHER=unavailable`.
+`LLM_FAULTS` (`llm_timeout`, `llm_refusal`, `primary_provider_503`, `submit_plan_unknown_ids_twice`,
+`text_only_final_turn`, `parser_omits_diet_and_agent_selects_nonveg`) are read by the fake model (§6.4). Unavailable
+weather is not a fault: use `FIXTURE_WEATHER=unavailable`.
 
 ### 4.10 Reference data files (`backend/data/`)
 
@@ -1050,13 +1064,13 @@ not wired; unavailable weather comes from `FIXTURE_WEATHER=unavailable`.
 |---|---|
 | `categories.yaml` | 23 categories (§3.3) |
 | `cities.yaml` | Travel speeds, pickup minutes and fares (§3.7) |
-| `countries.yaml` | 13 countries `{currency, symbol}`: IN, GB, US, AE, SG, DE, FR, NL, ES, IT, JP, AU, CA |
+| `countries.yaml` | 34 countries `{currency, symbol}` (every gazetteer country; 27 currencies). Ambiguous or postfix symbols use the ISO code as a prefix (`CHF `, `SEK `, `LKR `, ...) |
 | `gazetteer.yaml` | 93 cities in 34 countries (`country_code`, `timezone`, `lat`, `lng`, `aliases`), neighbourhoods for Bangalore (30), Mumbai (26) and Delhi (5) |
-| `fx.yaml` | "approximate reference rates, not live", `as_of` 2026-11-02, `units_per_usd` for USD, INR, EUR, GBP, JPY, AED, SGD, AUD, CAD |
-| `price_bands.yaml` | Per-person `[min, max]` per Google price level for 9 currencies, plus `category_levels` per category; labelled estimates |
+| `fx.yaml` | "approximate reference rates, not live", `as_of` 2026-11-02, `units_per_usd` for all 27 currencies; the header lists the quote sources per currency (Trading Economics, OFX, X-Rates, XE, Wise, Bloomberg, the RBA, ECB reference rates) and the pegs (AED, QAR, NPR) |
+| `price_bands.yaml` | Per-person `[min, max]` per Google price level for all 27 currencies (every band except INR, GBP, USD and EUR is a rough estimate; the 18 added in the hardening pass were derived from the USD bands at the `fx.yaml` rates), plus `category_levels` per category; labelled estimates |
 | `snapshot/bangalore.json` | §4.7 |
 | `fixtures/world.json`, `weather.json`, `events.json` | §4.8 |
-| `SOURCES.md` | Provenance and licences |
+| `SOURCES.md` | Provenance, status and licence of every data file |
 
 ## 5. Pipeline, baseline and trace
 
@@ -1108,7 +1122,7 @@ Events emitted by the graph run:
 | `ask_clarification` | node events (after resume; nothing is emitted before `interrupt()`) |
 | `build_context` | node events (`data {location_id, timezone, currency}`); `tool_called` + `tool_completed`/`tool_failed` `get_weather` (node `get_weather`); `degraded` (node `get_weather`, `data {tool, recovered}`) when weather is unavailable |
 | `plan_agent` | node events (`data {turn, model, tool_calls}` or `{turn, model, stop}`); `degraded` "The primary AI model (X) failed; switched to Y" (`data {from_model, to_model}`) |
-| `tools` | node events (`data {ledger_size, places_mode}`); per call `tool_called` (with the model's `reason`), then `tool_completed` or `tool_failed` (`data.code`: `MALFORMED_ARGS`, `UNKNOWN_TOOL`, `DUPLICATE_SUBMIT`, `CAP_REACHED`, `SCHEMA_INVALID`, `UNKNOWN_ID`, `TOOL_ERROR`, `PLACES_UNAVAILABLE`, `EVENTS_UNAVAILABLE`; `recovered`); `degraded` for snapshot use, places unavailable or events unavailable |
+| `tools` | node events (`data {ledger_size, places_mode}`); per call `tool_called` (with the model's `reason`), then `tool_completed` or `tool_failed` (`data.code`: `MALFORMED_ARGS`, `UNKNOWN_TOOL`, `DUPLICATE_SUBMIT`, `CAP_REACHED`, `SCHEMA_INVALID`, `UNKNOWN_ID`, `TOOL_ERROR`, `TRANSFER_UNKNOWN`, `PLACES_UNAVAILABLE`, `EVENTS_UNAVAILABLE`; `recovered`); `degraded` for snapshot use, places unavailable or events unavailable |
 | `validate_plan` | node events (`data {attempt, ok, codes}`); `validation` (`data {ok, attempt, max_attempts, source: "agent", violations}`; invented IDs removed); `tool_completed` `submit_plan` "plan accepted", or `tool_failed` `submit_plan` (`data {code: "VALIDATION_FAILED", codes, attempt, recovered}`) |
 | `fallback_planner` | node events (`data {ledger_size, source}` or `{ledger_size, searched_defaults}`); `validation` (`source` `agent_checked_draft` or `deterministic`); `degraded` (salvage note or the agent stop reason); `search_places`/`search_events` tool events and `degraded` under node `gather_candidates` when default searches run |
 | `explain_infeasible` | node events (`data {binding_constraints, relaxations}`) |
@@ -1298,8 +1312,8 @@ planner..."; `AGENT_REPAIRS_EXHAUSTED` "The AI planner's plan failed validation 
 ### 7.4 Agent tools (`tools.py`)
 
 Schemas are OpenAI function format (`tool_schemas()`); every tool has a `reason` string ("under 140 characters. Shown
-to the user"), required in the schema and clipped to `REASON_MAX = 140` by the argument models (which default it to
-""). Argument models use `extra="ignore"` and treat `""`, `null`, `none`, `n/a` as missing.
+to the user"), required in the schema for the search and travel tools (optional for `check_plan` and `submit_plan`)
+and clipped to `REASON_MAX = 140` by the argument models (which default it to ""). Argument models use `extra="ignore"` and treat `""`, `null`, `none`, `n/a` as missing.
 
 | Tool | Arguments | Cap per run | Result `content` (compact JSON) | Artifact |
 |---|---|---:|---|---|
@@ -1339,8 +1353,8 @@ Execution details:
 |---|---|---|
 | `malformed_args` | An `invalid_tool_calls` entry (arguments not valid JSON) | No |
 | `unknown_tool` | Tool name not in `TOOL_NAMES` | No |
-| `schema_invalid` | Arguments fail the tool's model, or a malformed `check_plan`/`submit_plan` | No |
-| `unknown_id` | `near_candidate_id`, `estimate_travel`, `check_plan` or `submit_plan` references an ID no tool returned | `check_plan` yes; others no |
+| `schema_invalid` | Arguments fail the tool's model, or a malformed `check_plan`/`submit_plan` | No, except that a malformed `submit_plan` still counts as one of the `MAX_SUBMIT_ATTEMPTS` submissions |
+| `unknown_id` | `near_candidate_id`, `estimate_travel`, `check_plan` or `submit_plan` references an ID no tool returned | `check_plan` and `submit_plan` yes (every validated submission counts toward `MAX_SUBMIT_ATTEMPTS`); others no |
 | `cap_reached` | A call beyond the tool's per-run cap | No |
 | `duplicate_submit` | A second `submit_plan` in one turn | No |
 
@@ -1379,7 +1393,8 @@ degradation. Repairs exhausted and refusals do not salvage.
 ### 7.8 Runner (`runner.py`)
 
 `stream_plan(request, deps, thread_id=None, resume_answers=None, model_id=None, run_id=None) -> AsyncIterator[TraceEvent]`
-is the single entry point for the API, the CLI and the eval harness; `run_plan(...)` collects it into
+is the single entry point for the API, the eval harness and the CLI (except `baseline:deterministic` without `--trace`,
+which uses `run_baseline`, §5.2); `run_plan(...)` collects it into
 `(PlanResult, events)`.
 
 | Concern | Implementation |
@@ -1404,8 +1419,8 @@ is the single entry point for the API, the CLI and the eval harness; `run_plan(.
 | `POST /api/plan/{thread_id}/resume` | Path `^[A-Za-z0-9_-]{6,64}$`; body `ResumeRequest {"answers": {question_id: answer}}` (1..5 entries, keys `^[A-Za-z0-9_]{1,40}$`, values 1..200 chars) | As above; JSON mode answers 404 `{"status": "rejected", "detail": "This plan can no longer be resumed", "message", "run_id"}` for an unknown, finished or expired thread (SSE keeps the in-stream `rejected` result); 429 "Too many answers; try again in N seconds" |
 | `GET /api/plans/{share_id}` | Share ID `^[A-Za-z0-9_-]{6,64}$` (checked in code) | 200 rehydrated `PlanResult`; 404 `{"detail": "Plan not found or expired"}`; 429 "Too many requests..." |
 | `POST /api/plans/{share_id}/feedback` | Body `FeedbackRequest {"rating": "up"\|"down", "reason"?: <= 300}` | 204; 404; 400; 429 |
-| `GET /api/evals/summary` | None | 200 summary JSON (the store's latest `eval_summary` row, else `backend/evals/results/summary.json`); 404 `{"detail": "No eval summary yet"}` |
-| `GET /api/health` | None | 200 `{"status": "ok"\|"degraded", "version", "env", "primary_model", "places_provider", "events_provider", "db": "ok"\|"error"}` with `Cache-Control: no-store` (always 200; `status` is `degraded` when the DB ping fails) |
+| `GET /api/evals/summary` | None | 200 summary JSON: whichever of the store's latest `eval_summary` row and the bundled `backend/evals/results/summary.json` has the newer `generated_at` (`newest_summary`; the stored copy wins a tie, unreadable dates sort oldest); 404 `{"detail": "No eval summary yet"}` |
+| `GET /api/health` | None | `{"status": "ok"\|"degraded", "version", "env", "primary_model", "places_provider", "events_provider", "db": "ok"\|"error", "places": "unknown"\|"ok"\|"auth_error"\|"unavailable"}` with `Cache-Control: no-store`; 200 when the DB ping succeeds, 503 with `status: "degraded"` when it fails. `places` (`places_status`) is the live provider's last outcome (keyless providers report `ok`) and never changes the status code |
 | `GET /api/openapi.json` | None | Only when `APP_ENV != prod`; `/docs` and `/redoc` are disabled |
 | `GET`/`HEAD /{path}` | SPA (only when `FRONTEND_DIST` holds `index.html`) | Files inside the dist directory (`assets/*` with `Cache-Control: public, max-age=31536000, immutable`, others `max-age=3600`); `api` and `api/*` misses and `assets/*` misses are JSON 404; any other path serves `index.html` with `no-cache`. Path traversal outside the dist directory never serves a file. Without a build, `GET /` returns a JSON hint |
 
@@ -1416,7 +1431,7 @@ run. Both paths intercept the `result` event in `persist_result`:
 1. Fill `latency_ms` if missing.
 2. For `complete` and `fallback`: `share_id = token_urlsafe(8)`, `store.save_plan(share_id, redact.for_storage(result),
    ttl_days=SHARE_TTL_DAYS)`; the forwarded result carries `share_id`.
-3. `store.record_run(build_run_record(result, finalize_metrics))`.
+3. `store.record_run(build_run_record(result, finalize_metrics, deps))`.
 4. Paused threads: `record_paused_thread(thread_id)` for `needs_clarification`; `forget_paused_thread` when a resume
    ends.
 5. One `plan finished` log line (status, mode, model, latency, shared, degradation count).
@@ -1429,15 +1444,19 @@ Persistence failures are logged and never break the response. Sentry receives pl
 |---|---|---|---|---|
 | Per-IP plans | `ip:<subject>:10m` | 600 s | `RATE_LIMIT_PER_10MIN` (15) | `POST /api/plan` |
 | Per-IP plans per day | `ip:<subject>:day` | 86400 s | `RATE_LIMIT_PER_DAY` (60) | `POST /api/plan` |
-| Global plans | daily counter `plans` (UTC day) | day | `DAILY_PLAN_CAP` (200) | `POST /api/plan` (checked after the per-IP windows; `Retry-After` = seconds to UTC midnight) |
+| Global plans | daily counter `plans` (`DAILY_PLANS_KEY`, UTC day) | day | `DAILY_PLAN_CAP` (200) | `POST /api/plan` (checked together with the per-IP windows; `Retry-After` = seconds to UTC midnight) |
 | Resumes | `ip:<subject>:resume` | 600 s | `RESUMES_PER_10MIN` (30) | `POST /api/plan/{id}/resume` (never counted toward the plan limits or the daily cap) |
 | Reads | `ip:<subject>:reads` | 600 s | `READS_PER_10MIN` (60) | Share views and feedback (share views can trigger Place Details calls) |
 
-Algorithm (`SQLiteStore.hit_rate_limit`, same in Postgres): windows aligned to multiples of `window_s`; atomically
-increment the current window's count (`INSERT ... ON CONFLICT DO UPDATE ... RETURNING`), read the previous window's
-count, and allow when `previous * (1 - elapsed / window) + current <= limit`. A denied hit is decremented, so retrying
-after a 429 does not extend the lockout. `Retry-After` comes from `sliding_retry_after`. All checks fail open (logged)
-when the store errors.
+Algorithm (`Store.hit_limits(windows, daily_key, daily_cap)`; `hit_rate_limit` is the one-window case): in one
+transaction (SQLite `BEGIN IMMEDIATE` under the connection lock; Postgres one transaction whose upserts lock the rows
+in a fixed order), increment each window's current count (`INSERT ... ON CONFLICT DO UPDATE ... RETURNING`), read the
+previous window's count, and refuse a window when `previous * (1 - elapsed / window) + current > limit`; then
+increment the daily counter and refuse when it exceeds the cap. If any limit refuses, everything is rolled back, so a
+refused request is never counted anywhere; otherwise it is committed. `Retry-After` is the longest wait among the
+refusing limits (`sliding_retry_after` for windows, seconds to UTC midnight for the cap), and the response text names
+the daily cap when that is the longest wait. `POST /api/plan` checks both per-IP windows and the cap this way;
+resumes and reads use one window. All checks fail open (logged) when the store errors.
 
 Subject (`security.client_ip`, `rate_limit_subject`): with `TRUST_PROXY_HEADERS=true`, the right-most
 `X-Forwarded-For` hop (across repeated headers) if it is a valid IP, else the peer address; never further left. IPv6
@@ -1459,7 +1478,7 @@ Pure ASGI middleware (streaming passes through unbuffered), outermost first:
 
 | Middleware | Behaviour |
 |---|---|
-| `SecurityHeadersMiddleware` | Request ID from `X-Request-ID` when it matches `^[A-Za-z0-9_-]{8,64}$`, else `q_` + 16 hex; adds `Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY` (unless already set) and `X-Request-ID` to every response; logs one access line (method, path without query, status, duration) |
+| `SecurityHeadersMiddleware` | Request ID from `X-Request-ID` when it matches `^[A-Za-z0-9_-]{8,64}$`, else `q_` + 16 hex; adds `Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY` (each only when the response does not already set it) and `X-Request-ID` to every response; logs one access line (method, path without query, status, duration) |
 | `ErrorShieldMiddleware` | Unhandled exceptions: logged, sent to Sentry, answered with 500 `{"status": "rejected", "detail": "Something went wrong", "request_id", "run_id"?}` when headers were not sent yet; client disconnects are logged at info |
 | `BodySizeLimitMiddleware(max_bytes=MAX_BODY_BYTES)` | For POST/PUT/PATCH/DELETE: a declared `Content-Length` above the cap gets 413 (with `Connection: close`); an invalid one gets 400 "Invalid Content-Length"; the body is read up to the cap (chunked bodies included) and replayed to the app |
 
@@ -1490,7 +1509,8 @@ else uses `stream_plan`. Exit code 0 with a result, 1 without.
 `create_store(DATABASE_URL)`: `sqlite:///:memory:` (tests), `sqlite:///./data/app.db` (relative to the working
 directory) or `sqlite:////abs/path.db` give `SQLiteStore`; `postgresql://`, `postgres://`, `postgresql+psycopg://` and
 `postgresql+psycopg2://` give `PostgresStore`. The `Store` protocol (`base.py`) covers plans, feedback, the run log,
-rate limits, the daily counter, the eval summary and retention.
+rate limits (`hit_rate_limit`, `hit_limits`), the daily counter (`incr_daily`, no longer called by the API), the eval
+summary and retention.
 
 * `SQLiteStore`: stdlib `sqlite3` in a worker thread (`asyncio.to_thread`), one connection guarded by a lock, WAL and
   `synchronous=NORMAL` for files, timestamps as UTC epoch seconds.
@@ -1504,8 +1524,8 @@ rate limits, the daily counter, the eval summary and retention.
 | `plans` | `share_id` PK, `record` (TEXT JSON / JSONB), `created_at`, `expires_at` (REAL epoch / TIMESTAMPTZ); index on `expires_at` | `save_plan` (upsert); `get_plan` returns None when expired |
 | `feedback` | `id` (autoincrement / BIGSERIAL), `share_id`, `rating`, `reason`, `created_at` | `save_feedback` |
 | `runs` | `run_id` PK, `created_at`, `git_sha`, `model`, `status`, `mode`, `latency_ms`, `input_tokens`, `output_tokens`, `cost_usd`, `tool_calls` (JSON), `violation_codes` (JSON), `submit_attempts`, `degradations` (JSON); index on `created_at` | `record_run` (upsert of a `RunRecord`) |
-| `rate_limits` | `key`, `window_start` (window start in epoch seconds), `count`; PK (`key`, `window_start`) | `hit_rate_limit` |
-| `daily_counters` | `key`, `day` (TEXT ISO / DATE), `count`; PK (`key`, `day`) | `incr_daily` |
+| `rate_limits` | `key`, `window_start` (window start in epoch seconds), `count`; PK (`key`, `window_start`) | `hit_limits` |
+| `daily_counters` | `key`, `day` (TEXT ISO / DATE), `count`; PK (`key`, `day`) | `hit_limits` (daily cap) |
 | `eval_summary` | `id`, `summary` (JSON), `created_at` | `save_eval_summary` (`python -m evals.report --publish`); `get_eval_summary` reads the newest row |
 | `paused_threads` | `thread_id` PK, `created_at` | `record_paused_thread`, `forget_paused_thread`, `stale_paused_threads` |
 
@@ -1523,9 +1543,10 @@ rate limits, the daily counter, the eval summary and retention.
   `detail`, `label`, `assumptions`, `degradations`, `summary`) is replaced by `[[place:<id>]]` (longest names first).
 
 `rehydrate(record, places, now, timeout_s=6.0)` validates the stored result, calls `PlacesProvider.get` for each
-redacted ID concurrently (6 s each, through a `WorldContext` rebuilt from the plan), restores name, address,
-neighbourhood, rating, rating count, hours, Maps URL and source URL/attribution, and replaces tokens with the fresh
-names. A failed fetch gives the name "Place details unavailable", a Maps URL by place ID
+redacted ID concurrently (6 s each, through a `WorldContext` rebuilt from the plan) and `_restore` copies only the
+redacted display fields (`GOOGLE_DISPLAY_FIELDS`: name, address, neighbourhood, rating, rating count, hours, Maps URL)
+plus the source URL and attribution; the category, cost, evidence, tags, pacing, duration and event fields stay as
+validated. Tokens are replaced with the fresh names. A failed fetch gives the name "Place details unavailable", a Maps URL by place ID
 (`google_place_url`), "this place" in prose, and the warning "Some place details could not be refreshed from Google
 Maps; open the links for current details." Non-Google stops are stored and returned unchanged.
 
@@ -1570,7 +1591,8 @@ and the sweeper deletes paused threads abandoned for 24 hours.
 
 Log events used across the app include `request` (access line), `startup`, `plan finished`, `rate limited`, `daily
 plan cap reached`, `planner run failed`, `agent turn failed`, `LLM parse failed`, `tool failed`, `retention sweep`,
-`checkpoint cleanup failed`.
+`checkpoint cleanup failed`, `unknown FAULT ... ignored`, and "google places rejected the API key (HTTP N)..." (ERROR,
+once per process; later rejections at WARNING).
 
 ## 11. Configuration (`backend/app/config.py`)
 
@@ -1585,7 +1607,7 @@ directory; unknown variables are ignored. `get_settings()` is cached. `export_pr
 | `GIT_SHA` | `dev` | Version in `/api/health`, logs, Sentry release, run log |
 | `PRIMARY_MODEL` | `ollama:qwen3.5:9b` | Registry ID used for each run (`baseline:deterministic` for no LLM) |
 | `FALLBACK_MODEL` | None | Second model chained with `with_fallbacks` |
-| `JUDGE_MODEL` | None | Declared but not read by any code; the eval runner takes `--judge-model` |
+| `JUDGE_MODEL` | None | Not read by the app. The eval runner uses it as the default judge for the `models` and `live` suites (`--judge-model` wins; `none` disables) |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama server |
 | `PLACES_PROVIDER` | `auto` | `auto`, `google`, `osm_snapshot`, `fixture` (§4.2) |
 | `EVENTS_PROVIDER` | `auto` | `auto`, `tavily`, `fixture`, `none` |
@@ -1610,7 +1632,7 @@ directory; unknown variables are ignored. `get_settings()` is cached. `export_pr
 | `SENTRY_DSN` | None (secret) | Enables Sentry |
 | `TRACING_ENABLED` | false | Enables LangSmith when a key is set |
 | `FIXED_NOW` | None | Frozen clock (ISO 8601); ignored in prod |
-| `FAULT` | None | Injected fault (§4.9, §6.4); ignored in prod |
+| `FAULT` | None | Injected fault (§4.9, §6.4); unknown values are logged as a warning and ignored; ignored in prod |
 
 Variables read outside `Settings`: `LANGSMITH_PROJECT`/`LANGCHAIN_PROJECT` (LangSmith), `PORT` (Docker CMD),
 `RENDER_GIT_COMMIT` and `BUILD_GIT_SHA` (image fallback for `GIT_SHA`), `API_PROXY_TARGET` (Vite dev proxy),
@@ -1629,7 +1651,7 @@ and Playwright. No other runtime dependencies.
 |---|---|
 | Scripts (`package.json`) | `dev` (`vite`), `build` (`tsc -b && vite build`), `preview`, `test` (`vitest run`), `test:watch`, `typecheck` (`tsc -b`), `lint` (`tsc -b && oxlint --deny-warnings src`), `e2e` (`playwright test --config e2e/playwright.config.ts`) |
 | `vite.config.ts` | Plugins `react()`, `tailwindcss()`; dev and preview proxy `/api` to `API_PROXY_TARGET` (default `http://127.0.0.1:8000`); build to `dist` without source maps; tests in jsdom with `src/test/setup.ts`, files `src/**/*.test.{ts,tsx}` (`sse`, `lib`, `format`, `ics` tests run in the node environment) |
-| `.oxlintrc.json` | Plugins react, typescript, oxc; `react/rules-of-hooks` error |
+| `.oxlintrc.json` | Plugins react, typescript, oxc; `react/rules-of-hooks` error, `react/only-export-components` warn (`allowConstantExport`; warnings fail `npm run lint`, which passes `--deny-warnings`) |
 | `tsconfig.app.json` | ES2023, bundler resolution, `strict`, `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax` |
 | `index.html` | `lang="en"`, title "Perfect Saturday Planner", theme colour `#c2410c`, `/favicon.svg` |
 
@@ -1656,17 +1678,18 @@ and Playwright. No other runtime dependencies.
 | `components/DegradationNotices.tsx` | One notice per degradation kind (`planner`, `model`, `parser`, `data`) with titles such as "The rule-based planner took over", "Switched to the backup AI model", "Read with the rule-based parser", "Running with reduced data" |
 | `components/PreferencesSummary.tsx` | "What I understood": city, budget, start, duration, energy, neighbourhood, group, interests and hard constraints as chips; soft preferences |
 | `components/PlanView.tsx` | `h2#plan-title` "Your Saturday in <city>"; byline (model or "backup planner (no AI model)"); fallback notice "This is a backup plan"; `SummaryBar`; summary note; timeline of `StopCard`s with `LegRow`s; "Trade-offs and what I left out" (`omissionLabel` hides raw IDs); `ChecksPanel`; Assumptions; "Before you go" warnings; `PlanActions`; `Feedback` when shared; data attribution footer (Google Maps, © OpenStreetMap contributors, synthetic test data) |
-| `components/StopCard.tsx` | Clock times, category, name, address; cost range with basis badge (`listed price`, `price level estimate`, `ticket price`, `free`, `estimate`); why, trade-off, warnings; "Plan B if it rains" box; source badge (Google Maps, Curated · OpenStreetMap with `last_checked`, Web event · check before you go, Test data); "Open in Google Maps" (new tab, `rel="noopener noreferrer"`). `LegRow`: mode, minutes, km, fare, "estimate" badge |
+| `components/StopCard.tsx` | Clock times, category, name, address; cost range with basis badge (`listed price`, `price level estimate`, `ticket price`, `free`, `estimate`); why, trade-off, warnings; "Plan B if it rains" box; source badge (Live · Google Maps, Curated · OpenStreetMap, Web event · check before you go, Test data) and attribution (Google Maps, © OpenStreetMap contributors with `last_checked`, or the event page link); "Open in Google Maps" (new tab, `rel="noopener noreferrer"`). `LegRow`: mode, minutes, km, fare, "estimate" badge |
 | `components/SummaryBar.tsx` | When, Weather, "Worst-case cost per person" with a `role="meter"` budget meter and the contingency, Left over (money, minutes, walking) |
-| `components/ChecksPanel.tsx` | "Checks": one row per `CheckItem` with Pass/Warning/Unverified/Failed pills; subtitle "Recomputed by the server from the data, not taken from the model." |
+| `components/ChecksPanel.tsx` | "Checks": one row per `CheckItem` with Pass/Warning/Unverified/Failed pills; labels for the eight names `summarize_checks` emits (others are humanized); subtitle "Recomputed by the server from the data, not taken from the model." |
 | `components/ClarificationCard.tsx` | `h2#clarify-title` ("One quick question" / "Two quick questions"); per question a fieldset with quick-reply buttons (`aria-pressed`) and "Or type your own answer" (200 chars; typed text wins); "Continue planning" is enabled only when every question has an answer |
 | `components/InfeasibleCard.tsx` | `h2#infeasible-title` "No plan fits everything"; reason; blocking constraints; cheapest budget and shortest time found; one button per relaxation |
-| `components/PlanActions.tsx` | "Open full route in Google Maps" (https only), "Copy plan", "Copy share link", "Share on WhatsApp", "Add to calendar" (.ics), "Plan again with changes"; polite status messages cleared after 4 s |
+| `components/ExternalLink.tsx` | The only component that opens a new tab: `target="_blank"`, `rel="noopener noreferrer"`, and a visually hidden "(opens in a new tab)" hint; used by every external link (Google Maps, OpenStreetMap credits, event pages, route links) |
+| `components/PlanActions.tsx` | "Open full route in Google Maps" (https only), "Copy plan", "Copy share link", "Share on WhatsApp", "Add to calendar" (.ics; "Calendar file downloaded." or "Couldn't create the calendar file. Please try again." from `downloadIcs`'s result), "Plan again with changes"; polite status messages cleared after 4 s |
 | `components/Feedback.tsx` | "Was this plan useful?" Yes (sends `up`) / Not really (optional reason, 300 chars, sends `down`) |
 | `components/ErrorCard.tsx` | `h2#error-title`; `Retry-After` countdown; run reference; "Try again" |
 | `components/ui.tsx`, `components/Icon.tsx` | Button/card classes, `Badge`, `Notice`; inline `aria-hidden` SVG icons |
-| `pages/SharedPlan.tsx` | Loads `GET /api/plans/:id` (aborted on unmount); 404 "This plan isn't available" (plans are kept for 30 days); renders `PlanView` and "Want one for yourself?" |
-| `pages/EvalsLeaderboard.tsx` | Loads `GET /api/evals/summary`; tables grouped by kind (Baseline (no LLM), Hosted API models, Local models (Ollama)) with Model, Runs, Hard pass, Status acc., Agent success, 1st submit valid, Tool errors / run, Clarif. precision, Clarif. recall, Judge / 5, p50, p95, Cost / plan; sorted by hard pass; generated time and commit badges; "By category" table; 404 "No results published yet" |
+| `pages/SharedPlan.tsx` | Loads `GET /api/plans/:id` (its own abort on unmount, a new ID or a retry is ignored; any other abort or timeout shows a retryable error card); 404 "This plan isn't available" (plans are kept for 30 days); renders `PlanView` and "Want one for yourself?"; focuses the outcome heading once loaded |
+| `pages/EvalsLeaderboard.tsx` | Loads `GET /api/evals/summary`; tables grouped by kind (Baseline (no LLM), Hosted API models, Local models (Ollama)) with Model, Runs, Hard pass, Status acc., Agent success, 1st submit valid, Tool errors / run, Clarif. precision, Clarif. recall, Judge / 5, p50, p95, Cost / plan (`cost_per_plan_usd`); sorted by hard pass; generated time and commit badges; "By category" table; 404 "No results published yet"; only its own unmount abort is ignored |
 | `pages/HowItWorks.tsx` | Static explanation: the 12 graph nodes in order with their kind, the 5 tools and caps, the pacing table, 12 guardrails, data sources, failure handling, privacy (no diagram) |
 | `pages/NotFound.tsx` | "Page not found" |
 | `hooks/usePlanRun.ts` | Run state machine (§12.4) |
@@ -1695,8 +1718,11 @@ and Playwright. No other runtime dependencies.
 * `parseTraceEvent` accepts only objects whose `type` is one of the 12 trace types.
 
 `hooks/usePlanRun.ts`: phases `idle`, `running {startedAt}`, `done {result}`, `error {error}`; `run(starter,
-{resetTrace})` aborts the previous run, resets the trace (unless resuming), ignores events after an abort, and aborts
-on unmount; `cancel()` aborts and returns to idle. `lib/trace.ts` (`reduceTrace`) de-duplicates events by
+{resetTrace})` aborts the previous run, resets the trace (unless resuming), and aborts on unmount; `cancel()` aborts
+and returns to idle. Each run's `AbortController` is its token: events and outcomes are applied only while that
+controller is current and not aborted by the hook (`live()`), and every other failure, including an `AbortError` or
+`TimeoutError` the hook did not cause, ends in the `error` phase, so the UI never stays on "running"
+(`describeError` shows "The plan was interrupted" with a timeout or cut-off message). `lib/trace.ts` (`reduceTrace`) de-duplicates events by
 `run_id:seq:type` (except `seq` 0 and heartbeats), pairs `node_started`/`node_completed` and tool events into steps,
 labels nodes and tools (`NODE_LABELS`, `TOOL_LABELS`), shows agent turns, validations ("Plan passed the checks" /
 "Checks found problems to repair"), degradations, clarifications, results and errors.
@@ -1709,25 +1735,27 @@ Relaxation buttons apply `relaxation.patch` to the last request with `lib/plan.a
 
 | Module | Behaviour |
 |---|---|
-| `format.ts` | `fmtClock` (`3:00 PM`, `1:30 AM +1` after midnight), `fmtDuration` (`1 h 30 min`), `fmtMoney`/`fmtMoneyRange` with symbols (₹, £, $, €, ¥, S$, A$, C$; others `"CODE "`), Indian digit grouping for INR (`₹1,00,000`), `fmtDate` ("Saturday, 7 November 2026", via `Date.UTC`), labels for categories, cost bases, sources and travel modes, `fmtPercent`, `fmtMs`, weather lines |
-| `ics.ts` | `VCALENDAR` (`PRODID:-//Perfect Saturday Planner//EN`, `METHOD:PUBLISH`, `X-WR-CALNAME`); a minimal `VTIMEZONE` with the plan's UTC offset (from `Intl.DateTimeFormat` `longOffset`) and `DTSTART;TZID=...`, or floating times when unknown; one `VEVENT` per stop (`UID:<share id or date-city>-<n>-<candidate id>@perfect-saturday`, `DTSTAMP`, `SUMMARY`, `LOCATION`, `DESCRIPTION` with why, trade-off, cost and basis, Plan B, source, map and share links, `URL`); RFC 5545 escaping and 75-octet folding without splitting multi-byte characters; CRLF line endings; file `saturday-<city>-<date>.ics` downloaded as `text/calendar` |
-| `share.ts` | `planToText` (plain-text plan with times, costs, legs, worst case, route and share links), `whatsappUrl` (`https://wa.me/?text=...`), `copyText` (Clipboard API with a `textarea` + `execCommand('copy')` fallback) |
+| `format.ts` | `fmtClock` (`3:00 PM`, `1:30 AM +1` after midnight), `fmtDuration` (`1 h 30 min`), `fmtAmount` (digits grouped for the currency: Indian `10,00,000` for INR, western `1,000,000` otherwise), `fmtMoney`/`fmtMoneyRange` with symbols (₹, £, $, €, ¥, S$, A$, C$; others `"CODE "`), `fmtDate` ("Saturday, 7 November 2026", via `Date.UTC`), labels for categories, cost bases, sources and travel modes, `fmtPercent`, `fmtMs`, weather lines |
+| `ics.ts` | `VCALENDAR` (`PRODID:-//Perfect Saturday Planner//EN`, `METHOD:PUBLISH`, `X-WR-CALNAME`); a minimal `VTIMEZONE` with the plan's UTC offset (from `Intl.DateTimeFormat` `longOffset`) and `DTSTART;TZID=...`, or floating times when unknown; one `VEVENT` per stop (`UID:<share id or date-city>-<n>-<candidate id>@perfect-saturday`, `DTSTAMP`, `SUMMARY`, `LOCATION`, `DESCRIPTION` with why, trade-off, cost and basis, Plan B, source, map and share links, `URL`); RFC 5545 escaping and 75-octet folding without splitting multi-byte characters; CRLF line endings; file `saturday-<city>-<date>.ics` downloaded as `text/calendar`; `downloadIcs` returns `false` (never throws) when the file could not be built or handed to the browser |
+| `share.ts` | `planToText` (plain-text plan with times, costs, legs matched with `legAfter`, worst case, route and share links), `whatsappUrl` (`https://wa.me/?text=...`), `copyText` (Clipboard API with a `textarea` + `execCommand('copy')` fallback) |
 | `urls.ts` | `safeHttpsUrl` (https only, no credentials), `mapsUrlFor` (provider Maps URL or a keyless search URL with `query_place_id` for `gp:` IDs), `shareUrlFor` (`<origin>/p/<id>`) |
 | `labels.ts` | Constraint display names, `omissionLabel`, `classifyDegradation` |
-| `plan.ts` | `legAfter` (leg by `from_id`/`to_id`), `providersIn`, `unionStrings`, `applyPatch` |
-| `form.ts` | `DEFAULT_FREE_TEXT` (the brief as prose), `defaultFormState` (Bangalore, 2000, 15:00, 240 min, the brief's mood, food/music/walks, vegetarian and avoid crowds), `CONSTRAINT_TOGGLES` (vegetarian, vegan, Jain, no alcohol venues, wheelchair accessible, avoid crowded places, indoors only), `INTEREST_PRESETS`, `CURRENCIES`, `DURATION_OPTIONS` (60..720), `LIMITS` (mirroring the backend), `validateForm`, `buildRequest`, `patchForm`, `toggleConstraint`, `restoreConstraint` |
-| `runStatus.ts`, `describeError.ts` | Status-region text; error card titles ("The planner is busy" for 429, "I can't plan that" for 400/413/422, "The plan was interrupted" for stream errors, "Couldn't reach the planner" for network errors) |
+| `plan.ts` | `legAfter` (the leg joining two stops, matched by `from_id`/`to_id` only, no positional fallback), `providersIn`, `unionStrings`, `applyPatch` |
+| `form.ts` | `DEFAULT_FREE_TEXT` (the brief as prose), `defaultFormState` (Bangalore, 2000, 15:00, 240 min, the brief's mood, food/music/walks, vegetarian and avoid crowds), `CONSTRAINT_TOGGLES` (vegetarian, vegan, Jain, no alcohol venues, wheelchair accessible, avoid crowded places, indoors only), `INTEREST_PRESETS`, `CURRENCIES`, `DURATION_OPTIONS` (60..720), `LIMITS` (mirroring the backend), `validateForm` (budget error from `budgetRangeMessage`, grouped for the chosen currency), `buildRequest`, `patchForm`, `toggleConstraint`, `restoreConstraint` |
+| `runStatus.ts`, `describeError.ts` | Status-region text; error card titles ("The planner is busy" for 429, "I can't plan that" for 400/413/422, "The plan was interrupted" for stream errors and for aborts or timeouts the app did not start, "Couldn't reach the planner" for network errors) |
 | `types.ts` | TypeScript mirrors of the backend contracts (`PlanRequest` with the same 13 keys, `PlanResult`, `TraceEvent`, `CanonicalPlan`, ...) and the eval summary types |
 
 ### 12.6 Accessibility and security
 
 * Skip link and focusable `main`; focus moves to the outcome heading (`#plan-title`, `#clarify-title`,
-  `#infeasible-title`, `#error-title`) when a run ends; "Plan again" focuses the textarea.
+  `#infeasible-title`, `#error-title`) when a run ends and when a shared plan (or its error) has loaded; "Plan again"
+  focuses the textarea.
 * One polite status region for run milestones (the trace list is deliberately not live); polite status for actions
   and countdowns; `role="alert"` for form and feedback errors.
 * Labelled controls (`htmlFor`), `aria-describedby`/`aria-invalid`, `aria-expanded`/`aria-controls` on disclosures,
-  `aria-pressed` on toggles, meter ARIA on the budget meter, captions and scope on tables, `aria-hidden` icons,
-  "(opens in a new tab)" text on external links.
+  `aria-pressed` on toggles, meter ARIA on the budget meter, `scope` on table headers (captions on the
+  leaderboard tables; the other tables sit in labelled scroll regions), `aria-hidden` icons, "(opens in a new tab)"
+  text on the Google Maps and WhatsApp links (the OpenStreetMap copyright and event-page links lack it).
 * `prefers-reduced-motion` disables animations and smooth scrolling; visible `:focus-visible` outline.
 * No `dangerouslySetInnerHTML` or `innerHTML`; every URL from data passes `safeHttpsUrl`; external links use
   `rel="noopener noreferrer"`.
@@ -1756,21 +1784,29 @@ Relaxation buttons apply `relaxation.patch` to the last request with `lib/plan.a
 | `--repeats` | 1 | Repeats per case (>= 1) |
 | `--cases` | all | Comma-separated case IDs (unknown IDs exit 2) |
 | `--split` | `all` | `dev`, `holdout`, `all` |
-| `--judge-model` | none | Registry ID of the optional judge |
+| `--judge-model` | `JUDGE_MODEL` for `models` and `live`; none for `offline` | Registry ID of the judge; `none` (or `off`, empty) disables it |
 | `--out` | `evals/results` | Results root |
 | `--spec` | repo `eval_cases.json` | Spec path |
 | `--gate` / `--no-gate` | gate on for `offline` only | Exit 1 when any run fails a hard check |
-| `--resume` | off | Continue the latest session of each (suite, model) when provenance matches; recorded (case, repeat) pairs are skipped |
+| `--resume` | off | Continue the latest session of each (suite, model) when the record schema and provenance (`RESUME_KEYS`: git SHA, dirty-tree flag, prompt, registry, fixture, eval_cases and harness hashes) match; recorded (case, repeat) pairs are skipped |
 | `--max-minutes` | none | Wall-time budget per model, checked between runs |
+| `--max-cost-usd` | none | Estimated-cost budget (planner + judge, registry pricing) for the whole invocation, checked between runs |
 | `--verbose` | off | Logging at WARNING and harness tracebacks |
 
-Exit codes: 2 (harness error, `ValueError` such as an unknown case, or argparse error), 1 (gate failed), 3 (a model
-stopped on `--max-minutes`), 130 (Ctrl+C; re-run with `--resume`), 0 otherwise.
+Exit codes: 2 (a harness-exception record was written, a `ValueError` such as an unknown case, or an argparse
+error), 1 (gate failed), 3 (a model stopped on `--max-minutes` or `--max-cost-usd`), 130 (Ctrl+C; re-run with
+`--resume`), 0 otherwise.
+
+At start, `main` loads `backend/.env` through `Settings` and exports the model-provider keys it holds
+(`export_provider_env`, never overwriting the environment), so runs without make's `--env-file` see the same keys,
+and resolves the judge (`resolve_judge_model`).
 
 Execution:
 
 * Sessions: `<UTC %Y%m%dT%H%M%SZ>-<6 hex>`; records are appended to `<out>/<UTC date>/<sanitised model>.jsonl` (e.g.
   `ollama_granite4_tiny-h.jsonl`). Only dated directories count; `results/tmp/` is scratch.
+* Dirty tree: `git_info` runs `git status --porcelain -z --untracked-files=all` and ignores changes confined to
+  generated output (`evals/results/`, `docs/EVAL_REPORT.md`, the `--out` directory) and `.claude/`.
 * Availability: baseline and fake are always available; pending or unknown IDs, missing API keys, or an Ollama model
   absent from `GET /api/tags` produce a `skip` record.
 * Settings per case (`cases.case_settings`): `fixture_settings` with the case fault (except the harness-only
@@ -1784,11 +1820,17 @@ Execution:
   through `create_app` with an in-memory store via `httpx.ASGITransport`; all other cases call
   `app.graph.runner.run_plan` directly and resume with `clarification_answers` when the result needs clarification.
 * Each phase is bounded by `run_deadline_s + 30` s (`harness_timeout`). Models, cases and repeats run sequentially.
-  There is no cost budget.
+* A harness exception anywhere in a run (setup, checks, judge, record building) writes an `error_record`: status
+  `error`, error category `harness_exception`, no assertions, `hard_pass` false, planner usage kept, and a redacted
+  traceback (secrets masked, home directory shortened).
+* Budgets: between runs, `budget_exceeded` checks this model's wall time against `--max-minutes` and the
+  invocation's estimated spend (`record_cost_usd`: planner plus judge `cost_usd`) against `--max-cost-usd`; a stop
+  writes a `budget_stop` record (`reason` `max_minutes` or `max_cost_usd`, `spent_usd`, `remaining`).
 
 ### 13.3 Record schema (`build_record`)
 
-`run` records (`schema` 1):
+`run` records (`schema` 2, `evals.RECORD_SCHEMA`; older schema-1 records are upgraded on read by
+`metrics.upgrade_record`, and records from a newer schema are skipped):
 
 | Group | Fields |
 |---|---|
@@ -1799,22 +1841,26 @@ Execution:
 | Judge | `judge`: `{status: scored/hard_fail, model, rubric_version, scores, mean, reasons, usage}`, `{status: error/unavailable, ...}` or null |
 | HTTP | `http`: status code, requests sent, planner runs, digests, share/unknown/expired statuses, filtered headers, detail |
 | Drill-down | `plan` (digest of stops, worst case, budget, currency, window), `preferences`, `message`, `provider_calls`, `run_id`, `timestamp` |
-| Provenance | `git_sha`, `git_dirty`, `prompt_hash` (`app/graph/prompts.py`), `registry_hash` (`models.yaml`), `fixture_hash` (data files), `eval_cases_hash`, `harness_hash` (`evals/*.py`); SHA-256, first 12 hex characters |
+| Provenance | `git_sha`, `git_dirty` (generated output ignored), `prompt_hash` (the `MODEL_VISIBLE_FILES` `app/graph/prompts.py`, `tools.py`, `nodes/execute.py`, `nodes/validate.py`, plus the rendered system prompts, nudge, tool schemas and `LLMParse` JSON schema), `registry_hash` (`models.yaml`), `fixture_hash` (data files), `eval_cases_hash`, `harness_hash` (`evals/*.py`); SHA-256, first 12 hex characters |
+| Error records | `error` (`harness_exception: <type>: <message>`, 500 chars), `error_categories: ["harness_exception"]`, `traceback` (last 2000 chars) |
 
 `error_categories`: `harness_timeout`, `harness_error`, `model_timeout`, `model_refusal`, `model_unavailable`,
 `model_not_configured`, `agent_no_submit`, `agent_turn_cap`, `agent_no_time`, `parser_degraded`,
-`repairs_exhausted`, `run_deadline`, `run_crash`, `provider_switch`. Other record types: `skip` and `budget_stop`.
+`repairs_exhausted`, `run_deadline`, `run_crash`, `provider_switch`, `harness_exception`. Other record types: `skip`
+and `budget_stop`.
 
 ### 13.4 Assertions (`assertions.py`)
 
 Hard checks recompute ground truth from `data/fixtures/*.json`, `data/snapshot/bangalore.json`, `categories.yaml`
-and `cities.yaml` and from the request text; only `app.domain.pacing.PROFILES` is imported from the app.
+and `cities.yaml` and from the request text. The only planner rule imported from the app is `app.domain.pacing.PROFILES`;
+the other app imports are schema types (`app.domain.schemas`) and fixed texts (system prompts for the leak check,
+degradation and assumption messages from `app.pipeline` and `app.graph.nodes.common`).
 `hard_pass` is false when any `kind == "code"` check has `passed is False`; judge checks and not-applicable checks
 never count.
 
 | Check | Condition |
 |---|---|
-| `run.no_error` | Present (and failing) only when the harness recorded an error |
+| `run.no_error` | Present (and failing) only when the harness recorded an error (records with status `error` have no assertions and also count as hard failures) |
 | `status.expected` | Status in the case's expected set (baseline `complete` counts where `fallback` is expected) |
 | `trace.integrity` | Increasing `seq`, one `run_id`, `run_started` first, exactly one `result` last, preceded by the `finalize` metrics event with every metric key; tool and node start/finish counts match |
 | `trace.no_secrets` | No secret markers, real key values or system-prompt prefixes in events, results or HTTP bodies |
@@ -1838,7 +1884,8 @@ never count.
 Case assertions (`CASE_CHECKS`) map each assertion text in `eval_cases.json` to a function; IDs are
 `case.<n>.<slug>` (e.g. `case.1.between_4_and_6_stops`). All 107 texts are mapped: 105 code checks and 2 judge
 checks (`benign_ignore_phrase` "prefers free or low-cost stops"; `xss_in_input`, which needs a browser). Five checks
-are keyword proxies over trade-offs, omissions and summaries (budget, weather and music/quiet compromises), marked in
+are keyword proxies (budget, weather and music/quiet compromises in trade-offs, omissions and summaries; weather in a
+stop's `why`), marked in
 their detail. Unmapped texts would become `case.unmapped.<slug>` judge checks.
 
 ### 13.5 Metrics (`metrics.py`)
@@ -1847,7 +1894,7 @@ Per (suite, model, session); `ratio` is None when the denominator is 0; the base
 
 | Metric | Definition (n) |
 |---|---|
-| `hard_pass_rate` | Hard-passing runs / runs |
+| `hard_pass_rate` | Hard-passing runs / runs (records with an `error` or status `error` never pass) |
 | `status_accuracy` | Runs with `status_ok` / runs |
 | `agent_success` | Feasible-case runs ending `complete` in agent mode / feasible-case runs |
 | `first_submission_validity` | Runs whose first submission was valid / runs with a submission |
@@ -1859,7 +1906,9 @@ Per (suite, model, session); `ratio` is None when the denominator is 0; the base
 | `security_pass_rate` | Hard passes / runs in category `security` |
 | `judge_quality` | Mean of per-run judge means (per-axis means in `judge_axes`) |
 | `latency_p50_ms`, `latency_p95_ms` | Linear-interpolated percentiles of `latency_ms`; per-node p50 from `node_ms` |
-| `cost_per_plan_usd` | Sum of `usage.cost_usd` / runs (shown as "Cost/run") |
+| `cost_per_plan_usd` | Sum of `usage.cost_usd` over all runs / runs that produced a plan (`complete` or `fallback`; n = `plans`); None without a plan. Judge calls are excluded |
+| `cost_per_run_usd` | The same total / all runs |
+| `harness_exceptions` | Runs with error category `harness_exception` |
 | `pass_hat_k` | With k repeats, the share of cases whose k runs all passed (reported when k > 1) |
 | `error_categories` | Counts |
 
@@ -1867,10 +1916,11 @@ Breakdowns: `by_split`, `by_category`, `failures`.
 
 ### 13.6 Judge (`judge.py`)
 
-Runs only with `--judge-model`. `RUBRIC_VERSION = "rubric-v1-2026-11-02"`; axes `fit`, `practicality`,
+Runs when a judge model is resolved: `--judge-model`, else `JUDGE_MODEL` for the `models` and `live` suites (the
+`offline` suite only on request; `none` disables). `RUBRIC_VERSION = "rubric-v1-2026-11-02"`; axes `fit`, `practicality`,
 `explanation`, `fun`, each 1-5 with a reason; called through `build_structured_runnable([model], JudgeVerdict,
-purpose="judge")`. The plan is sent as JSON data without internal IDs. A run that failed a hard check is scored 1 on
-every axis without calling the model (`hard_fail`); runs that correctly ended without a plan are not judged; judge
+settings, purpose="judge")`. The plan is sent as JSON data without internal IDs. A run that failed a hard check is
+scored 1 on every axis without calling the model (`hard_fail`); runs that correctly ended without a plan are not judged; judge
 errors never fail a run.
 
 ### 13.7 Report (`python -m evals.report`)
@@ -1883,14 +1933,16 @@ incomplete sessions are listed as superseded.
 `summary.json` keys: `generated_at`, `git_sha`, `rows` (models suite; every metric plus `splits`, `categories`,
 `session`, `suite`, `coverage`, `provenance`, `started_at`, `finished_at`, `files`), `categories`, `categories_n`,
 `suites` (offline and live blocks), `failures`, `skipped`, `judge`, `record_count`, `superseded_sessions`, `not_run`,
-`stopped_early`. Rows sort by kind (baseline, api, local, fake), then hard pass, then model.
+`stopped_early` (budget stops with their `reason`), `harness_exceptions`, `record_schemas` (records read per schema
+version). Each row's `provenance` includes the record `schema`. Rows sort by kind (baseline, api, local, fake), then
+hard pass, then model. Every record is read through `upgrade_record`.
 
 `EVAL_REPORT.md` sections: header with generation time and record count; "Model leaderboard (`models` suite, frozen
 world)" (Model, Kind, Cases, Hard pass, Status acc., Agent success, 1st submit valid, Repairs/plan, Tool errors/run,
-Clarif. precision, Clarif. recall, Parse acc., Security, Judge (1-5), p50, p95, Cost/run) with Dev vs holdout,
-Repeats, By category, Errors and degradations, Latency per node and Failure examples; Skipped models and matrix rows
-without results; Offline suite (scripted fake model) with its own breakdowns; Live suite (when present); Methodology
-and caveats; Provenance and superseded sessions.
+Clarif. precision, Clarif. recall, Parse acc., Security, Judge (1-5), p50, p95, Cost/plan, Cost/run, each cost with
+its n) with Dev vs holdout, Repeats, By category, Errors and degradations, Latency per node and Failure examples;
+Skipped models, matrix rows without results, budget stops and harness exceptions; Offline suite (scripted fake model) with its own breakdowns; Live suite (when present); Methodology
+and caveats (including cost and older-record notes); Provenance (with a Schema column) and superseded sessions.
 
 ### 13.8 Scripts (`backend/scripts/`)
 
@@ -1912,18 +1964,18 @@ pytest with `asyncio_mode = "auto"`, `pythonpath = ["."]`, and `addopts = "-q -m
 `live` (network or keys; the live tests also skip unless `RUN_LIVE=1` and the key, or a Postgres `DATABASE_URL`) and
 `ollama` (`RUN_OLLAMA=1`). Unit tests never touch the network (`respx` mocks HTTP).
 
-`uv run pytest --collect-only` collects 1611 tests in 45 files with the default markers (10 more are `live` or
-`ollama`); a full offline run on this tree ended `1611 passed, 10 deselected` (no skips or xfails).
+`uv run pytest --collect-only` collects 1674 tests in 46 files with the default markers (11 more are `live` or
+`ollama`); a full offline run on this tree ended `1674 passed, 11 deselected` (no skips or xfails).
 
 | Directory | Files | Tests | Covers |
 |---|---:|---:|---|
-| `unit/` | 15 | 696 | Parser rules (212), validator including `validator_unit_cases` (160), clarification (68), fallback planner (49), time (49), evidence (48), constraints (37), infeasibility (25), travel (12), costs (11), schedule (10), scoring (7), categories/pacing (4), pipeline context (2), sun (2) |
-| `providers/` | 7 | 383 | Normalisation (102), frozen-world integrity (95), events/JSON-LD (61), Google Places with synthetic JSON (45), Open-Meteo (36), fixture providers (26), snapshot (18); plus 4 `live` tests |
-| `store/` | 3 | 43 | SQLite store, factory and checkpointer (33), redaction (6), retention (4); `test_store_postgres.py` has 5 `live` tests against Postgres |
+| `unit/` | 15 | 700 | Parser rules (212), validator including `validator_unit_cases` (160), clarification (69), fallback planner (49), time (49), evidence (48), constraints (37), infeasibility (25), travel (12), costs (11), schedule (10), scoring (7), pipeline context (5), categories/pacing (4), sun (2) |
+| `providers/` | 7 | 397 | Normalisation and currency coverage (103), frozen-world integrity (95), events/JSON-LD, concurrency, deadline and robots.txt cache (66), Google Places with synthetic JSON, details mask, status and key errors (53), Open-Meteo (36), fixture providers (26), snapshot (18); plus 4 `live` tests |
+| `store/` | 3 | 55 | SQLite store, `hit_limits`, factory and checkpointer (43), redaction and rehydration (8), retention (4); `test_store_postgres.py` has 6 `live` tests against Postgres |
 | `llm/` | 2 | 19 | Registry parameters, pending/unknown IDs, fallback chains, refusals (12); usage, pricing and the fake model (7) |
 | `graph/` | 3 | 106 | Tool schemas, guard and prompts (41), graph mechanics: trace integrity, deadlines, caps, checkpoints, resume, crash path (35), one test per offline eval case (30); `test_ollama_e2e.py` (1 `ollama` test) |
-| `api/` | 5 | 69 | `/api/plan` and resume over SSE and JSON, validation, limits, persistence (29); client IP and `X-Forwarded-For` (14); app: health, eval summary, headers, 500, SPA, lifespan (11); logs, Sentry and LangSmith gating (9); share links and feedback (6) |
-| `evals/` | 6 | 70 | Harness assertions, metrics, runner (skips, JSONL, gate, resume, `--max-minutes`, Ctrl+C), cases, report, judge |
+| `api/` | 5 | 73 | `/api/plan` and resume over SSE and JSON, validation, limits, persistence (30); client IP and `X-Forwarded-For` (14); app: health (200/503, `places`), eval summary selection, headers, 500, SPA, lifespan (14); logs, Sentry and LangSmith gating (9); share links and feedback (6) |
+| `evals/` | 7 | 99 | Harness assertions (17), metrics (14), runner (skips, JSONL, gate, resume, `--max-minutes`, Ctrl+C) (14), cases (12), report (8), judge (5), hardening (29: judge default, schema 2 and upgrades, prompt hash, dirty-tree resume, error records, `.env` loading, cost metrics, `--max-cost-usd`) |
 | `verification/` | 4 | 225 | Independent verification: Phase 1 adversarial (132), baseline against eval cases with `independent_checks.py` (38), re-verification (38), Phase 2 API and graph (17) |
 
 Shared fixtures: `tests/factories.py` (`TARGET_DATE` 2026-11-07, `NOW` 2026-11-05 04:30 UTC, builders such as
@@ -1934,18 +1986,20 @@ observability stubbed); `tests/providers/conftest.py` (context factories for Ben
 
 ### 14.2 Frontend (`frontend/`)
 
-`npm test` (Vitest): 8 files, 84 tests, all passing.
+`npm test` (Vitest, run with `npx vitest run` after `npm ci`): 10 files, 108 tests, all passing.
 
 | File | Tests | Covers |
 |---|---:|---|
 | `src/api/sse.test.ts` | 20 | Parser line endings, byte-by-byte splits, comments and keep-alives, final event without a blank line, `postPlan`/`resumePlan`, 429/400 errors, escaped frames, plain JSON responses |
-| `src/lib/lib.test.ts` | 19 | Trace reducer, request building, `applyPatch` union, form patching, omission labels, URL safety, plain text and WhatsApp export |
-| `src/lib/format.test.ts` | 11 | Clock, duration, money and grouping, labels, dates, percent, weather |
+| `src/lib/lib.test.ts` | 24 | Trace reducer (labels for every node and emitted tool, duplicate and legacy heartbeat events), request building, `applyPatch` union, form patching and the currency-grouped budget message, omission labels, URL safety, ID-matched legs, plain text and WhatsApp export |
+| `src/lib/format.test.ts` | 12 | Clock, duration, money and per-currency grouping, labels, dates, percent, weather |
 | `src/lib/ics.test.ts` | 10 | VCALENDAR structure, time zones, escaping, folding, rollover after midnight |
-| `src/pages/Planner.test.tsx` | 11 | Prefill, streaming plan, clarification resume, relaxations, status region, degradations, 429/400/rejected cards, structured-only requests |
-| `src/components/components.test.tsx` | 6 | PlanView, fallback banner, test-data badge, ClarificationCard, InfeasibleCard |
-| `src/pages/pages.test.tsx` | 5 | SharedPlan load and 404, evals page, HowItWorks |
+| `src/pages/Planner.test.tsx` | 13 | Prefill, streaming plan, clarification resume, relaxations, status region, degradations, 429/400/rejected cards, structured-only requests, foreign aborts and timeouts end in a retryable error, Stop returns to idle |
+| `src/components/components.test.tsx` | 10 | PlanView, legs paired by ID, fallback banner, test-data badge, check labels, calendar success and failure messages, ClarificationCard, InfeasibleCard |
+| `src/pages/pages.test.tsx` | 8 | SharedPlan load, 404 and foreign aborts with heading focus, evals page (including a foreign abort), HowItWorks (graph node list and guard/parse/finalize wording pinned to the code) |
+| `src/hooks/usePlanRun.test.tsx` | 6 | Owned versus foreign aborts and timeouts, superseded runs, unmount abort |
 | `src/test/security.test.tsx` | 2 | XSS payloads render as text; only https links are rendered |
+| `src/test/externalLinks.test.tsx` | 3 | No `target="_blank"`/`window.open(` outside `ExternalLink`; every new-tab link has an "(opens in a new tab)" name, `rel="noopener noreferrer"` and an https URL |
 
 Playwright (`npm run e2e`, `e2e/playwright.config.ts`): Chromium, one worker, 11 tests in `e2e/planner.spec.ts`
 (brief end to end, brief JSON via form fields, clarification and resume, typed answers and expired thread, budget
@@ -1966,7 +2020,8 @@ the frozen world, `PRIMARY_MODEL=fake:agent`, raised rate limits and a SQLite fi
 | `runtime` | `python:3.12-slim` | Non-root user `app` (uid/gid 1000); copies the venv, `backend/app`, `backend/data`, `backend/evals` (for `results/summary.json`) and the built UI to `/app/frontend/dist`; `compileall`; only `/app/var` writable |
 
 Runtime env: `APP_ENV=prod`, `PORT=8000`, `FRONTEND_DIST=/app/frontend/dist`, `DATABASE_URL=sqlite:////app/var/app.db`,
-`BUILD_GIT_SHA` from the `GIT_SHA` build arg. `HEALTHCHECK` every 30 s requests `/api/health`. `CMD` sets `GIT_SHA` from
+`BUILD_GIT_SHA` from the `GIT_SHA` build arg. `HEALTHCHECK` every 30 s requests `/api/health` (the 503 it returns
+when the database is unreachable marks the container unhealthy). `CMD` sets `GIT_SHA` from
 `GIT_SHA`, `RENDER_GIT_COMMIT`, `BUILD_GIT_SHA` or `dev`, then `exec uvicorn app.main:app --host 0.0.0.0 --port $PORT
 --proxy-headers` (one worker; `--forwarded-allow-ips` is deliberately not widened). `.dockerignore` excludes `.env`
 files at any depth, virtualenvs, `node_modules`, local databases, eval scratch, tests, scripts and docs.
@@ -2001,7 +2056,7 @@ per ref. Versions: uv 0.13.6, Python 3.12, Node 22.
 | `backend` | push/PR | `uv lock --check`, `uv sync --frozen`, `ruff check .`, `mypy app`, `pytest`, `python -m evals.runner --suite offline` |
 | `postgres` | push/PR | Postgres 17 service; `pytest -m live tests/store` with `DATABASE_URL=postgresql://planner:planner@localhost:5432/planner` |
 | `frontend` | push/PR | `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`, `npm run build` |
-| `docker` | push/PR, after backend and frontend | Build with Buildx (GHA cache); run the container on the frozen world with `PRIMARY_MODEL=baseline:deterministic` and in-memory SQLite; check uid/gid 1000, read-only app directories, `healthy` status; smoke test: `/api/health` (`db ok`, baseline model), SPA at `/` and `/evals`, JSON 404 for `/api/nope`, security headers, brief plan in JSON (`complete`, share link round trip) and SSE (exactly one `result`, last), 400 for `{"budget": "lots"}` |
+| `docker` | push/PR, after backend and frontend | Build with Buildx (GHA cache); run the container on the frozen world with `PRIMARY_MODEL=baseline:deterministic` and in-memory SQLite; check uid/gid 1000, read-only app directories, `healthy` status; smoke test: `/api/health` (`db ok`, baseline model), SPA at `/` and `/evals`, 404 (not the SPA) for `/api/nope`, security headers, brief plan in JSON (`complete`, share link round trip) and SSE (exactly one `result`, last), 400 for `{"budget": "lots"}` |
 | `model-evals` | `workflow_dispatch` only | Validates inputs, `make eval MODELS=... REPEATS=...`, `make eval-report`, uploads `backend/evals/results/` and `docs/EVAL_REPORT.md` as an artifact; uses repository secrets for model keys |
 
 ### 15.5 Makefile targets
@@ -2017,7 +2072,7 @@ per ref. Versions: uv 0.13.6, Python 3.12, Node 22.
 | `typecheck` | `mypy app` and `npm run typecheck` |
 | `build` | `npm run build` |
 | `ollama` | Start `ollama serve` if needed, pull missing `OLLAMA_MODELS` (`qwen3.5:9b gemma4:e4b granite4:tiny-h`), run `scripts/ollama_smoke.py` for each |
-| `eval-offline` | `python -m evals.runner --suite offline $(ARGS)` |
+| `eval-offline` | `python -m evals.runner --suite offline --out $(OUT) $(ARGS)`; `OUT` defaults to the git-ignored `evals/results/tmp` |
 | `eval` | `python -m evals.runner --suite $(SUITE) --models "$(MODELS)" --repeats $(REPEATS) $(ARGS)` (defaults: `models`, baseline + three Ollama models, 1) |
 | `eval-all` | `eval` with the baseline, the Ollama models and Claude when `ANTHROPIC_API_KEY` is set |
 | `eval-report` | `python -m evals.report $(ARGS)` |
@@ -2031,19 +2086,19 @@ Architecture-level differences are in HLD §16. Lower-level ones:
 
 | Area | Plan | Code |
 |---|---|---|
-| Tool `reason` | Required on every tool | Required in the JSON schema shown to the model; the argument models default it to "" |
+| Tool `reason` | Required on every tool | Required in the JSON schemas of `search_places`, `search_events` and `estimate_travel`, optional for `check_plan` and `submit_plan`; the argument models default it to "" |
 | Validation of durations | Category's sane range | The candidate's `duration_range` (events: 30 min up to the event length) |
 | Pacing table | Low: one leg over 15 min | `max_long_legs` 1 / 2 / 3; walking minutes include walking-category stops |
 | Costs for unknown prices | The category's upper default | The full category range `[min, max]` with basis `category_estimate`; price levels use per-currency bands |
-| Places field mask | 17 fields | Also `primaryType`; no `priceLevels` or `openNow` request filters (open-at and price are filtered client-side) |
+| Places field mask | 17 fields; Place Details with the Pro mask for share links | Search also asks for `primaryType`; no `priceLevels` or `openNow` request filters (open-at and price are filtered client-side). Place Details asks for hours, rating and price too (Enterprise SKU) |
 | Weather variables | `weather_code, temperature_2m_max, precipitation_probability_max, sunset` | Also `temperature_2m_min` and `sunrise`, `timezone=auto` |
 | Snapshot `last_checked` | Per entry | One file-level date applied to every entry; OSM only (no official venue sites) |
-| Events | 5 s timeout, cache 6 h | 5 s per operation and an 8 s wall-clock per robots.txt or page fetch; robots.txt results cached per process; no event cache |
+| Events | 5 s timeout, cache 6 h | 5 s per operation (4 s to connect) and an 8 s wall-clock per robots.txt or page fetch, pages fetched concurrently, 15 s for the whole search; robots.txt cached per origin (24 h after a read, 1 h after a failure); no event cache |
 | Geocoding | Open-Meteo | Gazetteer first (93 cities answer even when Open-Meteo is down), Open-Meteo otherwise |
 | Trace | `heartbeat` events | SSE comments; `TraceType` still lists `heartbeat` |
 | Clarification resume | `Command(resume=answers)` | Same, plus a per-thread in-process lock and a check that the thread is paused at `ask_clarification` |
 | Run log | Run ID, git SHA, model, status, mode, latency, tokens, cost, tool counts, violation codes, repairs, degradations | `runs` table without a repairs column (submit attempts are stored); repairs are in the finalize metrics |
-| Eval metrics (§12) | Clarification precision/recall "asked on blocking vs non-blocking"; security on injection cases; cost per plan; judge per axis | Precision = blocking asked / asked, recall = blocking asked / blocking; security = category `security` (includes XSS); cost divided by all runs ("Cost/run"); judge headline = mean of per-run means |
-| Eval process (§12) | LangSmith experiments, release gates, second-provider re-judging, hand review, 3 repeats for the report | Not implemented in code; `--repeats` defaults to 1 and `pass^k` is reported when repeats > 1 |
-| `JUDGE_MODEL` setting | Fixed judge model | Declared in `Settings` but unused; the runner takes `--judge-model` |
+| Eval metrics (§12) | Clarification precision/recall "asked on blocking vs non-blocking"; security on injection cases; cost per plan; judge per axis | Precision = blocking asked / asked, recall = blocking asked / blocking; security = category `security` (includes XSS); cost per plan divides the total by runs that produced a plan, and cost per run is reported too; judge headline = mean of per-run means |
+| Eval process (§12) | LangSmith experiments, release gates, second-provider re-judging, hand review, 3 repeats for the report | Not implemented in code; `--repeats` defaults to 1 and `pass^k` is reported when repeats > 1. Added beyond the plan: `--max-minutes`/`--max-cost-usd` budgets, harness-exception records, record schema versions |
+| `JUDGE_MODEL` setting | Fixed judge model | The eval runner's default judge for the `models` and `live` suites (`--judge-model` overrides, `none` disables); the app never reads it |
 

@@ -69,6 +69,7 @@ def create_app(settings: Settings | None = None, deps: Deps | None = None) -> Fa
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        settings.export_provider_env()  # keys from backend/.env must be visible before tracing is configured
         setup_observability(settings)
         async with AsyncExitStack() as stack:
             owned = deps is None

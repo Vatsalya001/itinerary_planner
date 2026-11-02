@@ -64,7 +64,7 @@ async def run_baseline(request: PlanRequest, deps: Deps, *, tracer: Tracer | Non
     if questions:
         tracer.emit("clarification", node="ask_clarification",
                     data={"questions": [q.model_dump() for q in questions]})
-        return done(PlanResult(run_id=run_id, status="needs_clarification", mode="deterministic",
+        return done(PlanResult(run_id=run_id, status="needs_clarification", mode=None,
                                model="baseline:deterministic", questions=questions,
                                preferences=outcome.preferences))
     if not matches:

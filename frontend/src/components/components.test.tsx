@@ -58,7 +58,7 @@ describe('PlanView', () => {
     expect(within(gig).getByText('₹499')).toBeInTheDocument()
     expect(within(gig).getByText('ticket price')).toBeInTheDocument()
     expect(within(gig).getByText('Web event · check before you go')).toBeInTheDocument()
-    expect(within(gig).getByRole('link', { name: 'Event page on district.in' })).toHaveAttribute(
+    expect(within(gig).getByRole('link', { name: /^Event page on district\.in\s?\(opens in a new tab\)$/ })).toHaveAttribute(
       'href',
       'https://www.district.in/events/sunset-acoustic-set-test',
     )

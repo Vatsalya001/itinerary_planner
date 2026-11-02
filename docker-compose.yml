@@ -1,7 +1,8 @@
 # Run the production image locally.
 #
 #   docker compose up --build                       # app on http://localhost:8000, SQLite in a named volume
-#   docker compose --profile postgres up --build    # app + Postgres 17 (prod-like: store and checkpoints in Postgres)
+#   COMPOSE_DATABASE_URL=postgresql://planner:planner@postgres:5432/planner \
+#     docker compose --profile postgres up --build  # app + Postgres 17 (store and checkpoints in Postgres)
 #
 # Configuration comes from backend/.env (copy .env.example there; optional). Do not quote values in that file:
 # Docker's env-file parser keeps quotes literally. A few values are pinned below to the image layout so host

@@ -23,6 +23,9 @@ log = logging.getLogger(__name__)
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 TIMEOUT_S = 8.0
+CONNECT_TIMEOUT_S = 4.0
+# Per-request Timeout with its own connect limit (a bare float would also set connect to 8 s).
+TIMEOUT = httpx.Timeout(TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
 DAILY_FIELDS = "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset"
 
 # Old or colloquial names -> the name GeoNames knows. Tried only when the first query returns nothing.
@@ -162,7 +165,7 @@ class OpenMeteoGeocoder:
         if country_code:
             params["countryCode"] = country_code
         try:
-            resp = await self._client.get(GEOCODE_URL, params=params, timeout=TIMEOUT_S)
+            resp = await self._client.get(GEOCODE_URL, params=params, timeout=TIMEOUT)
         except httpx.TimeoutException as exc:
             raise ProviderError("open_meteo_geocoding", "timeout", "geocoding timed out", retryable=True) from exc
         except httpx.HTTPError as exc:
@@ -271,7 +274,7 @@ class OpenMeteoWeather:
             "end_date": day.isoformat(),
         }
         try:
-            resp = await self._client.get(FORECAST_URL, params=params, timeout=TIMEOUT_S)
+            resp = await self._client.get(FORECAST_URL, params=params, timeout=TIMEOUT)
             if resp.status_code != 200:
                 log.info("open-meteo forecast HTTP %s", resp.status_code)
                 return _unavailable()

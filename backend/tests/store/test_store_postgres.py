@@ -69,6 +69,27 @@ async def test_rate_limit_and_daily(store: PostgresStore, clock: MutableClock) -
     await store._execute("DELETE FROM daily_counters WHERE key = %s", (key,))
 
 
+async def test_hit_limits_counts_only_when_every_limit_allows(store: PostgresStore) -> None:
+    import asyncio
+
+    ten, day, daily, burst_key = _uid(), _uid(), _uid(), _uid()
+    windows = [(ten, 600, 3), (day, 86400, 1)]
+    try:
+        assert await store.hit_limits(windows, daily_key=daily, daily_cap=5) == (True, 0, None)
+        allowed, retry_after, denied_by = await store.hit_limits(windows, daily_key=daily, daily_cap=5)
+        assert (allowed, denied_by) == (False, day) and retry_after > 0
+        rows = await store._execute("SELECT key, count FROM rate_limits WHERE key IN (%s, %s)", (ten, day))
+        assert dict(rows) == {ten: 1, day: 1}  # the refused request was rolled back in every window
+        assert (await store._execute("SELECT count FROM daily_counters WHERE key = %s", (daily,)))[0][0] == 1
+
+        burst = [(burst_key, 600, 50)]
+        results = await asyncio.gather(*(store.hit_limits(burst, daily_key=daily, daily_cap=4) for _ in range(10)))
+        assert sum(1 for allowed, _, _ in results if allowed) == 3  # one of the cap's 4 was used above
+    finally:
+        await store._execute("DELETE FROM rate_limits WHERE key IN (%s, %s, %s)", (ten, day, burst_key))
+        await store._execute("DELETE FROM daily_counters WHERE key = %s", (daily,))
+
+
 async def test_runs_feedback_eval_summary(store: PostgresStore) -> None:
     run = RunRecord(run_id=_uid(), created_at=START, git_sha="abc", model="m", status="complete", mode="agent",
                     latency_ms=10, tool_calls={"search_places": 1}, violation_codes=["X"], degradations=["d"])

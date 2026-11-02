@@ -188,6 +188,8 @@ jobs:
           curl -fsS "$BASE_URL/evals" | grep -qi '<!doctype html'
           # Unknown API paths are JSON 404s, not the SPA
           test "$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/nope")" = 404
+          curl -s "$BASE_URL/api/nope" | python3 -c 'import json,sys; json.load(sys.stdin)'
+          curl -s -D - -o /dev/null "$BASE_URL/api/nope" | grep -iq '^content-type: application/json'
 
           # Security headers on the UI and the API
           for path in / /api/health; do

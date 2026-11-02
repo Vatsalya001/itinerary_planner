@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "purpose": "Specification for the planner's eval runner (see IMPLEMENTATION_PLAN.md section 12). Not yet executed against an app; every reported number must come from runner output, never be typed by hand.",
+  "purpose": "Specification for the planner's eval runner (see IMPLEMENTATION_PLAN.md section 12). The runner (python -m evals.runner, from backend/) executes these cases against the real graph and writes JSONL records; python -m evals.report builds docs/EVAL_REPORT.md and backend/evals/results/summary.json from them. Every reported number must come from runner output, never be typed by hand.",
   "suites": {
     "offline": "CI on every push. Scripted fake chat model (LangChain fake model subclass with bind_tools), fixture providers, fixed clock and weather. No network, no keys, deterministic.",
     "models": "Every row of model_matrix against the frozen world (PLACES_PROVIDER=fixture, fixed weather, events, travel and clock). Identical tool results for every model so rows are comparable. No Google Maps content is used to test models.",

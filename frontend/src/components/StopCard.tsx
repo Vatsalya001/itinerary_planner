@@ -9,6 +9,7 @@ import {
   sourceLabel,
 } from '../lib/format'
 import { mapsUrlFor, safeHttpsUrl } from '../lib/urls'
+import { ExternalLink } from './ExternalLink'
 import { Icon, type IconName } from './Icon'
 import { Badge, linkClass } from './ui'
 
@@ -38,9 +39,9 @@ export function Attribution({ candidate }: { candidate: Candidate }) {
   if (src.provider === 'curated_snapshot') {
     return (
       <span className="text-xs text-stone-600">
-        <a className={linkClass} href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">
-          © OpenStreetMap contributors
-        </a>
+        <ExternalLink className={linkClass} href="https://www.openstreetmap.org/copyright">
+          <span>© OpenStreetMap contributors</span>
+        </ExternalLink>
         {src.last_checked ? <span>{` · checked ${src.last_checked}`}</span> : null}
       </span>
     )
@@ -51,9 +52,9 @@ export function Attribution({ candidate }: { candidate: Candidate }) {
     return (
       <span className="text-xs text-stone-600">
         {url ? (
-          <a className={linkClass} href={url} target="_blank" rel="noopener noreferrer">
-            {site ? `Event page on ${site}` : 'Event page'}
-          </a>
+          <ExternalLink className={linkClass} href={url}>
+            <span>{site ? `Event page on ${site}` : 'Event page'}</span>
+          </ExternalLink>
         ) : site ? (
           <span>{`Source: ${site}`}</span>
         ) : null}
@@ -89,16 +90,14 @@ function CostLine({ candidate }: { candidate: Candidate }) {
 
 function MapsLink({ candidate, city, label = 'Open in Google Maps' }: { candidate: Candidate; city: string; label?: string }) {
   return (
-    <a
+    <ExternalLink
       className="inline-flex items-center gap-1 text-sm font-medium text-orange-800 underline decoration-orange-300 underline-offset-2 hover:decoration-orange-700"
       href={mapsUrlFor(candidate, city)}
-      target="_blank"
-      rel="noopener noreferrer"
     >
       <Icon name="pin" className="h-4 w-4" />
       {label}
-      <span className="sr-only">{` for ${candidate.name} (opens in a new tab)`}</span>
-    </a>
+      <span className="sr-only">{` for ${candidate.name}`}</span>
+    </ExternalLink>
   )
 }
 

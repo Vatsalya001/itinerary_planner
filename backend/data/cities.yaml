@@ -123,3 +123,23 @@ default:
     AUD: {base: 5, included_km: 0.0, per_km: 2.3, source: "estimate (unverified)", as_of: "2026-11-02"}
     CAD: {base: 4, included_km: 0.0, per_km: 2.1, source: "estimate (unverified)", as_of: "2026-11-02"}
     INR: {base: 100, included_km: 2.0, per_km: 22, source: "estimate (unverified)", as_of: "2026-11-02"}
+    # The other currencies of countries.yaml (every gazetteer country), so motorised legs there can be priced.
+    # Rough per-vehicle cab estimates set by hand, not checked against any tariff.
+    BDT: {base: 50, included_km: 0.0, per_km: 30, source: "estimate (unverified)", as_of: "2026-11-02"}
+    BRL: {base: 6, included_km: 0.0, per_km: 3.5, source: "estimate (unverified)", as_of: "2026-11-02"}
+    CHF: {base: 7, included_km: 0.0, per_km: 4.0, source: "estimate (unverified)", as_of: "2026-11-02"}
+    CZK: {base: 60, included_km: 0.0, per_km: 36, source: "estimate (unverified)", as_of: "2026-11-02"}
+    DKK: {base: 45, included_km: 0.0, per_km: 16, source: "estimate (unverified)", as_of: "2026-11-02"}
+    HKD: {base: 29, included_km: 2.0, per_km: 11, source: "estimate (unverified)", as_of: "2026-11-02"}
+    IDR: {base: 8000, included_km: 0.0, per_km: 7000, source: "estimate (unverified)", as_of: "2026-11-02"}
+    KRW: {base: 4800, included_km: 1.6, per_km: 800, source: "estimate (unverified)", as_of: "2026-11-02"}
+    LKR: {base: 200, included_km: 1.0, per_km: 130, source: "estimate (unverified)", as_of: "2026-11-02"}
+    MXN: {base: 15, included_km: 0.0, per_km: 9, source: "estimate (unverified)", as_of: "2026-11-02"}
+    MYR: {base: 4, included_km: 0.0, per_km: 1.5, source: "estimate (unverified)", as_of: "2026-11-02"}
+    NPR: {base: 100, included_km: 0.0, per_km: 60, source: "estimate (unverified)", as_of: "2026-11-02"}
+    NZD: {base: 4, included_km: 0.0, per_km: 3.2, source: "estimate (unverified)", as_of: "2026-11-02"}
+    QAR: {base: 4, included_km: 0.0, per_km: 2.0, source: "estimate (unverified)", as_of: "2026-11-02"}
+    SEK: {base: 55, included_km: 0.0, per_km: 20, source: "estimate (unverified)", as_of: "2026-11-02"}
+    THB: {base: 35, included_km: 1.0, per_km: 7, source: "estimate (unverified)", as_of: "2026-11-02"}
+    TRY: {base: 60, included_km: 0.0, per_km: 45, source: "estimate (unverified)", as_of: "2026-11-02"}
+    ZAR: {base: 15, included_km: 0.0, per_km: 12, source: "estimate (unverified)", as_of: "2026-11-02"}
