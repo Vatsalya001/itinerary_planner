@@ -20,3 +20,5 @@ frontend/playwright-report/
 .DS_Store
 # Eval scratch
 backend/evals/results/tmp/
+# Agent worktrees
+.claude/
