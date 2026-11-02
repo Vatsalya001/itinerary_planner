@@ -166,7 +166,7 @@
       ],
       "assertions": [
         "Mode is agent (not deterministic) outside the baseline row",
-        "At least three distinct agent tools were called",
+        "At least three distinct tools ran, including the agent's search and submit_plan",
         "Food stops carry positive vegetarian evidence",
         "No stop is likely busy at its scheduled time",
         "At most 3 stops including at least one seated stop (low energy)"

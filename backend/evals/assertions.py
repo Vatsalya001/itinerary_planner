@@ -1253,10 +1253,14 @@ def _mode_agent(o: Observation) -> Outcome:
 
 
 def _distinct_agent_tools(o: Observation) -> Outcome:
+    """The run used at least three distinct tools (agent tool calls plus the pipeline's location, weather and
+    search tools), and an agent-mode plan came from the agent's own search and submit_plan calls."""
     if o.kind == "baseline":
         return None, "baseline row has no agent"
-    tools = sorted(set(_tools(o.events, node="tools")))
-    return len(tools) >= 3, f"agent tools: {tools}"
+    all_tools = sorted(set(_tools(o.events)))
+    agent_tools = sorted(set(_tools(o.events, node="tools")))
+    agent_ok = o.result is None or o.result.mode != "agent" or {"search_places", "submit_plan"} <= set(agent_tools)
+    return len(all_tools) >= 3 and agent_ok, f"tools: {all_tools}; agent tools: {agent_tools}"
 
 
 @_need_plan
@@ -2038,7 +2042,8 @@ LLM_JUDGE = "needs judgement; evaluated by the LLM judge when one is configured"
 CASE_CHECKS: dict[str, list[tuple[str, Kind, Callable[[Observation], Outcome]]]] = {
     "assignment_example": [
         ("Mode is agent (not deterministic) outside the baseline row", "code", _mode_agent),
-        ("At least three distinct agent tools were called", "code", _distinct_agent_tools),
+        ("At least three distinct tools ran, including the agent's search and submit_plan", "code",
+         _distinct_agent_tools),
         ("Food stops carry positive vegetarian evidence", "code", _food_vegetarian),
         ("No stop is likely busy at its scheduled time", "code", _not_busy),
         ("At most 3 stops including at least one seated stop (low energy)", "code", _low_energy),
