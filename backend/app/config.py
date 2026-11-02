@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = None
     xai_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
+    cerebras_api_key: SecretStr | None = None
     langsmith_api_key: SecretStr | None = None
     fixture_weather: str = "clear"  # clear | rain_85pct | unavailable (fixture provider only)
 
@@ -85,6 +86,7 @@ class Settings(BaseSettings):
             ("GOOGLE_API_KEY", self.google_api_key),
             ("XAI_API_KEY", self.xai_api_key),
             ("GROQ_API_KEY", self.groq_api_key),
+            ("CEREBRAS_API_KEY", self.cerebras_api_key),
             ("LANGSMITH_API_KEY", self.langsmith_api_key),
         ):
             if value is not None and value.get_secret_value() and not os.environ.get(env_name):

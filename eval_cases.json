@@ -13,9 +13,14 @@
       "note": "No LLM. Parse falls back to the regex parser; planning uses the fallback planner. Shows what each model adds."
     },
     {
+      "id": "cerebras:gpt-oss-120b",
+      "kind": "api",
+      "note": "Production primary (Cerebras Free Trial: 5 RPM, 1M tokens/day)."
+    },
+    {
       "id": "groq:openai/gpt-oss-120b",
       "kind": "api",
-      "note": "Production model (Groq). Free tier is limited to 8K tokens/minute and 200K tokens/day."
+      "note": "Production fallback (Groq free tier: 8K tokens/minute, 200K tokens/day)."
     },
     {
       "id": "ollama:qwen3.5:9b",

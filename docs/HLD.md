@@ -222,12 +222,13 @@ graph TD
 
 All models are listed in `backend/app/llm/models.yaml` and built with `init_chat_model` (or the scripted fake). The
 run's model is `PRIMARY_MODEL` (default `ollama:qwen3.5:9b` in `config.py`; `render.yaml` sets
-`groq:openai/gpt-oss-120b`, the production model). An optional `FALLBACK_MODEL` is chained with `with_fallbacks`; the primary then gets
+`cerebras:gpt-oss-120b` with `FALLBACK_MODEL=groq:openai/gpt-oss-120b`). An optional `FALLBACK_MODEL` is chained with `with_fallbacks`; the primary then gets
 60% of each call's time budget. After the chain, the deterministic planner is the last resort.
 
 | Registry ID | Kind | Key settings | Status |
 |---|---|---|---|
-| `groq:openai/gpt-oss-120b` | api | temperature 0, `max_tokens` 8192, `reasoning_effort` parse low / agent medium / judge medium, `reasoning_format` hidden, `max_retries` 1, `request_timeout_s` 60; $0.15 / $0.60 per Mtok | **Production model.** Free tier: 30 RPM, 8K TPM, 200K tokens/day (measured: the third ~2.5K-token call within a minute gets HTTP 429), so plans on the free tier usually hit the deadline and fall back |
+| `cerebras:gpt-oss-120b` | api | temperature 0, `max_tokens` 8192, `reasoning_effort` parse low / agent medium / judge medium, `max_retries` 1, `request_timeout_s` 60; built with `ChatCerebras` directly (no `init_chat_model` provider) | **Production primary.** Free Trial: card on file, $5 credit for 30 days, 5 RPM, 30K uncached TPM, 1M tokens/day |
+| `groq:openai/gpt-oss-120b` | api | temperature 0, `max_tokens` 8192, `reasoning_effort` parse low / agent medium / judge medium, `reasoning_format` hidden, `max_retries` 1, `request_timeout_s` 60; $0.15 / $0.60 per Mtok | **Production fallback.** Free tier: 30 RPM, 8K TPM, 200K tokens/day (measured: the third ~2.5K-token call within a minute gets HTTP 429) |
 | `google_genai:gemini-3.6-flash`, `google_genai:gemini-3.8-flash` | api | default temperature, `max_tokens` 8192, `max_retries` 1, `request_timeout_s` 60; $0.75 / $3.75 per Mtok (paid, through 2026-12-31) | Optional, not used: on 2026-11-03 both returned 503/504 "high demand" during smoke tests |
 | `anthropic:claude-opus-5-5` | api | `max_tokens` 16000, `output_config.effort` parse low / agent medium / judge medium, no sampling params, `json_schema` structured output, cached system prompt, refusal fallbacks; $4 / $20 per Mtok | Optional, not configured |
 | `xai:<pending>` | api | `pending: true` | Placeholder; raises `PendingModelError` |
@@ -337,8 +338,8 @@ Latest committed results: the report generated 2026-11-02T15:53:14Z (runs on a d
 in `053ba54`) covers the baseline and `ollama:granite4:tiny-h` on the `models` suite and `fake:agent` on the `offline`
 suite, one repeat per case, no judge. It predates the eval-harness hardening, so it shows cost per run only until
 `make eval-report` regenerates it.
-Groq (`groq:openai/gpt-oss-120b`) has no committed eval results yet: its free tier's 200K tokens/day does not
-cover a 26-case run. Read the report for the numbers.
+Cerebras and Groq have no committed eval results yet (Groq's free tier's 200K tokens/day does not cover a 26-case
+run in one day). Read the report for the numbers.
 
 ## 15. Known limitations and risks
 

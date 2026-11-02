@@ -229,6 +229,19 @@ def provider_kwargs(spec: ModelSpec, purpose: Purpose, settings: Settings) -> di
         if budget is not None:
             kwargs["thinking_budget"] = int(budget)
         return kwargs
+    if spec.provider == "cerebras":
+        kwargs = {
+            "temperature": float(p.get("temperature", 0)),
+            "max_retries": int(p.get("max_retries", 1)),
+            "request_timeout": float(p.get("request_timeout_s", 60)),
+        }
+        if p.get("max_tokens"):
+            kwargs["max_tokens"] = int(p["max_tokens"])
+        efforts = p.get("reasoning_effort")
+        effort = efforts.get(purpose) if isinstance(efforts, Mapping) else efforts
+        if effort:
+            kwargs["reasoning_effort"] = effort
+        return kwargs
     if spec.provider == "groq":
         kwargs = {
             "temperature": float(p.get("temperature", 0)),
@@ -270,6 +283,10 @@ def get_chat_model(model_id: str, purpose: Purpose, settings: Settings, *, role:
         from app.llm.fake import ScriptedAgentModel
 
         model = ScriptedAgentModel(model_id=spec.id, fault=fault, role=role)
+    elif spec.provider == "cerebras":  # not an init_chat_model provider; build the integration class directly
+        from langchain_cerebras import ChatCerebras
+
+        model = ChatCerebras(model=spec.model, **provider_kwargs(spec, purpose, settings))
     else:
         from langchain.chat_models import init_chat_model
 

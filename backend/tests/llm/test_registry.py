@@ -48,8 +48,8 @@ def test_registry_lists_the_model_matrix() -> None:
         if "<" in row["id"]:
             continue
         assert row["id"] in reg.specs, row["id"]
-    assert reg.production_primary == "groq:openai/gpt-oss-120b"
-    assert reg.production_fallback is None
+    assert reg.production_primary == "cerebras:gpt-oss-120b"
+    assert reg.production_fallback == "groq:openai/gpt-oss-120b"
     groq = reg.specs["groq:openai/gpt-oss-120b"]
     assert groq.kind == "api" and (groq.pricing.input, groq.pricing.output) == (0.15, 0.60)
     opus = reg.specs[OPUS]
@@ -193,3 +193,16 @@ def test_groq_param_rules() -> None:
 def test_gemini_keeps_provider_default_temperature() -> None:
     kwargs = provider_kwargs(get_spec("google_genai:gemini-3.6-flash"), "agent", fixture_settings())
     assert "temperature" not in kwargs and kwargs["max_output_tokens"] == 8192 and kwargs["timeout"] == 60.0
+
+
+def test_cerebras_param_rules_and_construction(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CEREBRAS_API_KEY", "csk-test-not-a-real-key")
+    settings = fixture_settings()
+    spec = get_spec("cerebras:gpt-oss-120b")
+    kwargs = provider_kwargs(spec, "agent", settings)
+    assert kwargs["reasoning_effort"] == "medium" and provider_kwargs(spec, "parse", settings)["reasoning_effort"] == "low"
+    assert kwargs["temperature"] == 0.0 and kwargs["max_tokens"] == 8192 and kwargs["request_timeout"] == 60.0
+    from langchain_cerebras import ChatCerebras
+
+    model = get_chat_model("cerebras:gpt-oss-120b", "agent", settings)  # built directly, not via init_chat_model
+    assert isinstance(model, ChatCerebras) and model.model_name == "gpt-oss-120b"

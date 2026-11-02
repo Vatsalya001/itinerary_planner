@@ -1153,7 +1153,7 @@ Run metrics (`finalize.run_metrics`, the `data` of the `finalize` `node_complete
 
 | Key | Meaning |
 |---|---|
-| `production.primary` / `production.fallback` | `groq:openai/gpt-oss-120b` / null. Read by the eval runner's `live` suite default (`load_registry().production_primary`); the app uses `PRIMARY_MODEL`/`FALLBACK_MODEL` |
+| `production.primary` / `production.fallback` | `cerebras:gpt-oss-120b` / `groq:openai/gpt-oss-120b`. Read by the eval runner's `live` suite default (`load_registry().production_primary`); the app uses `PRIMARY_MODEL`/`FALLBACK_MODEL` |
 | `timeouts.<kind>` | `agent_turn_s` and `parse_s` per kind: api 45/15, local 150/25, fake 45/15, baseline 0/0 |
 | `candidates[]` | `id` (`provider:model`), `kind` (`api`, `local`, `fake`, `baseline`), `note`, `params`, `pricing_per_mtok` (`input`, `output`, `cache_read`, `cache_write` USD per million tokens), `pending` |
 
@@ -1162,7 +1162,8 @@ Entries and parameters:
 | ID | Kind | `params` | Pricing per Mtok |
 |---|---|---|---|
 | `anthropic:claude-opus-5-5` | api | `max_tokens` 16000; `effort` {parse: low, agent: medium, judge: medium}; `max_retries` 1; `request_timeout_s` 60; `cache_system_prompt` true; `betas` [`server-side-fallback-2026-07-01`]; `server_side_fallback` `default` | input 4.00, output 20.00, cache read 0.20, cache write 5.00 |
-| `groq:openai/gpt-oss-120b` | api (production) | temperature 0; `max_tokens` 8192; `max_retries` 1; `request_timeout_s` 60; `reasoning_effort` {parse: low, agent: medium, judge: medium}; `reasoning_format` hidden | $0.15 in, $0.60 out |
+| `cerebras:gpt-oss-120b` | api (production primary) | temperature 0; `max_tokens` 8192; `max_retries` 1; `request_timeout_s` 60; `reasoning_effort` {parse: low, agent: medium, judge: medium} | 0 (Free Trial credit) |
+| `groq:openai/gpt-oss-120b` | api (production fallback) | temperature 0; `max_tokens` 8192; `max_retries` 1; `request_timeout_s` 60; `reasoning_effort` {parse: low, agent: medium, judge: medium}; `reasoning_format` hidden | $0.15 in, $0.60 out |
 | `google_genai:gemini-3.6-flash`, `google_genai:gemini-3.8-flash` | api (optional, not used) | `max_tokens` 8192; `max_retries` 1; `request_timeout_s` 60; temperature left at the provider default | $0.75 in, $3.75 out, $0.075 cache read |
 | `xai:<pending>` | api, pending | temperature 0, `max_tokens` 8192 | 0 |
 | `ollama:qwen3.5:9b` | local | `num_ctx` 32768, `num_predict` 2048, temperature 0, `keep_alive` 10m, `reasoning` false, `structured_output` function_calling | 0 |
@@ -1179,8 +1180,8 @@ Entries and parameters:
 | `find_spec(model_id)` | Registry entry, or an ad-hoc local spec for any `ollama:<tag>` not listed (`num_ctx` 32768, `num_predict` 2048, temperature 0, `keep_alive` 10m, `reasoning` false; local timeouts), else None |
 | `get_spec(model_id)` | Raises `PendingModelError` for a pending entry or a provider whose only entry is pending; `UnknownModelError` (lists the known IDs) otherwise |
 | `model_chain(settings, model_id)` | `[primary]` or `[primary, FALLBACK_MODEL]` (skipped when equal to the primary or when either is the baseline) |
-| `provider_kwargs(spec, purpose, settings)` | Anthropic: `max_tokens`, `max_retries`, `timeout`, `output_config={"effort": effort[purpose]}`, `betas` (the server-side-fallback beta added when `server_side_fallback` is set), `model_kwargs={"fallbacks": "default"}`; temperature, `top_p` and `top_k` are dropped with a warning. Ollama: `base_url`, `num_ctx`, `temperature`, `keep_alive`, `validate_model_on_init=False`, `reasoning` (when not null), `num_predict`. google_genai: `max_retries`, `timeout`, `temperature` only when the entry sets one, `max_output_tokens`, `thinking_budget` (per purpose) when set. groq: `temperature`, `max_retries`, `request_timeout`, `max_tokens`, `reasoning_effort` (per purpose), `reasoning_format`. xai: `temperature`, `max_retries`, `max_tokens` |
-| `get_chat_model(model_id, purpose, settings, role)` | `ScriptedAgentModel` for `fake:*`; otherwise `init_chat_model(model, model_provider=provider, **provider_kwargs)`. Cached by (id, purpose, role, fault, Ollama URL); the cache is cleared above 64 entries. The baseline raises `RegistryError` |
+| `provider_kwargs(spec, purpose, settings)` | Anthropic: `max_tokens`, `max_retries`, `timeout`, `output_config={"effort": effort[purpose]}`, `betas` (the server-side-fallback beta added when `server_side_fallback` is set), `model_kwargs={"fallbacks": "default"}`; temperature, `top_p` and `top_k` are dropped with a warning. Ollama: `base_url`, `num_ctx`, `temperature`, `keep_alive`, `validate_model_on_init=False`, `reasoning` (when not null), `num_predict`. cerebras: `temperature`, `max_retries`, `request_timeout`, `max_tokens`, `reasoning_effort` (per purpose). google_genai: `max_retries`, `timeout`, `temperature` only when the entry sets one, `max_output_tokens`, `thinking_budget` (per purpose) when set. groq: `temperature`, `max_retries`, `request_timeout`, `max_tokens`, `reasoning_effort` (per purpose), `reasoning_format`. xai: `temperature`, `max_retries`, `max_tokens` |
+| `get_chat_model(model_id, purpose, settings, role)` | `ScriptedAgentModel` for `fake:*`; `ChatCerebras(model=..., **provider_kwargs)` for `cerebras:*` (not an `init_chat_model` provider); otherwise `init_chat_model(model, model_provider=provider, **provider_kwargs)`. Cached by (id, purpose, role, fault, Ollama URL); the cache is cleared above 64 entries. The baseline raises `RegistryError` |
 | `structured_method(spec)` | `json_schema` for Anthropic and by default; `function_calling` when `params.structured_output` says so |
 | `is_refusal(message)` | `stop_reason == "refusal"`, `finish_reason` in {refusal, safety, content_filter}, or `additional_kwargs.refusal` |
 | `_prepare_messages(spec)` | Anthropic (with `cache_system_prompt`): the system prompt becomes a text block with `cache_control: {"type": "ephemeral"}`; other providers get plain-string system content |
@@ -1616,7 +1617,8 @@ directory; unknown variables are ignored. `get_settings()` is cached. `export_pr
 | `GEOCODER` | `open_meteo` | `open_meteo`, `fixture` |
 | `GOOGLE_MAPS_API_KEY` | None (secret) | Enables Google Places under `auto` |
 | `TAVILY_API_KEY` | None (secret) | Enables Tavily under `auto` |
-| `GROQ_API_KEY` | None (secret) | Groq key for the production model (exported to the environment) |
+| `CEREBRAS_API_KEY` | None (secret) | Cerebras key for the production primary (exported to the environment) |
+| `GROQ_API_KEY` | None (secret) | Groq key for the production fallback (exported to the environment) |
 | `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY` | None (secret) | Optional provider keys, unused by this deployment (exported to the environment) |
 | `LANGSMITH_API_KEY` | None (secret) | LangSmith tracing |
 | `FIXTURE_WEATHER` | `clear` | `clear`, `rain_85pct`, `unavailable` (fixture weather only) |
@@ -1769,7 +1771,7 @@ Relaxation buttons apply `relaxation.patch` to the last request with `lib/plan.a
 | Key | Content |
 |---|---|
 | `suites` | `offline` (scripted fake model, CI), `models` (every `model_matrix` row on the frozen world), `live` (production model on real providers, reported separately) |
-| `model_matrix` | `baseline:deterministic`, `groq:openai/gpt-oss-120b`, `ollama:qwen3.5:9b`, `ollama:gemma4:e4b`, `ollama:granite4:tiny-h` |
+| `model_matrix` | `baseline:deterministic`, `cerebras:gpt-oss-120b`, `groq:openai/gpt-oss-120b`, `ollama:qwen3.5:9b`, `ollama:gemma4:e4b`, `ollama:granite4:tiny-h` |
 | `deadlines_s` | `api` 60, `local` 240 |
 | `fixed_context` | `now` 2026-11-05T10:00+05:30, target Saturday 2026-11-07, default start 15:00 |
 | `defaults` | The brief: Bangalore, 2000, "4 hours", "tired but wants to do something fun", [food, music, walks], [vegetarian, avoid crowded places] |
@@ -2039,12 +2041,12 @@ sqlite:////app/var/app.db}`, volume `app-data:/app/var`, `stop_grace_period: 75s
 
 One `web` service `saturday-planner`: `runtime: docker`, `region: singapore`, `plan: starter`, `branch: main`,
 `healthCheckPath: /api/health`, `autoDeployTrigger: checksPass`, `maxShutdownDelaySeconds: 75`. Env:
-`APP_ENV=prod`, `TRUST_PROXY_HEADERS=true`, `FRONTEND_DIST`, `PRIMARY_MODEL=groq:openai/gpt-oss-120b`,
+`APP_ENV=prod`, `TRUST_PROXY_HEADERS=true`, `FRONTEND_DIST`, `PRIMARY_MODEL=cerebras:gpt-oss-120b`, `FALLBACK_MODEL=groq:openai/gpt-oss-120b`,
 `OLLAMA_BASE_URL`, `PLACES_PROVIDER=auto`, `EVENTS_PROVIDER=auto`, `WEATHER_PROVIDER=open_meteo`,
 `GEOCODER=open_meteo`, limits (`RUN_DEADLINE_S` 60, `MAX_AGENT_TURNS` 10, `MAX_SUBMIT_ATTEMPTS` 3, `DAILY_PLAN_CAP`
 200, `RATE_LIMIT_PER_10MIN` 15, `RATE_LIMIT_PER_DAY` 60, `MAX_BODY_BYTES` 16384, `SHARE_TTL_DAYS` 30),
 `TRACING_ENABLED=false`, `LANGSMITH_PROJECT=saturday-planner-prod`; `sync: false` secrets: `FALLBACK_MODEL`,
-`JUDGE_MODEL`, `GROQ_API_KEY`, `GOOGLE_MAPS_API_KEY`, `TAVILY_API_KEY`,
+`JUDGE_MODEL`, `CEREBRAS_API_KEY`, `GROQ_API_KEY`, `GOOGLE_MAPS_API_KEY`, `TAVILY_API_KEY`,
 `DATABASE_URL` (Neon, e.g. `postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require`), `SENTRY_DSN`,
 `LANGSMITH_API_KEY`.
 
@@ -2076,7 +2078,7 @@ per ref. Versions: uv 0.13.6, Python 3.12, Node 22.
 | `ollama` | Start `ollama serve` if needed, pull missing `OLLAMA_MODELS` (`qwen3.5:9b gemma4:e4b granite4:tiny-h`), run `scripts/ollama_smoke.py` for each |
 | `eval-offline` | `python -m evals.runner --suite offline --out $(OUT) $(ARGS)`; `OUT` defaults to the git-ignored `evals/results/tmp` |
 | `eval` | `python -m evals.runner --suite $(SUITE) --models "$(MODELS)" --repeats $(REPEATS) $(ARGS)` (defaults: `models`, baseline + three Ollama models, 1) |
-| `eval-all` | `eval` with the baseline, the Ollama models and Groq when `GROQ_API_KEY` is set |
+| `eval-all` | `eval` with the baseline, the Ollama models and Cerebras/Groq when their keys are set |
 | `eval-report` | `python -m evals.report $(ARGS)` |
 | `docker-build` | `docker build --build-arg GIT_SHA=<short sha> -t $(IMAGE) .` |
 | `docker-run` | Run the image on :8000 with `backend/.env`, SQLite in the container unless `DOCKER_DATABASE_URL`, Ollama on the host |

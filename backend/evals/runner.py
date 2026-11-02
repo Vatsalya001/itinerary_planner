@@ -102,8 +102,10 @@ NO_FRONTEND = str(BACKEND_DIR / "evals" / "_no_frontend")
 KEY_FIELDS = {"anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"),
               "google_genai": ("google_api_key", "GOOGLE_API_KEY"),
               "xai": ("xai_api_key", "XAI_API_KEY"),
-              "groq": ("groq_api_key", "GROQ_API_KEY")}
-SECRET_FIELDS = ("anthropic_api_key", "google_api_key", "xai_api_key", "groq_api_key", "langsmith_api_key",
+              "groq": ("groq_api_key", "GROQ_API_KEY"),
+              "cerebras": ("cerebras_api_key", "CEREBRAS_API_KEY")}
+SECRET_FIELDS = ("anthropic_api_key", "google_api_key", "xai_api_key", "groq_api_key", "cerebras_api_key",
+                 "langsmith_api_key",
                  "google_maps_api_key",
                  "tavily_api_key")
 NO_JUDGE = frozenset({"", "none", "off"})  # --judge-model / JUDGE_MODEL values that mean "no judge"
@@ -293,7 +295,8 @@ def env_settings_values() -> dict[str, Any]:
     env = env_settings()
     if env is None:
         return out
-    for name in ("anthropic_api_key", "google_api_key", "xai_api_key", "groq_api_key", "langsmith_api_key"):
+    for name in ("anthropic_api_key", "google_api_key", "xai_api_key", "groq_api_key", "cerebras_api_key",
+                 "langsmith_api_key"):
         value = getattr(env, name, None)
         if value is not None and value.get_secret_value():
             out[name] = value.get_secret_value()
@@ -860,6 +863,7 @@ def make_session(args: argparse.Namespace, spec: dict[str, Any]) -> Session:
         sess.extra = {**{k: v for k, v in env_values.items() if k != "langsmith_api_key"}, **SENTINEL_SETTINGS}
     found = [str(v) for k, v in {**env_values, **sess.extra}.items() if k in SECRET_FIELDS and v]
     found += [os.environ[n] for n in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "XAI_API_KEY", "GROQ_API_KEY",
+                                      "CEREBRAS_API_KEY",
                                       "LANGSMITH_API_KEY",
                                       "GOOGLE_MAPS_API_KEY", "TAVILY_API_KEY") if os.environ.get(n)]
     sess.secrets = sorted(set(found))
@@ -884,7 +888,8 @@ def setup_judge(sess: Session, judge_model: str | None) -> None:
         print(f"judge {judge_model} unavailable: {reason}; judge_quality will be null", flush=True)
         return
     settings = fixture_settings(**{k: v for k, v in sess.extra.items() if k in {
-        "anthropic_api_key", "google_api_key", "xai_api_key", "groq_api_key", "ollama_base_url"}})
+        "anthropic_api_key", "google_api_key", "xai_api_key", "groq_api_key", "cerebras_api_key",
+        "ollama_base_url"}})
     sess.judge = Judge(judge_model, settings)
 
 

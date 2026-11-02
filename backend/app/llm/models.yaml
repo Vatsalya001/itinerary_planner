@@ -8,8 +8,8 @@
 # params.num_predict (Ollama): output-token cap per call; without it small models can generate for minutes
 # pending:  true until a real model ID is pinned; requesting it raises PendingModelError
 production:
-  primary: groq:openai/gpt-oss-120b
-  fallback: null  # the deterministic planner is the safety net when the model fails or times out
+  primary: cerebras:gpt-oss-120b
+  fallback: groq:openai/gpt-oss-120b  # used when Cerebras errors, rate-limits or times out; then the rule-based planner
 
 timeouts:
   api: {agent_turn_s: 45, parse_s: 15}
@@ -41,10 +41,24 @@ candidates:
       request_timeout_s: 60
     pricing_per_mtok: {input: 0.75, output: 3.75, cache_read: 0.075}  # paid tier, through 2026-12-31
 
+  - id: cerebras:gpt-oss-120b
+    kind: api
+    note: >-
+      Production primary (Cerebras). Free Trial (card on file, $5 credit for 30 days, no charge until credits
+      are bought): 5 RPM, 30K uncached / 90K total TPM, 1M tokens per hour and per day. Built with ChatCerebras
+      directly (init_chat_model has no cerebras provider). Pricing is the free-trial credit, recorded as 0 here.
+    params:
+      temperature: 0
+      max_tokens: 8192
+      max_retries: 1
+      request_timeout_s: 60
+      reasoning_effort: {parse: low, agent: medium, judge: medium}
+    pricing_per_mtok: {input: 0, output: 0}
+
   - id: groq:openai/gpt-oss-120b
     kind: api
     note: >-
-      Production model (Groq). Free tier limits for this model: 30 RPM, 8K TPM, 200K tokens/day, so a full
+      Production fallback (Groq). Free tier limits for this model: 30 RPM, 8K TPM, 200K tokens/day, so a full
       eval or real traffic needs Groq's paid (Developer) tier. Reasoning is hidden from the response.
     params:
       temperature: 0
