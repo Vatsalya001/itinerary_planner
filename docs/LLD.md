@@ -2045,8 +2045,7 @@ One `web` service `saturday-planner`: `runtime: docker`, `region: singapore`, `p
 `OLLAMA_BASE_URL`, `PLACES_PROVIDER=auto`, `EVENTS_PROVIDER=auto`, `WEATHER_PROVIDER=open_meteo`,
 `GEOCODER=open_meteo`, limits (`RUN_DEADLINE_S` 60, `MAX_AGENT_TURNS` 10, `MAX_SUBMIT_ATTEMPTS` 3, `DAILY_PLAN_CAP`
 200, `RATE_LIMIT_PER_10MIN` 15, `RATE_LIMIT_PER_DAY` 60, `MAX_BODY_BYTES` 16384, `SHARE_TTL_DAYS` 30),
-`TRACING_ENABLED=false`, `LANGSMITH_PROJECT=saturday-planner-prod`; `sync: false` secrets: `FALLBACK_MODEL`,
-`JUDGE_MODEL`, `CEREBRAS_API_KEY`, `GROQ_API_KEY`, `GOOGLE_MAPS_API_KEY`, `TAVILY_API_KEY`,
+`TRACING_ENABLED=false`, `LANGSMITH_PROJECT=saturday-planner-prod`; `sync: false` secrets: `JUDGE_MODEL`, `CEREBRAS_API_KEY`, `GROQ_API_KEY`, `GOOGLE_MAPS_API_KEY`, `TAVILY_API_KEY`,
 `DATABASE_URL` (Neon, e.g. `postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require`), `SENTRY_DSN`,
 `LANGSMITH_API_KEY`.
 
