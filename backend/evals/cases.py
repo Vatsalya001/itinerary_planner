@@ -321,9 +321,36 @@ def _digest(paths: list[Path], root: Path) -> str:
     return h.hexdigest()[:12]
 
 
+# Source files that hold text the planner model sees: prompts, payload formats and the LLMParse structured-output
+# schema (prompts.py); tool names, descriptions, JSON schemas and tool result/error texts (tools.py); tool-call
+# error texts (nodes/execute.py); the repair instruction and submit_plan replies (nodes/validate.py).
+MODEL_VISIBLE_FILES = ("app/graph/prompts.py", "app/graph/tools.py", "app/graph/nodes/execute.py",
+                       "app/graph/nodes/validate.py")
+
+
+def model_visible_text() -> str:
+    """The static text as rendered for the model: system prompts, nudge, tool schemas and the LLMParse JSON schema.
+
+    Rendering catches text those files pull from elsewhere (the constraint vocabulary in the parse prompt, the
+    category list in the search_places schema)."""
+    from app.graph.prompts import AGENT_SYSTEM_PROMPT, NUDGE_TEXT, PARSE_SYSTEM_PROMPT, LLMParse
+    from app.graph.tools import tool_schemas
+
+    return json.dumps({"agent_system": AGENT_SYSTEM_PROMPT, "parse_system": PARSE_SYSTEM_PROMPT, "nudge": NUDGE_TEXT,
+                       "tools": tool_schemas(), "parse_schema": LLMParse.model_json_schema()},
+                      sort_keys=True, ensure_ascii=False)
+
+
 def prompt_hash() -> str:
-    """Hash of app/graph/prompts.py (every prompt and payload format the models see)."""
-    return _digest([BACKEND_DIR / "app" / "graph" / "prompts.py"], BACKEND_DIR)
+    """Hash of everything the planner model is shown: the MODEL_VISIBLE_FILES plus model_visible_text().
+
+    Dynamic tool results built by domain code (validator violation messages, candidate fields) are covered by the
+    git SHA only."""
+    h = hashlib.sha256()
+    h.update(_digest([BACKEND_DIR / f for f in MODEL_VISIBLE_FILES], BACKEND_DIR).encode("utf-8"))
+    h.update(b"\0")
+    h.update(model_visible_text().encode("utf-8"))
+    return h.hexdigest()[:12]
 
 
 def registry_hash() -> str:

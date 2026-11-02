@@ -4,7 +4,7 @@ Every rate carries its numerator and denominator (``n``); a rate with a zero den
 Definitions and the choices this module makes where the spec leaves room:
 
 * hard_pass_rate (headline): runs whose every applicable code assertion passed / runs. Harness errors count as
-  failed runs (never rerun or dropped).
+  failed runs (never rerun or dropped), including harness-exception records (status "error", no assertions).
 * status_accuracy: runs whose final status is in expected_statuses / runs.
 * agent_success: runs ending complete in agent mode / runs of feasible cases (complete expected and no_feasible_plan
   not acceptable). Fallbacks do not count. None for the baseline row (no agent).
@@ -19,8 +19,15 @@ Definitions and the choices this module makes where the spec leaves room:
 * judge_quality: mean over judged runs of the mean of the four rubric axes (hard failures score 1); None when no
   judge ran. security_pass_rate: hard pass rate on security-category cases.
 * latency: p50/p95 (linear interpolation) of end-to-end wall-clock per run, plus p50 per graph node.
-* cost_per_plan_usd: mean registry-priced cost per run (local, fake and baseline rows are 0).
+* cost_per_plan_usd: registry-priced planner cost of every run / runs that produced a plan (status complete or
+  fallback), so the cost of clarifications, rejections and failed runs is charged to the plans delivered; None when
+  no run produced a plan. cost_per_run_usd: the same total / all runs. Judge calls are not included (their usage
+  is in each record's judge.usage). Local, fake and baseline rows cost 0.
 * pass_hat_k: when a case ran k > 1 times, cases whose k runs all passed / cases.
+
+Older records: ``upgrade_record`` reads every record schema up to evals.RECORD_SCHEMA (see the history there) by
+filling the fields a schema did not have with "not recorded" defaults; records from a newer schema are rejected so a
+newer harness's meaning is never guessed. The report applies it to every record it loads.
 """
 
 from __future__ import annotations
@@ -29,12 +36,45 @@ import math
 from collections import Counter, defaultdict
 from typing import Any
 
+from evals import RECORD_SCHEMA
 from evals.assertions import hard_pass
 
 FRONTEND_FIELDS = ("model", "kind", "runs", "hard_pass_rate", "status_accuracy", "agent_success",
                    "first_submission_validity", "tool_protocol_errors", "clarification_precision",
                    "clarification_recall", "judge_quality", "latency_p50_ms", "latency_p95_ms", "cost_per_plan_usd")
 NO_AGENT_KINDS = ("baseline",)
+PLAN_STATUSES = ("complete", "fallback")  # statuses that deliver a plan (the cost_per_plan_usd denominator)
+HARNESS_EXCEPTION = "harness_exception"  # error category of a run the harness could not finish (status "error")
+# Fields added after schema 1 and their "not recorded" defaults (schema-1 files have them only from some point on).
+SCHEMA_1_DEFAULTS: dict[str, Any] = {"harness_hash": None, "preferences": None, "message": None}
+
+
+def record_schema(rec: dict[str, Any]) -> int:
+    """The record's schema version (records without one predate versioning and are schema 1)."""
+    try:
+        return int(rec.get("schema") or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def upgrade_record(rec: dict[str, Any]) -> dict[str, Any] | None:
+    """A record of any schema up to RECORD_SCHEMA in the current shape (a copy), or None for a newer schema.
+
+    Schema 1 -> 2: missing harness_hash, preferences and message become None; a budget_stop without a reason was a
+    --max-minutes stop. The original version stays in ``schema`` (the report shows it in the provenance table):
+    schema-1 git_dirty also counted results being written and its prompt_hash covered prompts.py only, so those
+    values are not comparable with schema 2."""
+    version = record_schema(rec)
+    if version > RECORD_SCHEMA:
+        return None
+    out = dict(rec)
+    out["schema"] = version
+    if version < 2:
+        for key, default in SCHEMA_1_DEFAULTS.items():
+            out.setdefault(key, default)
+        if out.get("record_type") == "budget_stop":
+            out.setdefault("reason", "max_minutes")
+    return out
 
 
 def ratio(num: int, den: int) -> float | None:
@@ -62,7 +102,7 @@ def run_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def record_hard_pass(rec: dict[str, Any]) -> bool:
-    if rec.get("error"):
+    if rec.get("error") or rec.get("status") == "error":
         return False
     return hard_pass(rec.get("assertions") or [])
 
@@ -129,6 +169,8 @@ def model_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     latencies = [float(r["latency_ms"]) for r in recs if isinstance(r.get("latency_ms"), int | float)]
     n["latency_runs"] = len(latencies)
     costs = [float(((r.get("usage") or {}).get("cost_usd")) or 0.0) for r in recs]
+    plans = sum(1 for r in recs if r.get("status") in PLAN_STATUSES)
+    n["plans"] = plans
     tokens_in = sum(_int((r.get("usage") or {}).get("input_tokens")) for r in recs)
     tokens_out = sum(_int((r.get("usage") or {}).get("output_tokens")) for r in recs)
 
@@ -164,7 +206,7 @@ def model_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "judge_quality": mean([float(j["mean"]) for j in judged if j.get("mean") is not None]),
         "latency_p50_ms": _round(percentile(latencies, 50)),
         "latency_p95_ms": _round(percentile(latencies, 95)),
-        "cost_per_plan_usd": round(sum(costs) / runs, 6) if runs else None,
+        "cost_per_plan_usd": round(sum(costs) / plans, 6) if plans else None,
         # additive fields (not rendered by the current /evals table)
         "hard_passes": sum(hard),
         "status_ok_runs": sum(status_ok),
@@ -187,6 +229,8 @@ def model_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "latency_mean_ms": _round(mean(latencies)),
         "node_latency_p50_ms": {node: _round(percentile(v, 50)) for node, v in sorted(nodes.items())},
         "total_cost_usd": round(sum(costs), 6),
+        "cost_per_run_usd": round(sum(costs) / runs, 6) if runs else None,
+        "harness_exceptions": errors.get(HARNESS_EXCEPTION, 0),
         "input_tokens": tokens_in,
         "output_tokens": tokens_out,
         "error_categories": dict(sorted(errors.items())),

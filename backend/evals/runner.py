@@ -8,17 +8,29 @@ drives the HTTP layer through ``create_app`` with an httpx ASGI client for the H
 ``evals/results/<UTC date>/<model>.jsonl``. Unavailable models (pending registry IDs, missing API keys, Ollama down or
 model not pulled) are skipped with a recorded reason. Failed or throttled runs are recorded, never rerun.
 
+A harness exception (a bug in the harness rather than in the planner) still writes a record: status ``error``, error
+category ``harness_exception``, no assertions, counted as a hard failure, so the run never vanishes from the metrics.
+
+Environment: at start the CLI loads backend/.env through app.config.Settings and exports the model-provider keys it
+finds into the process environment (``Settings.export_provider_env``; values already set win), so running without
+make's ``--env-file`` sees the same keys. ``JUDGE_MODEL`` is the default judge for the models and live suites;
+``--judge-model`` wins and ``--judge-model none`` disables it (the offline suite is judged only on request).
+
 Long local runs: every record is appended (and the file closed) as soon as its run finishes, so an interrupted run
 loses at most the run in progress. ``--resume`` continues the latest session of each model in ``--out`` when it was
-recorded with the same git SHA, prompt, registry, fixture, eval_cases and harness hashes: (case, repeat) pairs already
-recorded there are skipped, whether they passed or failed (failed runs are never rerun), and new records join the
-same session so the report sees one complete session. ``--max-minutes`` caps the wall time spent on each model in this
-invocation; when it runs out, the remaining runs are recorded as a ``budget_stop`` and can be finished with
+recorded with the same record schema, git SHA, dirty-tree flag, prompt, registry, fixture, eval_cases and harness
+hashes: (case, repeat) pairs already recorded there are skipped, whether they passed or failed (failed runs are never
+rerun), and new records join the same session so the report sees one complete session. The dirty-tree flag ignores
+generated eval output (results, the report, the --out directory) and agent tooling state under .claude/.
+``--max-minutes`` caps the wall time spent on each model in this invocation and ``--max-cost-usd`` the estimated
+cost (planner plus judge, registry pricing) summed over every model in this invocation; both are checked between
+runs, and when one runs out the remaining runs are recorded as a ``budget_stop`` and can be finished with
 ``--resume``. Progress lines show an ETA from the mean time per run so far.
 
 Exit status: 2 if the harness itself failed; 1 if the gate is on and a run failed a hard check (the offline suite is
 deterministic, so it gates by default; disable with ``--no-gate``; models and live gate only with ``--gate``); 3 if a
-model stopped early on ``--max-minutes`` (finish with ``--resume``); 130 on Ctrl-C (finish with ``--resume``); else 0.
+model stopped early on ``--max-minutes`` or ``--max-cost-usd`` (finish with ``--resume``); 130 on Ctrl-C (finish with
+``--resume``); else 0.
 """
 
 from __future__ import annotations
@@ -39,9 +51,9 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from evals import BACKEND_DIR, DATE_DIR, RECORD_SCHEMA, REPO_ROOT, RESULTS_DIR
+from evals import BACKEND_DIR, DATE_DIR, RECORD_SCHEMA, REPO_ROOT, REPORT_PATH, RESULTS_DIR
 from evals.assertions import (
     SENTINEL_SETTINGS,
     Check,
@@ -76,9 +88,14 @@ from evals.cases import (
     spec_hash,
     target_date,
 )
+from evals.metrics import HARNESS_EXCEPTION, record_schema
+
+if TYPE_CHECKING:
+    from app.config import Settings
 
 log = logging.getLogger("evals")
 
+ENV_FILE = BACKEND_DIR / ".env"
 HARNESS_GRACE_S = 30  # on top of the run deadline (the graph runner hard-stops 5 s after it)
 CLIENT_IP = "203.0.113.77"
 NO_FRONTEND = str(BACKEND_DIR / "evals" / "_no_frontend")
@@ -87,6 +104,7 @@ KEY_FIELDS = {"anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"),
               "xai": ("xai_api_key", "XAI_API_KEY")}
 SECRET_FIELDS = ("anthropic_api_key", "google_api_key", "xai_api_key", "langsmith_api_key", "google_maps_api_key",
                  "tavily_api_key")
+NO_JUDGE = frozenset({"", "none", "off"})  # --judge-model / JUDGE_MODEL values that mean "no judge"
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -130,7 +148,8 @@ def sanitize(model_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", model_id).strip("_") or "model"
 
 
-RESUME_KEYS = ("git_sha", "prompt_hash", "registry_hash", "fixture_hash", "eval_cases_hash", "harness_hash")
+RESUME_KEYS = ("git_sha", "git_dirty", "prompt_hash", "registry_hash", "fixture_hash", "eval_cases_hash",
+               "harness_hash")
 
 
 @dataclass
@@ -159,7 +178,8 @@ def resume_point(out_dir: Path, suite: str, model_id: str, provenance: dict[str,
         return ResumePoint(None, set(), "no earlier runs to resume")
     latest = max(str(r.get("session")) for r in recs)
     mine = [r for r in recs if str(r.get("session")) == latest]
-    differs = [k for k in RESUME_KEYS if mine[0].get(k) != provenance.get(k)]
+    differs = ["record schema"] if record_schema(mine[0]) != RECORD_SCHEMA else []
+    differs += [k for k in RESUME_KEYS if mine[0].get(k) != provenance.get(k)]
     if differs:
         return ResumePoint(None, set(), f"latest session {latest} was recorded with a different {', '.join(differs)}; "
                                         "starting a new session")
@@ -176,25 +196,100 @@ def fmt_duration(seconds: float) -> str:
     return f"{s}s"
 
 
-def git_info() -> tuple[str, bool | None]:
+def generated_paths(out_dir: Path | None = None) -> list[Path]:
+    """Paths whose changes never make the tree dirty: eval output written while runs are in progress (results, the
+    generated report, the --out directory) and agent tooling state (.claude/, which holds agent worktrees)."""
+    paths = [RESULTS_DIR, REPORT_PATH, REPO_ROOT / ".claude"]
+    if out_dir is not None:
+        paths.append(out_dir)
+    return paths
+
+
+def porcelain_paths(status: str) -> list[str]:
+    """Every path in ``git status --porcelain -z`` output (both sides of a rename or copy)."""
+    items = status.split("\0")
+    paths: list[str] = []
+    i = 0
+    while i < len(items):
+        entry = items[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if "R" in entry[:2] or "C" in entry[:2]:  # -z puts the source path in the next field
+            if i < len(items) and items[i]:
+                paths.append(items[i])
+            i += 1
+    return paths
+
+
+def tree_dirty(status: str, ignored: list[str]) -> bool:
+    """True when ``git status --porcelain -z`` shows a change outside the ``ignored`` repo-relative paths."""
+    def is_ignored(path: str) -> bool:
+        p = path.rstrip("/")
+        return any(p == ig or p.startswith(ig + "/") for ig in ignored)
+
+    return any(not is_ignored(p) for p in porcelain_paths(status))
+
+
+def git_info(root: Path = REPO_ROOT, ignore: list[Path] | None = None) -> tuple[str, bool | None]:
+    """(short SHA, dirty) where dirty ignores changes confined to ``ignore`` (default: generated_paths())."""
+
+    def git(*cmd: str) -> str:
+        return subprocess.run(["git", *cmd], cwd=root, capture_output=True, text=True, timeout=10,
+                              check=True).stdout
+
     try:
-        sha = subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], cwd=REPO_ROOT, capture_output=True,
-                             text=True, timeout=5, check=True).stdout.strip()
-        dirty = bool(subprocess.run(["git", "status", "--porcelain"], cwd=REPO_ROOT, capture_output=True, text=True,
-                                    timeout=10, check=True).stdout.strip())
-        return sha or "unknown", dirty
+        sha = git("rev-parse", "--short=12", "HEAD").strip()
+        top = Path(git("rev-parse", "--show-toplevel").strip()).resolve()
+        ignored = []
+        for path in generated_paths() if ignore is None else ignore:
+            with contextlib.suppress(ValueError):  # outside this repository: nothing to ignore
+                ignored.append(path.resolve().relative_to(top).as_posix())
+        # -uall lists untracked files one by one, so an untracked parent directory is never collapsed into one
+        # entry that would hide whether everything under it is ignored output
+        return sha or "unknown", tree_dirty(git("status", "--porcelain", "-z", "--untracked-files=all"), ignored)
     except (OSError, subprocess.SubprocessError):
         return os.environ.get("GIT_SHA", "unknown"), None
+
+
+def env_settings(env_file: Path | None = None) -> Settings | None:
+    """app.config.Settings from the process environment plus backend/.env (when present); None when invalid."""
+    path = env_file or ENV_FILE
+    try:
+        from app.config import Settings
+
+        return Settings(_env_file=str(path) if path.is_file() else None)
+    except Exception:
+        return None
+
+
+def load_env(env_file: Path | None = None) -> Settings | None:
+    """Runner start: read backend/.env and export the model-provider keys it holds into os.environ
+    (Settings.export_provider_env, which never overwrites), so availability checks, LangChain clients and the live
+    suite see keys that are only in .env when the runner is started without make's --env-file."""
+    settings = env_settings(env_file)
+    if settings is not None:
+        settings.export_provider_env()
+    return settings
+
+
+def resolve_judge_model(flag: str | None, suite: str, configured: str | None) -> str:
+    """The judge model for this invocation ("" for none). An explicit --judge-model wins ("none" disables the judge);
+    otherwise JUDGE_MODEL (Settings.judge_model) for the models and live suites. The offline suite (scripted fake
+    plans, no network) is judged only when --judge-model is given."""
+    if flag is not None:
+        return "" if flag.strip().lower() in NO_JUDGE else flag.strip()
+    if suite == "offline" or configured is None or configured.strip().lower() in NO_JUDGE:
+        return ""
+    return configured.strip()
 
 
 def env_settings_values() -> dict[str, Any]:
     """Model-provider keys and the Ollama URL from the environment or backend/.env (via app.config.Settings)."""
     out: dict[str, Any] = {}
-    try:
-        from app.config import Settings
-
-        env = Settings(_env_file=str(BACKEND_DIR / ".env")) if (BACKEND_DIR / ".env").is_file() else Settings()
-    except Exception:
+    env = env_settings()
+    if env is None:
         return out
     for name in ("anthropic_api_key", "google_api_key", "xai_api_key", "langsmith_api_key"):
         value = getattr(env, name, None)
@@ -275,7 +370,7 @@ def live_deps(model_id: str, kind: str, sess: Session) -> tuple[Any, CallLog]:
     from app.config import Settings
     from app.deps import build_deps
 
-    env_file = BACKEND_DIR / ".env"
+    env_file = ENV_FILE
     settings = Settings(_env_file=str(env_file) if env_file.is_file() else None, primary_model=model_id,
                         run_deadline_s=deadline_s(kind, sess.spec), fault=None)
     deps = build_deps(settings)
@@ -602,19 +697,76 @@ def build_record(sess: Session, obs: Observation, checks: list[Check], repeat: i
     }
 
 
+def _redact(text: str, secrets_: list[str]) -> str:
+    """Secrets masked and local paths shortened (records are committed: no keys, no home directories)."""
+    for secret in secrets_:
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    return text.replace(f"{REPO_ROOT}{os.sep}", "").replace(str(Path.home()), "~")
+
+
+def error_record(sess: Session, case: EvalCase, model_id: str, kind: str, repeat: int, exc: BaseException,
+                 latency_ms: int, obs: Observation | None = None) -> dict[str, Any]:
+    """The record of a run the harness could not finish: status "error", error category "harness_exception", no
+    assertions, never a hard pass. Usage already spent by the planner is kept (it counts toward --max-cost-usd)."""
+    from app.llm.usage import empty_usage
+
+    usage = empty_usage()
+    if obs is not None:
+        with contextlib.suppress(Exception):
+            usage = summed_usage(obs.phases)
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return {
+        "record_type": "run", "schema": RECORD_SCHEMA, "session": sess.session_for(model_id), "suite": sess.suite,
+        "case": case.id, "split": case.split, "category": case.category, "priority": case.priority,
+        "repeat": repeat, "model": model_id, "kind": kind,
+        "status": "error", "mode": None, "result_model": None,
+        "expected_statuses": list(case.expected_statuses), "status_ok": False,
+        "feasible": case.feasible, "blocking": case.blocking, "hard_pass": False,
+        "assertions": [], "finalize": {}, "usage": usage,
+        "latency_ms": latency_ms, "result_latency_ms": None, "deadline_s": obs.deadline_s if obs else None,
+        "phases": [], "clarification": [], "parse": None, "node_ms": {}, "degradations": [],
+        "error": _redact(f"{HARNESS_EXCEPTION}: {type(exc).__name__}: {exc}", sess.secrets)[:500],
+        "error_categories": [HARNESS_EXCEPTION],
+        "traceback": _redact(tb, sess.secrets)[-2000:],
+        "judge": None, "http": None, "plan": None, "preferences": None, "message": None,
+        "provider_calls": dict(obs.call_log.calls) if obs and obs.call_log else {},
+        "run_id": None,
+        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+        **sess.provenance,
+    }
+
+
 async def run_one(sess: Session, case: EvalCase, model_id: str, kind: str, repeat: int) -> dict[str, Any]:
-    data = request_data(case, sess.spec)
-    if case.is_http and not sess.live:
-        obs = await run_http_case(case, model_id, kind, data, sess)
-    else:
-        obs = await run_graph_case(case, model_id, kind, data, sess)
-    checks = evaluate(obs)
-    judge: dict[str, Any] | None = None
-    if sess.judge is not None:
-        judge, checks = await sess.judge.score(obs, checks)
-    elif sess.judge_unavailable is not None:
-        judge = dict(sess.judge_unavailable)
-    return build_record(sess, obs, checks, repeat, judge)
+    """One run's record; a harness exception anywhere (setup, checks, judge, record) becomes an error_record."""
+    t0 = time.perf_counter()
+    obs: Observation | None = None
+    try:
+        data = request_data(case, sess.spec)
+        if case.is_http and not sess.live:
+            obs = await run_http_case(case, model_id, kind, data, sess)
+        else:
+            obs = await run_graph_case(case, model_id, kind, data, sess)
+        checks = evaluate(obs)
+        judge: dict[str, Any] | None = None
+        if sess.judge is not None:
+            judge, checks = await sess.judge.score(obs, checks)
+        elif sess.judge_unavailable is not None:
+            judge = dict(sess.judge_unavailable)
+        return build_record(sess, obs, checks, repeat, judge)
+    except Exception as exc:
+        if sess.verbose:
+            traceback.print_exc()
+        return error_record(sess, case, model_id, kind, repeat, exc, _ms(t0), obs)
+
+
+def record_cost_usd(rec: dict[str, Any]) -> float:
+    """Estimated spend of one record (planner plus judge, registry pricing), for --max-cost-usd."""
+    total = 0.0
+    for usage in ((rec.get("usage") or {}), ((rec.get("judge") or {}).get("usage") or {})):
+        with contextlib.suppress(TypeError, ValueError):
+            total += float(usage.get("cost_usd") or 0.0)
+    return total
 
 
 def progress_line(i: int, total: int, rec: dict[str, Any], eta: str | None = None) -> str:
@@ -651,7 +803,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--repeats", type=int, default=1)
     p.add_argument("--cases", default="", help="comma-separated case IDs (default: every case in the suite)")
     p.add_argument("--split", choices=SPLITS, default="all")
-    p.add_argument("--judge-model", default="", help="registry ID of the judge model (optional)")
+    p.add_argument("--judge-model", default=None,
+                   help="registry ID of the judge model; default JUDGE_MODEL for the models and live suites; "
+                        "'none' disables the judge")
     p.add_argument("--out", default=str(RESULTS_DIR), help="results directory (default: evals/results)")
     p.add_argument("--spec", default="", help="path to eval_cases.json (default: repo root)")
     gate = p.add_mutually_exclusive_group()
@@ -660,15 +814,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     gate.add_argument("--no-gate", dest="gate", action="store_false")
     p.add_argument("--resume", action="store_true",
                    help="skip (case, repeat) runs already recorded in the latest session of each model in --out "
-                        "(same git SHA and hashes) and add new runs to that session")
+                        "(same record schema, git SHA, dirty-tree flag and hashes) and add new runs to that session")
     p.add_argument("--max-minutes", type=float, default=None,
                    help="wall-time budget per model for this invocation; remaining runs are left for --resume")
+    p.add_argument("--max-cost-usd", type=float, default=None,
+                   help="estimated-cost budget (planner + judge, registry pricing) for this whole invocation, checked "
+                        "between runs; once exceeded the remaining runs are left for --resume")
     p.add_argument("--verbose", action="store_true", help="show warnings from the app and harness tracebacks")
     args = p.parse_args(argv)
     if args.repeats < 1:
         p.error("--repeats must be at least 1")
     if args.max_minutes is not None and args.max_minutes < 0:
         p.error("--max-minutes must not be negative")
+    if args.max_cost_usd is not None and not args.max_cost_usd >= 0:
+        p.error("--max-cost-usd must not be negative")
     return args
 
 
@@ -686,7 +845,7 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def make_session(args: argparse.Namespace, spec: dict[str, Any]) -> Session:
-    sha, dirty = git_info()
+    sha, dirty = git_info(ignore=generated_paths(Path(args.out)))
     now = datetime.now(UTC)
     sess = Session(
         id=f"{now:%Y%m%dT%H%M%SZ}-{secrets.token_hex(3)}", suite=args.suite, spec=spec, out_dir=Path(args.out),
@@ -709,8 +868,8 @@ def make_session(args: argparse.Namespace, spec: dict[str, Any]) -> Session:
     return sess
 
 
-def setup_judge(sess: Session, judge_model: str) -> None:
-    if not judge_model:
+def setup_judge(sess: Session, judge_model: str | None) -> None:
+    if not judge_model or judge_model.strip().lower() in NO_JUDGE:
         return
     from app.deps import fixture_settings
     from evals.judge import RUBRIC_VERSION, Judge
@@ -726,6 +885,16 @@ def setup_judge(sess: Session, judge_model: str) -> None:
     sess.judge = Judge(judge_model, settings)
 
 
+def budget_exceeded(args: argparse.Namespace, elapsed_s: float, spent_usd: float) -> str | None:
+    """Which budget stops the next run: "max_minutes" (this model's wall time is used up) or "max_cost_usd" (the
+    estimated cost of this invocation exceeds the budget); None to continue. Checked between runs."""
+    if args.max_minutes is not None and elapsed_s >= args.max_minutes * 60:
+        return "max_minutes"
+    if args.max_cost_usd is not None and spent_usd > args.max_cost_usd:
+        return "max_cost_usd"
+    return None
+
+
 async def run(args: argparse.Namespace) -> int:
     spec = load_spec(args.spec or None)
     cases = select_cases(load_cases(spec), args.suite, args.split,
@@ -733,11 +902,13 @@ async def run(args: argparse.Namespace) -> int:
     models = [m.strip() for m in args.models.split(",") if m.strip()] or default_models(args.suite, spec)
     sess = make_session(args, spec)
     setup_judge(sess, args.judge_model)
+    judge = args.judge_model if args.judge_model and args.judge_model.strip().lower() not in NO_JUDGE else "none"
     print(f"session {sess.id}: suite={args.suite} split={args.split} cases={len(cases)} models={models} "
-          f"repeats={args.repeats} -> {Path(args.out) / sess.date}", flush=True)
+          f"repeats={args.repeats} judge={judge} -> {Path(args.out) / sess.date}", flush=True)
     any_fail = False
     harness_failed = False
     stopped = False
+    spent = 0.0  # estimated USD over every model in this invocation (--max-cost-usd)
     for model_id in models:
         kind = model_kind(model_id)
         reason = unavailable_reason(model_id, sess.extra)
@@ -759,28 +930,33 @@ async def run(args: argparse.Namespace) -> int:
         done = passes = 0
         for case, repeat in planned:
             elapsed = time.perf_counter() - started
-            if args.max_minutes is not None and elapsed >= args.max_minutes * 60:
+            stop = budget_exceeded(args, elapsed, spent)
+            if stop:
                 remaining = total - done
                 stopped = True
                 sess.write(model_id, {"record_type": "budget_stop", "schema": RECORD_SCHEMA,
                                       "session": sess.session_for(model_id), "suite": sess.suite, "model": model_id,
-                                      "kind": kind, "max_minutes": args.max_minutes, "remaining": remaining,
+                                      "kind": kind, "reason": stop, "max_minutes": args.max_minutes,
+                                      "max_cost_usd": args.max_cost_usd, "spent_usd": round(spent, 6),
+                                      "remaining": remaining,
                                       "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
                                       **sess.provenance})
-                print(f"STOP {model_id}: --max-minutes {args.max_minutes:g} used after {fmt_duration(elapsed)}; "
-                      f"{remaining} run(s) left (finish with --resume)", flush=True)
+                used = (f"--max-minutes {args.max_minutes:g} used after {fmt_duration(elapsed)}"
+                        if stop == "max_minutes" else
+                        f"--max-cost-usd {args.max_cost_usd:g} exceeded (${spent:.4f} spent this invocation)")
+                print(f"STOP {model_id}: {used}; {remaining} run(s) left (finish with --resume)", flush=True)
                 break
             done += 1
+            t0 = time.perf_counter()
             try:
                 rec = await run_one(sess, case, model_id, kind, repeat)
-            except Exception as exc:  # a harness bug in record building: report it, keep going
-                harness_failed = True
-                print(f"[{done:>3}/{total}] {model_id} {case.id}#{repeat} HARNESS ERROR {type(exc).__name__}: {exc}",
-                      flush=True)
+            except Exception as exc:  # run_one records harness exceptions itself; this is the last resort
                 if args.verbose:
                     traceback.print_exc()
-                continue
+                rec = error_record(sess, case, model_id, kind, repeat, exc, _ms(t0))
             sess.write(model_id, rec)
+            harness_failed |= rec.get("status") == "error"
+            spent += record_cost_usd(rec)
             passes += rec["hard_pass"]
             any_fail |= not rec["hard_pass"]
             per_run = (time.perf_counter() - started) / done
@@ -788,6 +964,9 @@ async def run(args: argparse.Namespace) -> int:
             print(progress_line(done, total, rec, eta), flush=True)
         print(f"== {model_id}: hard pass {passes}/{done} this invocation in "
               f"{fmt_duration(time.perf_counter() - started)} -> {sess.path_for(model_id)}", flush=True)
+    if spent or args.max_cost_usd is not None:
+        budget = f" of a ${args.max_cost_usd:g} budget" if args.max_cost_usd is not None else ""
+        print(f"estimated cost this invocation: ${spent:.4f}{budget}", flush=True)
     gate = args.gate if args.gate is not None else args.suite == "offline"
     if harness_failed:
         return 2
@@ -799,6 +978,8 @@ async def run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     _configure_logging(args.verbose)
+    env = load_env()  # backend/.env keys into os.environ, as make's `uv run --env-file` would
+    args.judge_model = resolve_judge_model(args.judge_model, args.suite, env.judge_model if env else None)
     try:
         return asyncio.run(run(args))
     except ValueError as exc:
