@@ -1,0 +1,15 @@
+# ISO 3166-1 alpha-2 -> currency and display symbol. Countries not listed have no default currency,
+# so a bare budget number triggers a clarification.
+IN: {currency: INR, symbol: "₹"}
+GB: {currency: GBP, symbol: "£"}
+US: {currency: USD, symbol: "$"}
+AE: {currency: AED, symbol: "AED "}
+SG: {currency: SGD, symbol: "S$"}
+DE: {currency: EUR, symbol: "€"}
+FR: {currency: EUR, symbol: "€"}
+NL: {currency: EUR, symbol: "€"}
+ES: {currency: EUR, symbol: "€"}
+IT: {currency: EUR, symbol: "€"}
+JP: {currency: JPY, symbol: "¥"}
+AU: {currency: AUD, symbol: "A$"}
+CA: {currency: CAD, symbol: "C$"}

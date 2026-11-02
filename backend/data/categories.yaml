@@ -1,0 +1,290 @@
+# Canonical place categories. Every provider maps its own types onto these keys.
+#
+# group:     food | drinks | outdoors | culture | shopping | entertainment | wellness | event
+# meal:      true if a visit counts as a sit-down meal (must_include:sit_down_meal)
+# indoor:    true/false; used for weather, setting constraints and Plan B
+# seated:    the visitor mostly sits (counts toward the low-energy "seated stop" rule)
+# effort:    low | medium | high physical effort
+# walking:   true if the visit itself is mostly walking (counts toward the pacing walking budget)
+# duration:  [min, default, max] minutes for a visit
+# alcohol:   true if the venue's main purpose is alcohol (excluded by alcohol:avoid)
+# cost_inr:  [min, max] per-person category default in INR when a provider gives no price
+# tags:      interest tags this category satisfies
+# busy:      typical Saturday busy windows in local minutes (heuristic, used with popularity)
+
+cafe:
+  group: food
+  meal: false
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [30, 50, 90]
+  alcohol: false
+  cost_inr: [150, 450]
+  tags: [food, coffee, relax]
+  busy: [[660, 780], [1020, 1200]]
+restaurant:
+  group: food
+  meal: true
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [45, 70, 110]
+  alcohol: false
+  cost_inr: [300, 900]
+  tags: [food]
+  busy: [[750, 870], [1170, 1320]]
+street_food:
+  group: food
+  meal: true
+  indoor: false
+  seated: false
+  effort: medium
+  walking: false
+  duration: [20, 35, 60]
+  alcohol: false
+  cost_inr: [80, 250]
+  tags: [food, street food]
+  busy: [[1050, 1260]]
+dessert:
+  group: food
+  meal: false
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [20, 30, 45]
+  alcohol: false
+  cost_inr: [100, 300]
+  tags: [food, dessert]
+  busy: [[1140, 1320]]
+bar:
+  group: drinks
+  meal: false
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [45, 75, 120]
+  alcohol: true
+  cost_inr: [600, 1500]
+  tags: [drinks, nightlife]
+  busy: [[1200, 1440]]
+brewery:
+  group: drinks
+  meal: true
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [60, 90, 150]
+  alcohol: true
+  cost_inr: [800, 1800]
+  tags: [drinks, food, nightlife]
+  busy: [[780, 900], [1140, 1440]]
+live_music_venue:
+  group: entertainment
+  meal: false
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [60, 90, 150]
+  alcohol: false
+  cost_inr: [300, 1200]
+  tags: [music, live music, nightlife]
+  busy: [[1200, 1380]]
+theatre:
+  group: entertainment
+  meal: false
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [90, 120, 180]
+  alcohol: false
+  cost_inr: [200, 1000]
+  tags: [theatre, art, culture]
+  busy: []
+cinema:
+  group: entertainment
+  meal: false
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [100, 150, 180]
+  alcohol: false
+  cost_inr: [200, 600]
+  tags: [movies]
+  busy: [[1080, 1320]]
+game_arcade:
+  group: entertainment
+  meal: false
+  indoor: true
+  seated: false
+  effort: medium
+  walking: false
+  duration: [45, 60, 120]
+  alcohol: false
+  cost_inr: [300, 1000]
+  tags: [games]
+  busy: [[900, 1260]]
+museum:
+  group: culture
+  meal: false
+  indoor: true
+  seated: false
+  effort: medium
+  walking: false
+  duration: [45, 75, 120]
+  alcohol: false
+  cost_inr: [20, 300]
+  tags: [museums, history, culture, art]
+  busy: [[720, 960]]
+art_gallery:
+  group: culture
+  meal: false
+  indoor: true
+  seated: false
+  effort: low
+  walking: false
+  duration: [30, 50, 90]
+  alcohol: false
+  cost_inr: [0, 200]
+  tags: [art, culture]
+  busy: []
+bookstore:
+  group: shopping
+  meal: false
+  indoor: true
+  seated: false
+  effort: low
+  walking: false
+  duration: [20, 40, 75]
+  alcohol: false
+  cost_inr: [0, 400]
+  tags: [books, shopping]
+  busy: [[960, 1140]]
+place_of_worship:
+  group: culture
+  meal: false
+  indoor: false
+  seated: false
+  effort: low
+  walking: false
+  duration: [20, 30, 60]
+  alcohol: false
+  cost_inr: [0, 0]
+  tags: [culture, history]
+  busy: [[1080, 1200]]
+park:
+  group: outdoors
+  meal: false
+  indoor: false
+  seated: false
+  effort: medium
+  walking: true
+  duration: [30, 45, 90]
+  alcohol: false
+  cost_inr: [0, 0]
+  tags: [walks, nature, outdoors]
+  busy: [[360, 540], [1020, 1110]]
+garden:
+  group: outdoors
+  meal: false
+  indoor: false
+  seated: false
+  effort: medium
+  walking: true
+  duration: [30, 50, 90]
+  alcohol: false
+  cost_inr: [0, 50]
+  tags: [walks, nature, outdoors, flowers]
+  busy: [[360, 540], [1020, 1110]]
+lake:
+  group: outdoors
+  meal: false
+  indoor: false
+  seated: false
+  effort: low
+  walking: true
+  duration: [30, 40, 75]
+  alcohol: false
+  cost_inr: [0, 0]
+  tags: [walks, nature, outdoors]
+  busy: [[360, 540], [1020, 1110]]
+heritage_walk:
+  group: outdoors
+  meal: false
+  indoor: false
+  seated: false
+  effort: medium
+  walking: true
+  duration: [30, 60, 120]
+  alcohol: false
+  cost_inr: [0, 0]
+  tags: [walks, history, culture]
+  busy: []
+viewpoint:
+  group: outdoors
+  meal: false
+  indoor: false
+  seated: false
+  effort: medium
+  walking: true
+  duration: [20, 30, 60]
+  alcohol: false
+  cost_inr: [0, 100]
+  tags: [walks, views, outdoors]
+  busy: [[1020, 1110]]
+market:
+  group: shopping
+  meal: false
+  indoor: false
+  seated: false
+  effort: medium
+  walking: true
+  duration: [30, 45, 90]
+  alcohol: false
+  cost_inr: [0, 500]
+  tags: [shopping, culture, food]
+  busy: [[600, 1260]]
+mall:
+  group: shopping
+  meal: false
+  indoor: true
+  seated: false
+  effort: medium
+  walking: true
+  duration: [45, 90, 150]
+  alcohol: false
+  cost_inr: [0, 1000]
+  tags: [shopping]
+  busy: [[780, 1290]]
+spa:
+  group: wellness
+  meal: false
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [45, 60, 120]
+  alcohol: false
+  cost_inr: [800, 2500]
+  tags: [relax, wellness]
+  busy: []
+event:
+  group: event
+  meal: false
+  indoor: true
+  seated: true
+  effort: low
+  walking: false
+  duration: [60, 120, 240]
+  alcohol: false
+  cost_inr: [0, 1500]
+  tags: [events]
+  busy: []
