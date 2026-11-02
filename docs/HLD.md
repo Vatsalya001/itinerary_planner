@@ -1,0 +1,388 @@
+# Perfect Saturday Planner: High-Level Design
+
+This document describes the system as it is implemented at commit `053ba54` (plus this documentation). Where the
+code differs from [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md), the code is described and the difference is
+listed in [Plan vs implementation](#16-plan-vs-implementation). Module-level detail is in [LLD.md](LLD.md).
+
+## 1. Purpose and scope
+
+The planner turns a free-text or form request ("Bangalore, ₹2000, 4 hours, tired but wants something fun, food,
+music, walks, vegetarian, avoid crowds") into a timed Saturday itinerary: real places and events, clock times on the
+coming Saturday, travel legs, a per-person cost range with a worst case, weather-aware choices with an indoor Plan B,
+a reason for every stop, and a checks panel that says what was verified and what was not.
+
+A LangGraph agent (LLM with read-only tools) makes the judgment calls: what to search for, which candidates to
+combine, the order and length of stops, and the explanation. Deterministic code owns everything that must always be
+true: input bounds, location and date, schedule and cost arithmetic, validation, the fallback planner and
+persistence.
+
+In scope (implemented): public API and single-page UI with no login; free text and form input (the brief's JSON is
+accepted as-is); one clarification round through a LangGraph `interrupt`; live or frozen-world data providers; SSE
+trace; share links; Google Maps route links; calendar export; rate limits and a daily plan cap; JSON logs, Sentry and
+LangSmith gating; Docker image, Render blueprint and CI; an eval harness with a generated report and an `/evals` page.
+
+Out of scope: accounts, bookings, payments, multi-day trips, and any tool with side effects. No tool can spend
+money or contact anyone.
+
+## 2. System context
+
+```mermaid
+flowchart LR
+    user([User]) --> spa["Browser SPA<br/>React 19 + Vite"]
+    spa -->|"POST /api/plan (SSE or JSON)<br/>resume, share, feedback, evals"| api["FastAPI app<br/>app.main"]
+    api --> runner["LangGraph runner<br/>app.graph.runner"]
+    runner --> llm["LLM providers<br/>Anthropic / Ollama / scripted fake<br/>(Gemini, Grok pending)"]
+    runner --> data["Data providers"]
+    data --> gp["Google Places API (New)"]
+    data --> snap["OSM snapshot (Bangalore)"]
+    data --> om["Open-Meteo<br/>geocoding + forecast"]
+    data --> tav["Tavily + event pages<br/>(schema.org JSON-LD)"]
+    data --> fx["Frozen-world fixtures"]
+    api --> store[("Store: SQLite or Postgres<br/>plans, runs, rate limits,<br/>feedback, eval summary")]
+    runner --> ckpt[("LangGraph checkpointer<br/>memory / SQLite / Postgres")]
+    api --> obs["Observability<br/>JSON logs, Sentry, LangSmith"]
+```
+
+The browser talks only to the FastAPI origin, which also serves the built SPA, so there is no CORS. Provider keys
+stay on the server (`app.config.Settings`; secrets are `SecretStr`).
+
+## 3. Component architecture
+
+| Component | Location | Responsibility |
+|---|---|---|
+| Contracts | `backend/app/domain/schemas.py`, `backend/app/providers/base.py` | Pydantic models shared by every layer; provider protocols |
+| Domain core | `backend/app/domain/*` | Time, constraints vocabulary, categories, pacing, sun, evidence, travel, costs, schedule, validator, scoring, deterministic planner, infeasibility, rules parser |
+| Providers | `backend/app/providers/*` | Google Places, OSM snapshot, Open-Meteo, Tavily + JSON-LD events, frozen-world fixtures, fault wrappers |
+| Pipeline and baseline | `backend/app/pipeline.py`, `backend/app/baseline.py` | Deterministic steps shared by the graph (geocode, context, searches); a graph-free no-LLM planner used by the CLI and tests (evals and the API run the baseline through the graph) |
+| Trace | `backend/app/trace.py` | One `Tracer` that emits `TraceEvent`s for nodes and tools |
+| LLM layer | `backend/app/llm/*` | `models.yaml` registry, provider parameters, fallback chains, refusal detection, usage and cost, scripted fake model |
+| Graph | `backend/app/graph/*` | `StateGraph` with 12 nodes, 5 agent tools, prompts, the runner (streaming, interrupt/resume, deadline) |
+| API | `backend/app/api/*`, `backend/app/main.py` | 6 endpoints, SSE framing, middleware (security headers, body limit, error shield), SPA serving |
+| Storage | `backend/app/store/*`, `backend/app/checkpoint.py` | SQLite/Postgres store, share-link redaction and rehydration, retention sweeper, checkpointer factory |
+| Observability | `backend/app/observability.py` | JSON logging, Sentry init, LangSmith env gating |
+| Frontend | `frontend/src/*` | Planner, shared plan, evals leaderboard, how-it-works pages; SSE client; trace, checks, plan views |
+| Eval harness | `backend/evals/*`, `eval_cases.json` | Case loader, independent assertions, metrics, optional judge, runner, report |
+| Ops | `Dockerfile`, `docker-compose.yml`, `render.yaml`, `.github/workflows/ci.yml`, `Makefile` | Image, local compose, Render blueprint, CI, developer commands |
+
+## 4. Build phases
+
+| Phase | Commits | What it delivered |
+|---|---|---|
+| 0. Scaffold and contracts | `5086126`, `624d9b4` | Plan v2, eval spec, engineering guide; Pydantic contracts, provider protocols, settings; timeutil, constraint vocabulary, categories, pacing; stubs |
+| 1. Deterministic core | `a461315` (pre-verification checkpoint), `00142cd` (verified) | Evidence, travel, schedule, costs, validator, scoring, fallback planner, infeasibility; rules parser and clarification policy; providers; baseline and CLI. `a461315` also contained the first API/storage and frontend. `00142cd` fixed D-01..D-27 and R-1..R-12 from [PHASE1.md](verification/PHASE1.md) (currency conversion and `CURRENCY_MISMATCH`, diet negation, dotted times, astronomical sunset, meal windows, Plan B rules) |
+| 2. Agent and product | `6b75075` | LangGraph graph with interrupt/resume, agent loop, ledger, caps, deadline, validate and repair, fallback, finalize; model registry (Claude, Ollama, fake; Gemini/Grok placeholders); API fixes from [PHASE2.md](verification/PHASE2.md) (bounded `available_time`, `relaxed_constraints`, resume-safe rate limits, retention sweeper, keep-alive comments, IPv6 /64 keys, per-DB checkpoint files, single resume per thread, checked-draft salvage) |
+| 3. Evals, hardening, docs | `fe378a3` (ops), `053ba54` (evals) | Dockerfile, compose, Render blueprint, CI, Makefile, `.env.example`; eval harness, first results and [EVAL_REPORT.md](EVAL_REPORT.md); eval-driven fixes (LLM constraints need textual support, Ollama `num_predict` cap, salvage on text-only endings, gazetteer-first live geocoding, distances in the prose check). This HLD/LLD/README complete the phase |
+
+## 5. End-to-end flows
+
+### 5.1 New plan over SSE
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant A as FastAPI routes
+    participant P as produce_events task
+    participant R as stream_plan (runner)
+    participant G as Graph nodes
+    participant S as Store
+    B->>A: POST /api/plan (Accept text/event-stream)
+    A->>S: per-IP sliding limits, daily cap
+    A->>P: create background task
+    A-->>B: 200 text/event-stream
+    P->>R: stream_plan(request)
+    R-->>P: run_started
+    R->>G: astream(stream_mode custom and updates)
+    G-->>R: node_started, tool_called, tool_completed, validation, degraded
+    R-->>P: TraceEvents in order
+    P-->>B: data frames (keep-alive comment after 10 s of silence)
+    G-->>R: node_completed finalize (run metrics), result
+    P->>S: save redacted plan (share_id), record run
+    P-->>B: result event with share_id
+```
+
+The planner task is independent of the HTTP connection: if the client disconnects, the run still reaches
+`finalize` and is persisted. JSON mode (`Accept` without `text/event-stream`) runs the same code and returns the final
+`PlanResult` (the request awaits a shielded task, so a cancelled request does not cancel the run).
+
+### 5.2 Clarification and resume
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant A as FastAPI
+    participant R as Runner
+    participant G as Graph
+    participant C as Checkpointer
+    B->>A: POST /api/plan "plan something fun"
+    A->>R: stream_plan
+    R->>G: guard_input, parse_preferences, resolve_location, check_clarity
+    G->>G: ask_clarification calls interrupt(questions)
+    G->>C: checkpoint thread (user input and geocoder matches only)
+    R-->>B: result needs_clarification with thread_id and questions
+    A->>A: record_paused_thread(thread_id)
+    B->>A: POST /api/plan/{thread_id}/resume with answers
+    A->>R: stream_plan(thread_id, resume_answers)
+    R->>R: per-thread asyncio.Lock, snapshot.next must be ask_clarification
+    R->>G: Command(resume=answers)
+    G->>G: apply_answers, parse again, asked_before=true, plan
+    R->>C: delete thread checkpoints at a terminal status
+    R-->>B: result complete, fallback or no_feasible_plan
+```
+
+Clarification happens before any place search, so a paused checkpoint holds only user input and geocoder matches.
+At most one round is asked; after it the policy applies visible defaults. Abandoned paused threads are deleted by
+the retention sweeper after 24 hours.
+
+### 5.3 Fallback paths
+
+```mermaid
+sequenceDiagram
+    participant G as plan_agent
+    participant T as tools
+    participant V as validate_plan
+    participant F as fallback_planner
+    participant X as explain_infeasible
+    participant Z as finalize
+    G->>T: tool calls (search, travel, check_plan)
+    T->>G: ToolMessages, ledger grows
+    G->>T: submit_plan
+    T->>V: pending submission
+    V-->>G: violations as submit_plan error (repair, up to 3 submissions)
+    Note over G,F: timeout, refusal, provider error, turn cap, second text-only turn,<br/>repairs exhausted, or under 12 s left
+    G->>F: agent_stop reason
+    F->>F: reuse last error-free check_plan draft if the stop allows salvage
+    F->>F: else plan_deterministic over the ledger, then default searches
+    F->>Z: fallback / deterministic plan (re-validated)
+    F->>X: nothing feasible
+    X->>Z: no_feasible_plan with binding constraints and one-tap relaxations
+```
+
+## 6. The LangGraph graph as built
+
+Generated from `build_graph()` in `backend/app/graph/build.py` (`get_graph().draw_mermaid()`); dashed edges are
+conditional (`follow_route` reads `state["route"]`).
+
+```mermaid
+graph TD
+    START([Start]) --> guard_input
+    guard_input --> parse_preferences
+    parse_preferences --> resolve_location
+    resolve_location --> check_clarity
+    check_clarity -.-> ask_clarification
+    check_clarity -.-> build_context
+    check_clarity -.-> finalize
+    ask_clarification --> parse_preferences
+    build_context -.-> plan_agent
+    build_context -.-> fallback_planner
+    plan_agent -.-> tools
+    plan_agent -.-> plan_agent
+    plan_agent -.-> fallback_planner
+    tools -.-> plan_agent
+    tools -.-> validate_plan
+    tools -.-> fallback_planner
+    validate_plan -.-> finalize
+    validate_plan -.-> plan_agent
+    validate_plan -.-> fallback_planner
+    fallback_planner -.-> finalize
+    fallback_planner -.-> explain_infeasible
+    explain_infeasible --> finalize
+    finalize --> END([End])
+```
+
+| Node | File | Responsibility |
+|---|---|---|
+| `guard_input` | `nodes/guard.py` | NFKC normalisation, control-character stripping, `available_time` clamped to 30-720 min, injection and out-of-scope flags (never rejects) |
+| `parse_preferences` | `nodes/parse.py` | Rules parse always; LLM structured parse unless baseline; `merge_parse` (request fields > LLM > rules, constraints only added) |
+| `resolve_location` | `nodes/clarify.py` | Geocode the city; `RetryPolicy` with 2 attempts on retryable provider errors |
+| `check_clarity` | `nodes/clarify.py` | Up to 2 blocking questions; routes to clarification, context, or `finalize` (city missing or not found after asking, lookup failed) |
+| `ask_clarification` | `nodes/clarify.py` | `interrupt()`; on resume folds answers into the request with `apply_answers` |
+| `build_context` | `nodes/context.py` | `apply_defaults`, coming Saturday, window, weather and sunset, pacing, enforced and original constraints; baseline or under 15 s left goes to the fallback |
+| `plan_agent` | `nodes/agent.py` | One model turn with 5 tools; one nudge after a text-only turn; failures route to the fallback |
+| `tools` | `nodes/execute.py` | Executes tool calls with caps and argument validation, grows the ledger, hands `submit_plan` to validation |
+| `validate_plan` | `nodes/validate.py` | Validates a submission from ledger records; repair, accept, or fall back |
+| `fallback_planner` | `nodes/fallback.py` | Checked-draft salvage, else beam-search planner over the ledger, then default searches |
+| `explain_infeasible` | `nodes/fallback.py` | Binding constraints, cheapest budget, minimum time, relaxations |
+| `finalize` | `nodes/finalize.py` | Re-validates any draft, builds `PlanResult`, emits run metrics and the single `result` event |
+
+## 7. Design principles
+
+| Principle | How the code enforces it |
+|---|---|
+| Deterministic guardrails around a model | The model never computes a price, time, address or verdict. `validate_plan` recomputes schedule and totals from ledger records; `finalize` re-validates every draft and replaces a failing one with `no_feasible_plan` |
+| Numbers only from data | `PROSE_NUMERIC_CLAIM` rejects currency amounts, durations, distances and clock times in `why`, `tradeoff`, `summary_note` and omission reasons (place names from the ledger are blanked first). Template prose in the fallback planner is checked with the same function |
+| Unknown is never yes | `Evidence.CONFIRMED` is required for diet, wheelchair, setting; `LIKELY`/`UNKNOWN` fail with `*_UNVERIFIED`. Unknown hours are `HOURS_UNVERIFIED` (an error for concert halls, theatres and cinemas) |
+| Grounding | The ledger holds every candidate any tool returned in this run; unknown IDs are `UNKNOWN_ID`. Plan B must also be a ledger ID |
+| Append-only messages | `messages` uses `add_messages`; AIMessages are stored unchanged (Claude thinking blocks), every tool call gets one ToolMessage, repairs arrive as the `submit_plan` error result |
+| Constraints only tighten | Original constraints are mapped from the raw request and always enforced (`CONSTRAINT_DROPPED` warns if a parser lost one). LLM-proposed constraints are kept only with textual support in the user's words |
+| Prompt boundary | Static system prompts; user text and tool data travel as JSON in Human and Tool messages; event descriptions are never stored |
+| Honest degradation | Each fallback or missing source is a visible `degradations` entry and a `degraded` trace event |
+
+## 8. Model layer and provider strategy
+
+All models are listed in `backend/app/llm/models.yaml` and built with `init_chat_model` (or the scripted fake). The
+run's model is `PRIMARY_MODEL` (default `ollama:qwen3.5:9b` in `config.py`; `render.yaml` sets
+`anthropic:claude-opus-5-5`). An optional `FALLBACK_MODEL` is chained with `with_fallbacks`; the primary then gets
+60% of each call's time budget. After the chain, the deterministic planner is the last resort.
+
+| Registry ID | Kind | Key settings | Status |
+|---|---|---|---|
+| `anthropic:claude-opus-5-5` | api | `max_tokens` 16000, `output_config.effort` parse low / agent medium / judge medium, no sampling params, no forced tool choice, `json_schema` structured output, cached system prompt, beta `server-side-fallback-2026-07-01` with `fallbacks: "default"`, `max_retries` 1; $4 / $20 / $0.20 cache read / $5 cache write per Mtok | Production candidate; no eval results committed yet |
+| `google_genai:<pending>` | api | `pending: true` | Raises `PendingModelError` until an ID is pinned |
+| `xai:<pending>` | api | `pending: true` | Same |
+| `ollama:qwen3.5:9b` | local | `num_ctx` 32768, `num_predict` 2048, temperature 0, `keep_alive` 10m, `reasoning` false, function-calling structured output | Dev/eval only; no committed results |
+| `ollama:gemma4:e4b` | local | Same as qwen | Dev/eval only; no committed results |
+| `ollama:granite4:tiny-h` | local | `reasoning` unset, schema structured output | Dev/eval only; in the committed report |
+| `fake:agent`, `fake:secondary`, `fake:primary_503` | fake | Scripted model with injectable faults | Offline tests and the `offline` suite |
+| `baseline:deterministic` | baseline | No chat model | Floor row in every report |
+
+Timeouts per call: api 45 s per agent turn and 15 s per parse; local 150 s and 25 s. Each call is also capped at
+"remaining run time minus 12 s".
+
+## 9. Data sources and their terms
+
+| Source | Use | Implementation notes and limits |
+|---|---|---|
+| Google Places API (New) | Live places (`PLACES_PROVIDER=google`, or `auto` with a key) | Text Search with a field mask; Place Details for share-link rehydration. Google display fields are never stored: share records keep place IDs, computed fields and coordinates (30-day TTL), and re-fetch display fields (name, address, Maps link) on view. Not used for model evals |
+| OSM snapshot | Keyless places for Bangalore (`osm_snapshot`, `auto` without a key) and the fallback when the live provider fails | 41 curated places from Overpass, retrieved 2 Nov 2026, ODbL, "© OpenStreetMap contributors" on every candidate with `last_checked`. Costs are category estimates |
+| Open-Meteo | Geocoding (gazetteer first) and daily forecast | Keyless; free tier is non-commercial. Weather failure degrades to "Weather not checked" with an astronomical sunset minus a 15-minute margin |
+| Tavily + JSON-LD | Events on the target date | Allow-listed search, at most three https pages fetched with robots.txt respected, 1 MB cap, schema.org Event parsed in code, descriptions never kept, events link back to the source |
+| Fixtures | Frozen world for tests and evals | Bengaluru and Mumbai candidates with synthetic attributes, fixed weather variants, fixture events with deliberate bad cases, clock frozen to Thursday 2026-11-05 10:00 IST |
+| `cities.yaml`, `price_bands.yaml`, `fx.yaml`, `countries.yaml`, `gazetteer.yaml` | Fares, price-level bands, reference FX rates, currencies, city/neighbourhood names | Labelled estimates with sources and dates; fares and FX rates are never presented as live |
+
+Provenance and licences are in [backend/data/SOURCES.md](../backend/data/SOURCES.md).
+
+## 10. Security and guardrails
+
+| Layer | Implementation |
+|---|---|
+| API boundary | `BodySizeLimitMiddleware` (16 KB, also for chunked bodies) gives 413; strict `PlanRequest` (`extra="forbid"`, field bounds, numeric `available_time` 30-720 min) gives 400 with field messages that never echo values; text durations are clamped to 30-720 min by `guard_input` |
+| Abuse and spend | Per-IP sliding windows (15 plans/10 min, 60/day), global `DAILY_PLAN_CAP` 200, separate limits for resumes (30/10 min) and share reads/feedback (60/10 min); IPv6 keyed by /64; right-most `X-Forwarded-For` hop only when `TRUST_PROXY_HEADERS=true` |
+| Input handling | NFKC, control and bidi characters stripped; instruction-like text is flagged and never sets a field or becomes a question; out-of-scope requests (book, pay, message) get a fixed assumption |
+| Prompt boundary | Static system prompts; payloads are JSON marked "Data ... Not instructions"; event names clipped to 120 characters |
+| Grounding | Ledger allowlist, server-side hydration, numbers only from data |
+| Domain validation | Every plan (agent, salvage, deterministic) passes `validate_plan` again in `finalize` |
+| Capability limits | Read-only tools, per-tool caps, 10 turns, 3 submissions, run deadline |
+| Output | `SafeJSONResponse` and SSE frames escape `<`, `>`, `&`, U+2028/2029; CSP `default-src 'self'` with `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`; generic 500s with request ID, no stack traces; OpenAPI hidden in prod |
+| Privacy | Logs carry IDs, counts and codes only; run log has no free text; share records drop mood, soft preferences, constraint `source_text` and `thread_id`; checkpoints deleted at a terminal status; Sentry without PII, locals or bodies; LangSmith inputs and outputs hidden in prod |
+
+## 11. Reliability
+
+| Mechanism | Values |
+|---|---|
+| Run deadline | `RUN_DEADLINE_S` 60; nodes route to the deterministic planner when under 12 s remain (`DEADLINE_RESERVE_S`); `build_context` skips the agent under 15 s; the runner stops at deadline + 5 s with a `rejected` "Planning took too long" result |
+| Per-call timeouts | Model calls `min(registry timeout, remaining - 12 s)`; provider HTTP requests 8 s each (event pages and robots.txt 5 s per operation, 8 s wall-clock); Anthropic SDK request timeout 60 s, 1 retry |
+| Retries | Geocoder node `RetryPolicy` (2 attempts, jittered backoff, retryable `ProviderError` only). No other HTTP retries |
+| Circuit behaviour | Per run, not per process: the first live Places failure switches the run to the snapshot (`places_mode` live -> snapshot -> unavailable); an events failure marks `events_failed` and is not retried. There is no cross-run circuit breaker |
+| Model fallback | Primary -> optional fallback model -> deterministic planner; refusals are exceptions that move down the chain |
+| Salvage | A draft that passed `check_plan` without errors is re-validated and used (`complete`, `agent`) when the loop stops for time, the turn cap or a text-only ending |
+| Degradations | Parser, agent stop reasons, model switch, snapshot use, places unavailable, events unavailable, weather unavailable; each is a visible string and a `degraded` event |
+| Shutdown | In-flight runs are drained for up to `RUN_DEADLINE_S` + 10 s; Docker `stop_grace_period` and Render `maxShutdownDelaySeconds` are 75 s |
+| Concurrency | One resume per paused thread per process (`asyncio.Lock`); later or concurrent callers get `rejected` |
+
+## 12. Observability
+
+* **Logs:** one JSON object per line with `ts`, `level`, `logger`, `msg`, `request_id`, `run_id` and caller extras
+  (counts, durations, codes). Exceptions log type and message only.
+* **Trace:** every run streams `TraceEvent`s; the `finalize` `node_completed` event carries run metrics (usage,
+  tool calls, protocol errors, submit attempts, repairs, nudges, turns).
+* **Run log:** `runs` table (status, mode, model, latency, tokens, cost, tool counts, violation codes, submit
+  attempts, degradations), kept 90 days.
+* **Sentry:** only with `SENTRY_DSN`; release = git SHA, `send_default_pii=False`, no locals, no request bodies.
+* **LangSmith:** only with `TRACING_ENABLED=true` and an API key; project `saturday-planner-<env>`; inputs and
+  outputs hidden in prod.
+* **Health:** `GET /api/health` reports DB status, version, env, primary model and resolved providers.
+
+## 13. Deployment topology and CI/CD
+
+```mermaid
+flowchart LR
+    gh["GitHub main"] --> ci["GitHub Actions CI<br/>backend, postgres, frontend, docker smoke"]
+    ci -->|checks pass| render["Render web service<br/>Docker, Singapore, starter plan"]
+    render --> neon[("Neon Postgres<br/>store + checkpoints")]
+    render --> apis["Anthropic, Google Places,<br/>Open-Meteo, Tavily"]
+    render --> sentry["Sentry / LangSmith (optional)"]
+```
+
+* **Image:** three stages (Node 22 builds the UI; uv installs locked dependencies without dev tools; Python 3.12
+  slim runtime as uid 1000 with only `/app/var` writable). One uvicorn worker, `--proxy-headers`, image
+  `HEALTHCHECK` on `/api/health`.
+* **Render:** `render.yaml` defines one Docker web service, `autoDeployTrigger: checksPass`, health check path, prod
+  limits and `sync: false` secrets (`DATABASE_URL` is the Neon connection string).
+* **Local:** `docker compose up` (SQLite volume) or `--profile postgres` (Postgres 17); Ollama stays on the host.
+* **CI:** on push and PR: ruff, mypy, pytest and the offline eval suite; Postgres store and checkpointer tests
+  against a service container; frontend typecheck, lint, Vitest and build; Docker build plus a container smoke test
+  (health, SPA, headers, plan JSON and SSE, share link, 400). A manual `workflow_dispatch` job runs model evals with
+  repository secrets and uploads results.
+
+## 14. Evaluation strategy
+
+`eval_cases.json` is the behaviour spec. The harness in `backend/evals/` runs every case through the real graph
+on the frozen world (fixture places, weather, events and clock), checks hard assertions with code that recomputes
+cost, time, hours, evidence, pacing, daylight, Plan B, prose and grounding from the raw fixture files, and writes one
+JSONL record per run under `backend/evals/results/<date>/`. `python -m evals.report` builds
+[EVAL_REPORT.md](EVAL_REPORT.md) and `backend/evals/results/summary.json`, which `GET /api/evals/summary` and the
+`/evals` page serve. Suites: `offline` (scripted fake model and injected faults, run in CI), `models` (the
+baseline and real models) and `live` (the production model on real providers, five cases, reported separately).
+Baseline, API and local rows are reported as separate populations, holdout cases separately from dev cases.
+
+Latest committed results: the report generated 2026-11-02T15:53:14Z (commit `053ba54`) covers the baseline and
+`ollama:granite4:tiny-h` on the `models` suite and `fake:agent` on the `offline` suite, one repeat per case, no judge.
+Claude, qwen3.5 and gemma4 have no committed results, and Gemini and Grok are not pinned. Read the report for the
+numbers.
+
+## 15. Known limitations and risks
+
+| Area | Limitation |
+|---|---|
+| Live data | Live Google Places, Tavily, Open-Meteo, Claude, Postgres/Neon and the Render deploy were not exercised by the verifiers (no keys or services); see PHASE1 §6 and PHASE2 §7 |
+| Coverage | The keyless snapshot covers Bangalore only; elsewhere a Places outage gives `no_feasible_plan`. Fixtures cover Bengaluru and Mumbai |
+| Local models | Small Ollama models often fall back (text-only endings, timeouts); see the report's error categories |
+| Single instance | Resume locks, compiled-graph cache and the in-memory default checkpointer are per process; multi-instance deployments need a shared claim |
+| Estimates | Fares, price bands and FX rates are dated estimates; fare tariffs were checked against news reports only |
+| Crowds | "Likely busy" is a heuristic from popularity and busy windows, not live data |
+| Rate limits | Fail open when the store errors (logged) |
+| Terms | Passing Google Places results to a third-party LLM at inference time is a grey area (plan §6); mitigations: no storage of display fields, hidden LangSmith IO in prod, evals only on the frozen world |
+| Judge | No judge model has run, so plan quality beyond hard checks is unmeasured |
+| Shared Google plans | The Place Details field mask used for rehydration has no hours or rating, so re-opened Google stops show hours as unknown and no rating |
+| Events | A failed robots.txt fetch is cached as "disallow" for the life of the process, which turns event fetching off for that site until a restart |
+| Health check | `/api/health` answers 200 with `status: "degraded"` when the DB ping fails, so HTTP-status health checks do not detect a DB outage |
+
+## 16. Plan vs implementation
+
+| Plan (IMPLEMENTATION_PLAN.md) | Code |
+|---|---|
+| Nodes `resolve_location`, `get_weather`, `compute_window` | `resolve_location`, then one `build_context` node (defaults, date, window, weather, sunset, pacing); `get_weather` is a trace tool event inside it |
+| `guard_input` rejects invalid input | Bounds are enforced by the API (`PlanRequest`, 400; body limit, 413). `guard_input` only normalises, clamps `available_time` with an assumption and flags injection or out-of-scope text; planning continues |
+| Out-of-scope requests get a fixed reply | A plan is still produced, with the assumption "I can't book, pay or contact anyone — here's a plan you can act on" |
+| `tools` is a `ToolNode` wrapper | Custom executor `run_tools` (caps, argument models, protocol-error accounting); `submit_plan` is answered by `validate_plan` |
+| LLM parse with regex parser as fallback | Rules parse always runs; the LLM parse is merged (`merge_parse`), LLM constraints need textual support and LLM interests must be grounded |
+| `RetryPolicy` on every node calling external services | Only `resolve_location` |
+| HTTP retries for GETs, 60 s circuit breaker after 3 failures, weather cache 1 h, events cache 6 h | Not implemented; per-run sticky provider modes instead |
+| Heartbeat `TraceEvent` every 10 s | SSE comment `: keep-alive` after 10 s of silence; the `heartbeat` type exists in `TraceType` but is never emitted |
+| Per-IP 5 plans/10 min and 30/day, fixed windows | 15/10 min and 60/day, two-window sliding estimate; resumes and share reads have their own limits |
+| Production model from `models.yaml` `production.primary` | Runtime uses `PRIMARY_MODEL` (config default `ollama:qwen3.5:9b`); `production.primary` is read by the eval runner |
+| Gemini and Grok pinned in the registry | `pending: true` placeholders |
+| Validator code list | 31 codes, including `HOURS_UNVERIFIED`, `PLAN_B_INVALID`, `CURRENCY_MISMATCH`, `LOCATION_APPROXIMATE`, `IDLE_WAIT`, `PACING_RELAXED`; `CONSTRAINT_DROPPED` is a warning (the constraint is still enforced) |
+| Budgets in the user's currency | Budgets are converted to the location currency with dated reference rates (`data/fx.yaml`); costs in another currency are `CURRENCY_MISMATCH` |
+| Plans table stores IDs and computed fields | Stores a redacted `PlanResult` JSON: Google display fields removed, Google names in prose tokenised, rehydrated with `PlacesProvider.get` on view |
+| Snapshot of ~30 places | 41 places |
+| `PLACES_PROVIDER=google\|osm_snapshot\|fixture`, `EVENTS_ENABLED` | `auto\|google\|osm_snapshot\|fixture`; `EVENTS_PROVIDER=auto\|tavily\|fixture\|none` |
+| Low energy: at most one leg over 15 min (no rule stated for medium/high) | `max_long_legs` 1 / 2 / 3 for low / medium / high |
+| Agent never uses a draft it did not submit | Checked-draft salvage (D-P2-10) |
+| CI lints with eslint and deploys to Render | oxlint; Render deploys itself after checks pass (`autoDeployTrigger: checksPass`); Playwright e2e is not in CI |
+| Preview environments for PRs | Not enabled (commented in `render.yaml`) |
+| Eval results loaded into Postgres for `/evals` | `evals.report` can save the summary to the store; the API reads the store, then falls back to `backend/evals/results/summary.json` |
+| Docs `ARCHITECTURE.md`, `GUARDRAILS.md`, `RUNBOOK.md`, ... | `docs/HLD.md`, `docs/LLD.md`, `docs/EVAL_REPORT.md`, `docs/verification/` |
+
+## 17. Key decisions and trade-offs
+
+| Decision | Trade-off |
+|---|---|
+| Hybrid graph: model for judgment, code for arithmetic and verdicts | More code than a pure agent, but no invalid plan can be displayed and models can be compared on one validator |
+| Rules parser always runs under the LLM parse | Duplicated extraction logic, but constraints can never be lost and the baseline shares the parser |
+| Deterministic beam-search planner as fallback and baseline | Template prose is plainer than model prose; it guarantees an answer when the model fails |
+| Frozen world for all model evals | Scores describe a small synthetic world, not live data quality; no Google content is used to test models |
+| Redacted share records with rehydration | Shared plans need a Place Details call per Google stop on view (rate limited per IP) |
+| SQLite locally, Postgres in production behind one `Store` protocol | Two implementations to keep in sync; CI tests both |
+| SSE over `fetch` with a background producer task | Runs survive disconnects, but cannot be cancelled by the client ("Stop" only aborts the reader) |
+| One process, one worker | Simple drain and in-process locks; horizontal scaling needs shared claims |
