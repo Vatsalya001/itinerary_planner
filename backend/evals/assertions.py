@@ -1720,17 +1720,29 @@ def _violations_as_tool_errors(o: Observation) -> Outcome:
     return bool(failed) and bool(rejected), f"submit_plan tool_failed={len(failed)}, failed validations={len(rejected)}"
 
 
+def _salvaged_checked_draft(o: Observation) -> bool:
+    """The graph used the agent's last error-free check_plan draft (validated server-side) after it stopped."""
+    return any(
+        e.type == "validation" and (e.data or {}).get("source") == "agent_checked_draft" and (e.data or {}).get("ok")
+        for e in o.events
+    )
+
+
 def _one_nudge_then_fallback(o: Observation) -> Outcome:
+    """One nudge; then the already-checked draft (complete, agent) if one exists, else the deterministic fallback."""
     fin = o.finalize
     nudges, attempts = fin.get("nudges"), fin.get("submit_attempts") or 0
     r = o.result
     if not isinstance(nudges, int) or r is None:
         return False, "no finalize metrics"
+    salvaged = _salvaged_checked_draft(o)
     if attempts == 0:
-        ok = nudges == 1 and r.status == "fallback" and r.mode == "deterministic"
+        fell_back = r.status == "fallback" and r.mode == "deterministic"
+        used_checked = r.status == "complete" and r.mode == "agent" and salvaged
+        ok = nudges == 1 and (fell_back or used_checked)
     else:
         ok = nudges <= 1
-    return ok, f"nudges={nudges}, submit_attempts={attempts}, status={r.status}, mode={r.mode}"
+    return ok, f"nudges={nudges}, submit_attempts={attempts}, status={r.status}, mode={r.mode}, salvaged={salvaged}"
 
 
 def _text_never_plan(o: Observation) -> Outcome:
@@ -1738,8 +1750,12 @@ def _text_never_plan(o: Observation) -> Outcome:
     if r is None or r.plan is None:
         return None, "no plan returned"
     attempts = o.finalize.get("submit_attempts") or 0
-    ok = r.mode == "deterministic" if r.status == "fallback" else (r.mode == "agent" and attempts >= 1)
-    return ok, f"status={r.status}, mode={r.mode}, submit_attempts={attempts}"
+    salvaged = _salvaged_checked_draft(o)
+    if r.status == "fallback":
+        ok = r.mode == "deterministic"
+    else:  # an agent plan must come from a submitted or server-validated checked draft, never from free text
+        ok = r.mode == "agent" and (attempts >= 1 or salvaged)
+    return ok, f"status={r.status}, mode={r.mode}, submit_attempts={attempts}, salvaged={salvaged}"
 
 
 @_need_plan
@@ -2135,7 +2151,8 @@ CASE_CHECKS: dict[str, list[tuple[str, Kind, Callable[[Observation], Outcome]]]]
         ("Violations returned as tool errors and shown in the trace", "code", _violations_as_tool_errors),
     ],
     "agent_ends_without_submit": [
-        ("One nudge, then fallback", "code", _one_nudge_then_fallback),
+        ("One nudge, then the already-checked draft if there is one, otherwise fallback", "code",
+         _one_nudge_then_fallback),
         ("Free-form model text never rendered as a plan", "code", _text_never_plan),
     ],
     "places_provider_outage": [

@@ -260,7 +260,7 @@
       "suites": ["offline"],
       "fault": "text_only_final_turn",
       "expected_statuses": ["complete", "fallback"],
-      "assertions": ["One nudge, then fallback", "Free-form model text never rendered as a plan"]
+      "assertions": ["One nudge, then the already-checked draft if there is one, otherwise fallback", "Free-form model text never rendered as a plan"]
     },
     {
       "id": "places_provider_outage", "priority": "P0", "split": "dev", "category": "degradation",
