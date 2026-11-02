@@ -1683,6 +1683,7 @@ and Playwright. No other runtime dependencies.
 | `components/ChecksPanel.tsx` | "Checks": one row per `CheckItem` with Pass/Warning/Unverified/Failed pills; labels for the eight names `summarize_checks` emits (others are humanized); subtitle "Recomputed by the server from the data, not taken from the model." |
 | `components/ClarificationCard.tsx` | `h2#clarify-title` ("One quick question" / "Two quick questions"); per question a fieldset with quick-reply buttons (`aria-pressed`) and "Or type your own answer" (200 chars; typed text wins); "Continue planning" is enabled only when every question has an answer |
 | `components/InfeasibleCard.tsx` | `h2#infeasible-title` "No plan fits everything"; reason; blocking constraints; cheapest budget and shortest time found; one button per relaxation |
+| `components/ExternalLink.tsx` | The only component that opens a new tab: `target="_blank"`, `rel="noopener noreferrer"`, and a visually hidden "(opens in a new tab)" hint; used by every external link (Google Maps, OpenStreetMap credits, event pages, route links) |
 | `components/PlanActions.tsx` | "Open full route in Google Maps" (https only), "Copy plan", "Copy share link", "Share on WhatsApp", "Add to calendar" (.ics; "Calendar file downloaded." or "Couldn't create the calendar file. Please try again." from `downloadIcs`'s result), "Plan again with changes"; polite status messages cleared after 4 s |
 | `components/Feedback.tsx` | "Was this plan useful?" Yes (sends `up`) / Not really (optional reason, 300 chars, sends `down`) |
 | `components/ErrorCard.tsx` | `h2#error-title`; `Retry-After` countdown; run reference; "Try again" |
@@ -1985,7 +1986,7 @@ observability stubbed); `tests/providers/conftest.py` (context factories for Ben
 
 ### 14.2 Frontend (`frontend/`)
 
-`npm test` (Vitest, run with `npx vitest run` after `npm ci`): 9 files, 104 tests, all passing.
+`npm test` (Vitest, run with `npx vitest run` after `npm ci`): 10 files, 108 tests, all passing.
 
 | File | Tests | Covers |
 |---|---:|---|
@@ -1995,9 +1996,10 @@ observability stubbed); `tests/providers/conftest.py` (context factories for Ben
 | `src/lib/ics.test.ts` | 10 | VCALENDAR structure, time zones, escaping, folding, rollover after midnight |
 | `src/pages/Planner.test.tsx` | 13 | Prefill, streaming plan, clarification resume, relaxations, status region, degradations, 429/400/rejected cards, structured-only requests, foreign aborts and timeouts end in a retryable error, Stop returns to idle |
 | `src/components/components.test.tsx` | 10 | PlanView, legs paired by ID, fallback banner, test-data badge, check labels, calendar success and failure messages, ClarificationCard, InfeasibleCard |
-| `src/pages/pages.test.tsx` | 7 | SharedPlan load, 404 and foreign aborts with heading focus, evals page (including a foreign abort), HowItWorks |
+| `src/pages/pages.test.tsx` | 8 | SharedPlan load, 404 and foreign aborts with heading focus, evals page (including a foreign abort), HowItWorks (graph node list and guard/parse/finalize wording pinned to the code) |
 | `src/hooks/usePlanRun.test.tsx` | 6 | Owned versus foreign aborts and timeouts, superseded runs, unmount abort |
 | `src/test/security.test.tsx` | 2 | XSS payloads render as text; only https links are rendered |
+| `src/test/externalLinks.test.tsx` | 3 | No `target="_blank"`/`window.open(` outside `ExternalLink`; every new-tab link has an "(opens in a new tab)" name, `rel="noopener noreferrer"` and an https URL |
 
 Playwright (`npm run e2e`, `e2e/playwright.config.ts`): Chromium, one worker, 11 tests in `e2e/planner.spec.ts`
 (brief end to end, brief JSON via form fields, clarification and resume, typed answers and expired thread, budget
