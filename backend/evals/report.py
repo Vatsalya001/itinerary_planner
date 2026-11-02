@@ -180,12 +180,26 @@ def superseded_sessions(records: list[dict[str, Any]],
             for (s, m, sess), n in sorted(counts.items())]
 
 
+def mark_prompt_versions(rows: list[dict[str, Any]], current: str | None) -> None:
+    """Flag rows measured with different agent prompts/tools than the current code (the baseline uses none)."""
+    for row in rows:
+        recorded = (row.get("provenance") or {}).get("prompt_hash")
+        row["prompt_current"] = row.get("kind") == "baseline" or current is None or recorded == current
+
+
 def build_summary(records: list[dict[str, Any]], generated_at: str | None = None) -> dict[str, Any]:
+    from evals.cases import prompt_hash
+
     counts = _suite_case_counts()
     runs, skips = select_latest(records, counts)
     suites = {s: _suite_block(runs, s, counts) for s in ("models", "offline", "live")}
     models_block = suites["models"]
     all_rows = [r for b in suites.values() for r in b["rows"]]
+    try:
+        current_prompt = prompt_hash()
+    except Exception:  # the report must still render if the app can't be imported
+        current_prompt = None
+    mark_prompt_versions(all_rows, current_prompt)
     newest = max(all_rows, key=lambda r: str(r.get("finished_at") or ""), default=None)
     judge_models = sorted({m for r in all_rows for m in r.get("judge_models") or []})
     rubrics = sorted({v for r in all_rows for v in r.get("judge_rubric_versions") or []})
@@ -210,6 +224,7 @@ def build_summary(records: list[dict[str, Any]], generated_at: str | None = None
         "stopped_early": stopped_early(records, all_rows),
         "harness_exceptions": harness_exceptions(runs),
         "record_schemas": record_schemas(records),
+        "current_prompt_hash": current_prompt,
     }
 
 
@@ -324,8 +339,9 @@ def leaderboard_lines(rows: list[dict[str, Any]]) -> list[str]:
         cases = f"{cov.get('cases')}/{cov.get('suite_cases')}" if cov.get("suite_cases") else str(r.get("cases"))
         if cov.get("partial"):
             cases += " (partial)"
+        stale = "" if r.get("prompt_current", True) else " †"
         body.append([
-            f"`{r['model']}`", str(r.get("kind")), cases,
+            f"`{r['model']}`{stale}", str(r.get("kind")), cases,
             _pct(r.get("hard_passes"), r.get("runs")),
             _pct(r.get("status_ok_runs"), r.get("runs")),
             _pct(r.get("agent_successes"), n.get("feasible_runs")) if r.get("agent_success") is not None else "n/a",
@@ -458,6 +474,12 @@ def render_markdown(summary: dict[str, Any]) -> str:
     ]
     if rows:
         lines += leaderboard_lines(rows)
+        stale = [r for r in rows if not r.get("prompt_current", True)]
+        if stale:
+            lines += ["", f"† Measured with an earlier version of the agent's prompts and tools (prompt hash "
+                      f"{', '.join(sorted({str((r.get('provenance') or {}).get('prompt_hash')) for r in stale}))} vs current "
+                      f"`{summary.get('current_prompt_hash')}`), before the batched-search redesign. Not a like-for-like "
+                      "comparison with current rows; rerun those models to compare."]
         lines += ["", "Rates show `(passed/n)`; `n/a` means the metric does not apply to the row (the baseline has no "
                   "agent); `—` means nothing was measured (n = 0). Cost/plan is the planner's registry-priced cost "
                   "of all runs divided by the runs that produced a plan (complete or fallback; n = plans); Cost/run "

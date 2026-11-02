@@ -153,3 +153,13 @@ def test_a_newer_partial_session_does_not_hide_the_last_complete_one(tmp_path: P
     assert {r["session"] for r in runs[("models", "m:1")]} == {NEW}
     runs, _ = select_latest(records)
     assert {r["session"] for r in runs[("models", "m:1")]} == {NEW}
+
+
+def test_rows_with_older_prompts_are_marked() -> None:
+    from evals.report import mark_prompt_versions
+
+    rows = [{"model": "ollama:a", "kind": "local", "provenance": {"prompt_hash": "old"}},
+            {"model": "cerebras:x", "kind": "api", "provenance": {"prompt_hash": "new"}},
+            {"model": "baseline:deterministic", "kind": "baseline", "provenance": {"prompt_hash": "old"}}]
+    mark_prompt_versions(rows, "new")
+    assert [r["prompt_current"] for r in rows] == [False, True, True]

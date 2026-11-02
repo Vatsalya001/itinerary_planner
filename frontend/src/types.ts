@@ -325,6 +325,8 @@ export interface EvalRow {
   latency_p50_ms?: number | null
   latency_p95_ms?: number | null
   cost_per_plan_usd?: number | null
+  /** false when the row was measured with an earlier version of the agent's prompts and tools */
+  prompt_current?: boolean | null
 }
 
 export interface EvalSummary {

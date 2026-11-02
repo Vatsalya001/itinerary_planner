@@ -80,6 +80,26 @@ describe('EvalsLeaderboard', () => {
     expect(screen.getByRole('heading', { name: 'By category' })).toBeInTheDocument()
   })
 
+  it('marks rows measured with earlier prompts', async () => {
+    const summary = {
+      generated_at: '2026-11-03T00:00:00Z',
+      rows: [
+        { model: 'cerebras:gpt-oss-120b', kind: 'api', runs: 26, hard_pass_rate: 0.9, prompt_current: true },
+        { model: 'ollama:granite4:tiny-h', kind: 'local', runs: 26, hard_pass_rate: 0.42, prompt_current: false },
+      ],
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(summary)))
+    render(
+      <MemoryRouter>
+        <EvalsLeaderboard />
+      </MemoryRouter>,
+    )
+    const local = await screen.findByRole('region', { name: 'Local models (Ollama)' })
+    expect(within(local).getByText('earlier prompts')).toBeInTheDocument()
+    const api = screen.getByRole('region', { name: 'Hosted API models' })
+    expect(within(api).queryByText('earlier prompts')).not.toBeInTheDocument()
+  })
+
   it('reports an abort it did not cause instead of loading forever', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new DOMException('signal timed out', 'TimeoutError'))))
     render(
