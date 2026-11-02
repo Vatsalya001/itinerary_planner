@@ -2070,7 +2070,7 @@ per ref. Versions: uv 0.13.6, Python 3.12, Node 22.
 | `typecheck` | `mypy app` and `npm run typecheck` |
 | `build` | `npm run build` |
 | `ollama` | Start `ollama serve` if needed, pull missing `OLLAMA_MODELS` (`qwen3.5:9b gemma4:e4b granite4:tiny-h`), run `scripts/ollama_smoke.py` for each |
-| `eval-offline` | `python -m evals.runner --suite offline $(ARGS)` |
+| `eval-offline` | `python -m evals.runner --suite offline --out $(OUT) $(ARGS)`; `OUT` defaults to the git-ignored `evals/results/tmp` |
 | `eval` | `python -m evals.runner --suite $(SUITE) --models "$(MODELS)" --repeats $(REPEATS) $(ARGS)` (defaults: `models`, baseline + three Ollama models, 1) |
 | `eval-all` | `eval` with the baseline, the Ollama models and Claude when `ANTHROPIC_API_KEY` is set |
 | `eval-report` | `python -m evals.report $(ARGS)` |

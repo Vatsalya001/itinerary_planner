@@ -124,7 +124,7 @@ Details: [docs/HLD.md](docs/HLD.md) (design) and [docs/LLD.md](docs/LLD.md) (mod
 | `cd backend && uv run pytest -m live` | Live provider and Postgres tests (need `RUN_LIVE=1`, plus `GOOGLE_MAPS_API_KEY` or `TAVILY_API_KEY` for those providers; the Postgres tests need a Postgres `DATABASE_URL`) |
 | `cd backend && RUN_OLLAMA=1 uv run pytest -m ollama tests/graph/test_ollama_e2e.py` | One end-to-end plan with a local model |
 | `cd frontend && npx playwright install chromium && npm run e2e` | Browser tests against a locally started backend on the frozen world |
-| `make eval-offline` | Offline eval suite (scripted fake model and injected faults; what CI runs) |
+| `make eval-offline` | Offline eval suite (scripted fake model and injected faults; what CI runs). Writes to the git-ignored `backend/evals/results/tmp/`; use `OUT=evals/results` to record an official session |
 | `make eval MODELS=baseline:deterministic,ollama:granite4:tiny-h REPEATS=1` | Model evals on the frozen world; add `ARGS="--max-cost-usd 5"` (or `--max-minutes`) to cap a run and `--resume` to finish it. With `JUDGE_MODEL` set, an LLM judge also scores the plans (`--judge-model none` turns it off) |
 | `make eval-all` | Baseline, the local models, and Claude when `ANTHROPIC_API_KEY` is set |
 | `make eval-report` | Regenerate `docs/EVAL_REPORT.md` and `backend/evals/results/summary.json` |
