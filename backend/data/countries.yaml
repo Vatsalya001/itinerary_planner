@@ -1,5 +1,7 @@
-# ISO 3166-1 alpha-2 -> currency and display symbol. Countries not listed have no default currency,
-# so a bare budget number triggers a clarification.
+# ISO 3166-1 alpha-2 -> ISO 4217 currency and display symbol (shown before the amount). Every country in
+# gazetteer.yaml is listed (tests/providers/test_normalize.py checks it). Countries not listed have no default
+# currency, so a bare budget number triggers a clarification. Where the usual symbol is ambiguous or written after
+# the amount (kr, Kč, Rs, Fr.), the ISO code is used as the prefix instead. Checked 2026-11-02 (see SOURCES.md).
 IN: {currency: INR, symbol: "₹"}
 GB: {currency: GBP, symbol: "£"}
 US: {currency: USD, symbol: "$"}
@@ -13,3 +15,28 @@ IT: {currency: EUR, symbol: "€"}
 JP: {currency: JPY, symbol: "¥"}
 AU: {currency: AUD, symbol: "A$"}
 CA: {currency: CAD, symbol: "C$"}
+# Euro area
+AT: {currency: EUR, symbol: "€"}
+IE: {currency: EUR, symbol: "€"}
+PT: {currency: EUR, symbol: "€"}
+# Rest of Europe
+CH: {currency: CHF, symbol: "CHF "}
+CZ: {currency: CZK, symbol: "CZK "}
+DK: {currency: DKK, symbol: "DKK "}
+SE: {currency: SEK, symbol: "SEK "}
+TR: {currency: TRY, symbol: "₺"}
+# Asia and the Middle East
+BD: {currency: BDT, symbol: "৳"}
+HK: {currency: HKD, symbol: "HK$"}
+ID: {currency: IDR, symbol: "Rp"}
+KR: {currency: KRW, symbol: "₩"}
+LK: {currency: LKR, symbol: "LKR "}
+MY: {currency: MYR, symbol: "RM"}
+NP: {currency: NPR, symbol: "NPR "}
+QA: {currency: QAR, symbol: "QAR "}
+TH: {currency: THB, symbol: "฿"}
+# Americas, Africa and Oceania
+BR: {currency: BRL, symbol: "R$"}
+MX: {currency: MXN, symbol: "MX$"}
+NZ: {currency: NZD, symbol: "NZ$"}
+ZA: {currency: ZAR, symbol: "R"}

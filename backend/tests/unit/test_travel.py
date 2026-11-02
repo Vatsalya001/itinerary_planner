@@ -138,11 +138,11 @@ def test_same_name_in_another_country_does_not_get_indian_fares():
 
 def test_never_prices_legs_in_a_fallback_currency():
     # a currency with no fare table: walking legs are free in that currency, motorised legs are not priced
-    baht = LONDON.model_copy(update={"id": "x:bkk", "name": "Bangkok", "country_code": "TH", "currency": "THB"})
-    ctx = make_ctx(location=baht)
+    krona = LONDON.model_copy(update={"id": "x:rkv", "name": "Reykjavik", "country_code": "IS", "currency": "ISK"})
+    ctx = make_ctx(location=krona)
     a = make_candidate("fx:a", "cafe")
     walk = travel.leg(a, make_candidate("fx:b", "cafe", offset_km=(0.3, 0.0)), ctx)
-    assert walk.mode == "walk" and walk.fare.currency == "THB"
+    assert walk.mode == "walk" and walk.fare.currency == "ISK"
     with pytest.raises(TransferUnknownError):
         travel.leg(a, make_candidate("fx:c", "cafe", offset_km=(3.0, 0.0)), ctx)
     # no currency on the location: the country's currency from countries.yaml
