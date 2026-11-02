@@ -48,7 +48,10 @@ def test_registry_lists_the_model_matrix() -> None:
         if "<" in row["id"]:
             continue
         assert row["id"] in reg.specs, row["id"]
-    assert reg.production_primary == OPUS
+    assert reg.production_primary == "groq:openai/gpt-oss-120b"
+    assert reg.production_fallback is None
+    groq = reg.specs["groq:openai/gpt-oss-120b"]
+    assert groq.kind == "api" and (groq.pricing.input, groq.pricing.output) == (0.15, 0.60)
     opus = reg.specs[OPUS]
     assert (opus.pricing.input, opus.pricing.output, opus.pricing.cache_read) == (4.0, 20.0, 0.2)
     for local in ("ollama:qwen3.5:9b", "ollama:gemma4:e4b", "ollama:granite4:tiny-h"):
@@ -105,11 +108,11 @@ def test_ollama_param_rules() -> None:
 def test_pending_unknown_and_baseline_ids_raise_clearly() -> None:
     settings = fixture_settings()
     with pytest.raises(PendingModelError, match=r"models\.yaml"):
-        get_spec("google_genai:<pending>")
-    with pytest.raises(PendingModelError, match="No google_genai model ID is pinned"):
-        get_chat_model("google_genai:gemini-9-pro", "agent", settings)
-    with pytest.raises(PendingModelError, match="xai"):
-        get_spec("xai:grok-9")
+        get_spec("xai:<pending>")
+    with pytest.raises(PendingModelError, match="No xai model ID is pinned"):
+        get_chat_model("xai:grok-9", "agent", settings)
+    with pytest.raises(UnknownModelError):
+        get_spec("google_genai:gemini-9-pro")  # Gemini IDs are pinned; anything else is unknown
     with pytest.raises(UnknownModelError, match=r"Known models"):
         get_spec("openai:gpt-9")
     with pytest.raises(UnknownModelError):
@@ -175,3 +178,18 @@ def test_every_ollama_row_caps_output_tokens() -> None:
     for model_id in ("ollama:qwen3.5:9b", "ollama:gemma4:e4b", "ollama:granite4:tiny-h", "ollama:llama3.2:3b"):
         model = get_chat_model(model_id, "agent", settings)
         assert isinstance(model, ChatOllama) and model.num_predict == 2048, model_id
+
+
+def test_groq_param_rules() -> None:
+    settings = fixture_settings()
+    spec = get_spec("groq:openai/gpt-oss-120b")
+    agent = provider_kwargs(spec, "agent", settings)
+    parse = provider_kwargs(spec, "parse", settings)
+    assert agent["reasoning_effort"] == "medium" and parse["reasoning_effort"] == "low"
+    assert agent["reasoning_format"] == "hidden" and agent["temperature"] == 0.0
+    assert agent["max_tokens"] == 8192 and agent["request_timeout"] == 60.0 and agent["max_retries"] == 1
+
+
+def test_gemini_keeps_provider_default_temperature() -> None:
+    kwargs = provider_kwargs(get_spec("google_genai:gemini-3.6-flash"), "agent", fixture_settings())
+    assert "temperature" not in kwargs and kwargs["max_output_tokens"] == 8192 and kwargs["timeout"] == 60.0

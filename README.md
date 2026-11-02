@@ -51,8 +51,8 @@ Choosing a model (in `backend/.env`; IDs come from `backend/app/llm/models.yaml`
 
 | Model | Settings |
 |---|---|
-| Claude | `ANTHROPIC_API_KEY=...` and `PRIMARY_MODEL=anthropic:claude-opus-5-5` |
-| Gemini or Grok | The registry entries `google_genai:<pending>` and `xai:<pending>` are placeholders. Pin a real model ID in `models.yaml` (replace the ID and remove `pending: true`), then set `GOOGLE_API_KEY` or `XAI_API_KEY` and `PRIMARY_MODEL=<that ID>` |
+| Groq (production) | `GROQ_API_KEY=gsk_...` and `PRIMARY_MODEL=groq:openai/gpt-oss-120b`. The free tier allows 8K tokens/minute and 200K tokens/day, so one plan takes about 2 minutes of throttling there and usually hits the 60 s deadline (the rule-based planner then answers); Groq's paid tier removes the wait |
+| Other registry providers (optional, not used) | Gemini (`google_genai:gemini-3.6-flash`, `gemini-3.8-flash`; `GOOGLE_API_KEY`), Claude (`anthropic:claude-opus-5-5`; `ANTHROPIC_API_KEY`), xAI (`xai:<pending>` placeholder) |
 | A second provider as fallback | `FALLBACK_MODEL=<registry ID>` |
 | Local model | `PRIMARY_MODEL=ollama:granite4:tiny-h` (or any pulled `ollama:<tag>`) |
 | No LLM | `PRIMARY_MODEL=baseline:deterministic` |
@@ -126,7 +126,7 @@ Details: [docs/HLD.md](docs/HLD.md) (design) and [docs/LLD.md](docs/LLD.md) (mod
 | `cd frontend && npx playwright install chromium && npm run e2e` | Browser tests against a locally started backend on the frozen world |
 | `make eval-offline` | Offline eval suite (scripted fake model and injected faults; what CI runs). Writes to the git-ignored `backend/evals/results/tmp/`; use `OUT=evals/results` to record an official session |
 | `make eval MODELS=baseline:deterministic,ollama:granite4:tiny-h REPEATS=1` | Model evals on the frozen world; add `ARGS="--max-cost-usd 5"` (or `--max-minutes`) to cap a run and `--resume` to finish it. With `JUDGE_MODEL` set, an LLM judge also scores the plans (`--judge-model none` turns it off) |
-| `make eval-all` | Baseline, the local models, and Claude when `ANTHROPIC_API_KEY` is set |
+| `make eval-all` | Baseline, the local models, and Groq when `GROQ_API_KEY` is set |
 | `make eval-report` | Regenerate `docs/EVAL_REPORT.md` and `backend/evals/results/summary.json` |
 
 ## Eval results
@@ -179,7 +179,7 @@ All settings are environment variables (or `backend/.env`); the full list with d
 
 ## Limitations
 
-* Live Google Places, Tavily, Claude, Postgres/Neon and the Render deploy were not exercised by the verification runs,
+* Live Google Places, Tavily, Postgres/Neon and the Render deploy were not exercised by the verification runs,
   which had no keys; the keyless Open-Meteo forecast was exercised once by the docs verification. See the verification
   reports.
 * Without a Google key, places come only from the Bangalore snapshot. Fares, price bands and FX rates are dated

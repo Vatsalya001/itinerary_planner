@@ -41,8 +41,8 @@ services:
 
       # --- Models (registry IDs from backend/app/llm/models.yaml) ------------------------------------------
       - key: PRIMARY_MODEL
-        value: anthropic:claude-opus-5-5
-      # Optional second-provider fallback, e.g. a pinned google_genai:... model once evaluated.
+        value: groq:openai/gpt-oss-120b
+      # Optional second model; the deterministic planner already covers model failures.
       - key: FALLBACK_MODEL
         sync: false
       # Judge model is used by evals only; leave empty in production.
@@ -52,11 +52,7 @@ services:
       - key: OLLAMA_BASE_URL
         value: http://127.0.0.1:11434
       # Provider keys are read from the environment by the LangChain integrations.
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: GOOGLE_API_KEY
-        sync: false
-      - key: XAI_API_KEY
+      - key: GROQ_API_KEY
         sync: false
 
       # --- Data providers ("auto" = live provider when its key is set, else the keyless option) -----------

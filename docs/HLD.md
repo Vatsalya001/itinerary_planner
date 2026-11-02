@@ -222,14 +222,15 @@ graph TD
 
 All models are listed in `backend/app/llm/models.yaml` and built with `init_chat_model` (or the scripted fake). The
 run's model is `PRIMARY_MODEL` (default `ollama:qwen3.5:9b` in `config.py`; `render.yaml` sets
-`anthropic:claude-opus-5-5`). An optional `FALLBACK_MODEL` is chained with `with_fallbacks`; the primary then gets
+`groq:openai/gpt-oss-120b`, the production model). An optional `FALLBACK_MODEL` is chained with `with_fallbacks`; the primary then gets
 60% of each call's time budget. After the chain, the deterministic planner is the last resort.
 
 | Registry ID | Kind | Key settings | Status |
 |---|---|---|---|
-| `anthropic:claude-opus-5-5` | api | `max_tokens` 16000, `output_config.effort` parse low / agent medium / judge medium, no sampling params, no forced tool choice, `json_schema` structured output, cached system prompt, beta `server-side-fallback-2026-07-01` with `fallbacks: "default"`, `max_retries` 1; $4 / $20 / $0.20 cache read / $5 cache write per Mtok | Production candidate; no eval results committed yet |
-| `google_genai:<pending>` | api | `pending: true` | Raises `PendingModelError` until an ID is pinned |
-| `xai:<pending>` | api | `pending: true` | Same |
+| `groq:openai/gpt-oss-120b` | api | temperature 0, `max_tokens` 8192, `reasoning_effort` parse low / agent medium / judge medium, `reasoning_format` hidden, `max_retries` 1, `request_timeout_s` 60; $0.15 / $0.60 per Mtok | **Production model.** Free tier: 30 RPM, 8K TPM, 200K tokens/day (measured: the third ~2.5K-token call within a minute gets HTTP 429), so plans on the free tier usually hit the deadline and fall back |
+| `google_genai:gemini-3.6-flash`, `google_genai:gemini-3.8-flash` | api | default temperature, `max_tokens` 8192, `max_retries` 1, `request_timeout_s` 60; $0.75 / $3.75 per Mtok (paid, through 2026-12-31) | Optional, not used: on 2026-11-03 both returned 503/504 "high demand" during smoke tests |
+| `anthropic:claude-opus-5-5` | api | `max_tokens` 16000, `output_config.effort` parse low / agent medium / judge medium, no sampling params, `json_schema` structured output, cached system prompt, refusal fallbacks; $4 / $20 per Mtok | Optional, not configured |
+| `xai:<pending>` | api | `pending: true` | Placeholder; raises `PendingModelError` |
 | `ollama:qwen3.5:9b` | local | `num_ctx` 32768, `num_predict` 2048, temperature 0, `keep_alive` 10m, `reasoning` false, function-calling structured output | Dev/eval only; no committed results |
 | `ollama:gemma4:e4b` | local | Same as qwen | Dev/eval only; no committed results |
 | `ollama:granite4:tiny-h` | local | `reasoning` unset, schema structured output | Dev/eval only; in the committed report |
@@ -336,14 +337,14 @@ Latest committed results: the report generated 2026-11-02T15:53:14Z (runs on a d
 in `053ba54`) covers the baseline and `ollama:granite4:tiny-h` on the `models` suite and `fake:agent` on the `offline`
 suite, one repeat per case, no judge. It predates the eval-harness hardening, so it shows cost per run only until
 `make eval-report` regenerates it.
-Claude, qwen3.5 and gemma4 have no committed results, and Gemini and Grok are not pinned. Read the report for the
-numbers.
+Groq (`groq:openai/gpt-oss-120b`) has no committed eval results yet: its free tier's 200K tokens/day does not
+cover a 26-case run. Read the report for the numbers.
 
 ## 15. Known limitations and risks
 
 | Area | Limitation |
 |---|---|
-| Live data | Live Google Places, Tavily, Claude, Postgres/Neon and the Render deploy were not exercised by the verifiers (no keys or services); see PHASE1 §6 and PHASE2 §7. The keyless Open-Meteo forecast was exercised once by the docs verification ([DOCS.md](verification/DOCS.md)) |
+| Live data | Live Google Places, Tavily, Postgres/Neon and the Render deploy were not exercised by the verifiers (no keys or services); see PHASE1 §6 and PHASE2 §7. The keyless Open-Meteo forecast was exercised once by the docs verification ([DOCS.md](verification/DOCS.md)) |
 | Coverage | The keyless snapshot covers Bangalore only; elsewhere a Places outage gives `no_feasible_plan`. Fixtures cover Bengaluru and Mumbai |
 | Local models | Small Ollama models often fall back (text-only endings, timeouts); see the report's error categories |
 | Single instance | Resume locks, compiled-graph cache and the in-memory default checkpointer are per process; multi-instance deployments need a shared claim |

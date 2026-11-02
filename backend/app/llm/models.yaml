@@ -8,8 +8,8 @@
 # params.num_predict (Ollama): output-token cap per call; without it small models can generate for minutes
 # pending:  true until a real model ID is pinned; requesting it raises PendingModelError
 production:
-  primary: anthropic:claude-opus-5-5
-  fallback: null  # set to a second provider after evals, e.g. a pinned Gemini model
+  primary: groq:openai/gpt-oss-120b
+  fallback: null  # the deterministic planner is the safety net when the model fails or times out
 
 timeouts:
   api: {agent_turn_s: 45, parse_s: 15}
@@ -18,9 +18,46 @@ timeouts:
   baseline: {agent_turn_s: 0, parse_s: 0}
 
 candidates:
+  - id: google_genai:gemini-3.6-flash
+    kind: api
+    note: >-
+      Optional, not used in production. On 2026-11-03 gemini-3.8-flash returned 503/504 "high demand" on every
+      try and 3.6 failed mid-run with 503s, so the deployment uses Groq only. 3.6 is deprecated (no shutdown
+      date). Default temperature (Gemini 3+ guidance).
+    params:
+      max_tokens: 8192
+      max_retries: 3  # transient 503 "high demand" responses are common; the agent-turn timeout bounds the wait
+      request_timeout_s: 60
+    pricing_per_mtok: {input: 0.75, output: 3.75, cache_read: 0.075}  # paid tier, through 2026-12-31
+
+  - id: google_genai:gemini-3.8-flash
+    kind: api
+    note: >-
+      Google's current Flash (2026-11-03). Candidate to replace 3.6 as primary; it was overloaded (503/504) when
+      pinned. gemini-2.5-flash and gemini-3.5-flash are deprecated and reroute to other models.
+    params:
+      max_tokens: 8192
+      max_retries: 1
+      request_timeout_s: 60
+    pricing_per_mtok: {input: 0.75, output: 3.75, cache_read: 0.075}  # paid tier, through 2026-12-31
+
+  - id: groq:openai/gpt-oss-120b
+    kind: api
+    note: >-
+      Production model (Groq). Free tier limits for this model: 30 RPM, 8K TPM, 200K tokens/day, so a full
+      eval or real traffic needs Groq's paid (Developer) tier. Reasoning is hidden from the response.
+    params:
+      temperature: 0
+      max_tokens: 8192
+      max_retries: 1
+      request_timeout_s: 60
+      reasoning_effort: {parse: low, agent: medium, judge: medium}
+      reasoning_format: hidden
+    pricing_per_mtok: {input: 0.15, output: 0.60}
+
   - id: anthropic:claude-opus-5-5
     kind: api
-    note: Production default candidate. Thinking is always on; depth is set with output_config.effort.
+    note: Optional (not configured for this deployment). Thinking is always on; depth is set with output_config.effort.
     params:
       max_tokens: 16000  # leaves room for thinking
       effort: {parse: low, agent: medium, judge: medium}
@@ -31,17 +68,10 @@ candidates:
       server_side_fallback: default  # request field `fallbacks: "default"` (refusal fallback)
     pricing_per_mtok: {input: 4.00, output: 20.00, cache_read: 0.20, cache_write: 5.00}
 
-  - id: google_genai:<pending>
-    kind: api
-    pending: true
-    note: Key pending. List models with the key, pin the ID here, then run the smoke test before any eval.
-    params: {temperature: 0, max_tokens: 8192}
-    pricing_per_mtok: {input: 0, output: 0}
-
   - id: xai:<pending>
     kind: api
     pending: true
-    note: Key pending. List models with the key, pin the ID here, then run the smoke test before any eval.
+    note: Optional, not configured (no xAI key). Pin an ID here if xAI is ever added.
     params: {temperature: 0, max_tokens: 8192}
     pricing_per_mtok: {input: 0, output: 0}
 

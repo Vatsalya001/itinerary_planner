@@ -218,10 +218,31 @@ def provider_kwargs(spec: ModelSpec, purpose: Purpose, settings: Settings) -> di
         kwargs["num_predict"] = int(p.get("num_predict") or DEFAULT_NUM_PREDICT)
         return kwargs
     if spec.provider == "google_genai":
-        kwargs = {"temperature": float(p.get("temperature", 0))}
+        kwargs = {"max_retries": int(p.get("max_retries", 1)), "timeout": float(p.get("request_timeout_s", 60))}
+        # Gemini 3+ is tuned for the default temperature; set it only when the registry entry asks for one.
+        if p.get("temperature") is not None:
+            kwargs["temperature"] = float(p["temperature"])
         if p.get("max_tokens"):
             kwargs["max_output_tokens"] = int(p["max_tokens"])
-        kwargs["max_retries"] = int(p.get("max_retries", 1))
+        budgets = p.get("thinking_budget")
+        budget = budgets.get(purpose) if isinstance(budgets, Mapping) else budgets
+        if budget is not None:
+            kwargs["thinking_budget"] = int(budget)
+        return kwargs
+    if spec.provider == "groq":
+        kwargs = {
+            "temperature": float(p.get("temperature", 0)),
+            "max_retries": int(p.get("max_retries", 1)),
+            "request_timeout": float(p.get("request_timeout_s", 60)),
+        }
+        if p.get("max_tokens"):
+            kwargs["max_tokens"] = int(p["max_tokens"])
+        efforts = p.get("reasoning_effort")
+        effort = efforts.get(purpose) if isinstance(efforts, Mapping) else efforts
+        if effort:
+            kwargs["reasoning_effort"] = effort
+        if p.get("reasoning_format"):
+            kwargs["reasoning_format"] = p["reasoning_format"]
         return kwargs
     if spec.provider == "xai":
         kwargs = {"temperature": float(p.get("temperature", 0)), "max_retries": int(p.get("max_retries", 1))}

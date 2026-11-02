@@ -125,10 +125,10 @@ eval: ## Model evals on the frozen world: make eval MODELS=ollama:gemma4:e4b,ant
 	$(call require_eval,runner)
 	cd $(BACKEND) && $(UV_RUN_ENV) python -m evals.runner --suite $(SUITE) --models "$(MODELS)" --repeats $(REPEATS) $(ARGS)
 
-eval-all: ## Model evals for the baseline, the local models, and Claude when ANTHROPIC_API_KEY is set
+eval-all: ## Model evals for the baseline, the local models, and Groq when GROQ_API_KEY is set
 	@models="baseline:deterministic"; for m in $(OLLAMA_MODELS); do models="$$models,ollama:$$m"; done; \
-	key="$${ANTHROPIC_API_KEY:-$$(sed -n 's/^ANTHROPIC_API_KEY=//p' $(BACKEND)/.env 2>/dev/null | tail -1)}"; \
-	if [ -n "$$key" ]; then models="$$models,anthropic:claude-opus-5-5"; else echo "No ANTHROPIC_API_KEY: skipping Claude"; fi; \
+	key="$${GROQ_API_KEY:-$$(sed -n 's/^GROQ_API_KEY=//p' $(BACKEND)/.env 2>/dev/null | tail -1)}"; \
+	if [ -n "$$key" ]; then models="$$models,groq:openai/gpt-oss-120b"; else echo "No GROQ_API_KEY: skipping Groq"; fi; \
 	$(MAKE) --no-print-directory eval MODELS="$$models"
 
 eval-report: ## Regenerate docs/EVAL_REPORT.md and evals/results/summary.json from the results

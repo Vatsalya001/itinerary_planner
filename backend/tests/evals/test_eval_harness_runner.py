@@ -26,7 +26,7 @@ def test_sanitize_model_ids() -> None:
 
 
 def test_pending_unknown_and_keyless_models_are_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert "pending" in (unavailable_reason("google_genai:<pin after listing models with the key>", {}) or "")
+    assert "pending" in (unavailable_reason("xai:<pin after listing models with the key>", {}) or "")
     assert "pending" in (unavailable_reason("xai:grok-anything", {}) or "")
     assert "not runnable" in (unavailable_reason("nope:model", {}) or "")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -86,10 +86,10 @@ async def test_offline_run_writes_one_record_per_run(tmp_path: Path) -> None:
 
 
 async def test_unavailable_models_get_a_skip_record_not_a_failure(tmp_path: Path) -> None:
-    args = parse_args(["--suite", "offline", "--models", "google_genai:<pending>,fake:agent", "--cases",
+    args = parse_args(["--suite", "offline", "--models", "xai:<pending>,fake:agent", "--cases",
                        "negative_budget", "--out", str(tmp_path)])
     assert await run(args) == 0
-    skip = read(only_file(tmp_path, "google_genai_pending.jsonl"))
+    skip = read(only_file(tmp_path, "xai_pending.jsonl"))
     assert len(skip) == 1 and skip[0]["record_type"] == "skip" and "pending" in skip[0]["reason"]
     assert read(only_file(tmp_path, "fake_agent.jsonl"))[0]["hard_pass"] is True
 
