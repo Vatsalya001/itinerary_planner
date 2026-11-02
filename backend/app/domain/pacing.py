@@ -6,17 +6,18 @@ import re
 
 from app.domain.schemas import Energy, MealWindow, PacingProfile
 
+# Walking minutes = walk-mode leg minutes + full duration of walking-category stops (parks, lakes, walks).
 PROFILES: dict[Energy, PacingProfile] = {
     Energy.LOW: PacingProfile(
-        energy=Energy.LOW, max_stops=3, max_walk_minutes=25, buffer_minutes=15,
+        energy=Energy.LOW, max_stops=3, max_walk_minutes=45, buffer_minutes=15,
         max_long_legs=1, long_leg_minutes=15, min_seated_stops=1,
     ),
     Energy.MEDIUM: PacingProfile(
-        energy=Energy.MEDIUM, max_stops=4, max_walk_minutes=45, buffer_minutes=10,
+        energy=Energy.MEDIUM, max_stops=4, max_walk_minutes=75, buffer_minutes=10,
         max_long_legs=2, long_leg_minutes=15, min_seated_stops=0,
     ),
     Energy.HIGH: PacingProfile(
-        energy=Energy.HIGH, max_stops=6, max_walk_minutes=90, buffer_minutes=10,
+        energy=Energy.HIGH, max_stops=6, max_walk_minutes=150, buffer_minutes=10,
         max_long_legs=3, long_leg_minutes=15, min_seated_stops=0,
     ),
 }

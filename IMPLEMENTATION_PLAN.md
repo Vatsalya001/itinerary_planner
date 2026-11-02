@@ -181,11 +181,11 @@ Every tool takes a required `reason` (≤ 140 characters). The trace shows it as
 - **First user message:** a JSON block of normalized preferences, the world context (date, window, weather, sunset) and pacing limits for the energy level.
 - Mood maps to a pacing profile in code, which the validator enforces:
 
-| Energy | Max stops | Max walking total | Buffer per transition | Other |
+| Energy | Max stops | Max walking total (walk legs + walking stops) | Buffer per transition | Other |
 |---|---:|---:|---:|---|
-| low | 3 | 25 min | 15 min | At least one seated stop; at most one leg over 15 min |
-| medium | 4 | 45 min | 10 min | — |
-| high | 6 | 90 min | 10 min | — |
+| low | 3 | 45 min | 15 min | At least one seated stop; at most one leg over 15 min |
+| medium | 4 | 75 min | 10 min | — |
+| high | 6 | 150 min | 10 min | — |
 
 ## 6. Data sources
 

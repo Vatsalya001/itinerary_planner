@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.domain.schemas import ClarificationQuestion, Constraint, Location, ParseOutcome, PlanRequest
+from app.domain.schemas import (
+    ClarificationQuestion, Constraint, Location, ParseOutcome, PlaceQuery, PlanRequest, Preferences, WorldContext,
+)
 
 
 def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
@@ -34,4 +36,18 @@ def clarification_questions(outcome: ParseOutcome, matches: list[Location] | Non
 
 def apply_answers(request: PlanRequest, answers: dict[str, str]) -> PlanRequest:
     """Fold clarification answers (keyed by question id) back into the request."""
+    raise NotImplementedError
+
+
+def apply_defaults(outcome: ParseOutcome, location: Location) -> Preferences:
+    """Final preferences for planning: currency from the location when not explicit, a default budget per
+    currency when missing (INR 1500, GBP 40, USD 50, EUR 45, else None), start 15:00 and 240 minutes when
+    missing. Every default applied is appended to preferences.assumptions in plain words (no clarification)."""
+    raise NotImplementedError
+
+
+def default_queries(prefs: Preferences, ctx: WorldContext) -> list[PlaceQuery]:
+    """Place searches covering the user's interests, a meal if the window spans a meal time, hard
+    constraints (e.g. "vegetarian restaurant"), and indoor options when rain is likely. 3-8 queries,
+    biased to prefs.neighbourhood when known. Used by the no-LLM baseline and the scripted fake agent."""
     raise NotImplementedError
