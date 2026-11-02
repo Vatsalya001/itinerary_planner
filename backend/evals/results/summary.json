@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-02T18:20:38+00:00",
-  "git_sha": "053ba54f13de",
+  "generated_at": "2026-11-02T18:22:51+00:00",
+  "git_sha": "f691753631c6",
   "rows": [
     {
       "model": "baseline:deterministic",
@@ -15,7 +15,7 @@
       "clarification_recall": 1.0,
       "judge_quality": null,
       "latency_p50_ms": 15,
-      "latency_p95_ms": 24,
+      "latency_p95_ms": 23,
       "cost_per_plan_usd": 0.0,
       "hard_passes": 26,
       "status_ok_runs": 26,
@@ -81,7 +81,7 @@
           "clarification_recall": 1.0,
           "judge_quality": null,
           "latency_p50_ms": 16,
-          "latency_p95_ms": 29,
+          "latency_p95_ms": 27,
           "cost_per_plan_usd": 0.0,
           "hard_passes": 18,
           "status_ok_runs": 18,
@@ -101,7 +101,7 @@
           "pass_hat_k": null,
           "k": 1,
           "cases": 18,
-          "latency_mean_ms": 17,
+          "latency_mean_ms": 16,
           "node_latency_p50_ms": {
             "ask_clarification": 0,
             "build_context": 0,
@@ -147,7 +147,7 @@
           "clarification_recall": 1.0,
           "judge_quality": null,
           "latency_p50_ms": 14,
-          "latency_p95_ms": 19,
+          "latency_p95_ms": 20,
           "cost_per_plan_usd": 0.0,
           "hard_passes": 8,
           "status_ok_runs": 8,
@@ -266,7 +266,7 @@
           "hard_pass_rate": 1.0
         }
       },
-      "session": "20261102T160422Z-d66fe8",
+      "session": "20261102T182250Z-04c0e5",
       "suite": "models",
       "coverage": {
         "cases": 26,
@@ -274,17 +274,17 @@
         "partial": false
       },
       "provenance": {
-        "schema": 1,
-        "git_sha": "053ba54f13de",
-        "git_dirty": true,
-        "prompt_hash": "bc580a196065",
+        "schema": 2,
+        "git_sha": "f691753631c6",
+        "git_dirty": false,
+        "prompt_hash": "90d1955e2b22",
         "registry_hash": "368f977310e4",
-        "fixture_hash": "9ed4efc08a04",
-        "eval_cases_hash": "5b8fb28fddc9",
-        "harness_hash": "57d58cff751f"
+        "fixture_hash": "422e1f2f9b84",
+        "eval_cases_hash": "80ad926eed07",
+        "harness_hash": "1d2c2d494433"
       },
-      "started_at": "2026-11-02T16:04:23+00:00",
-      "finished_at": "2026-11-02T16:04:23+00:00",
+      "started_at": "2026-11-02T18:22:50+00:00",
+      "finished_at": "2026-11-02T18:22:51+00:00",
       "files": [
         "2026-11-02/baseline_deterministic.jsonl"
       ]
@@ -1370,7 +1370,7 @@
           "model": "fake:agent",
           "kind": "fake",
           "runs": 32,
-          "hard_pass_rate": 0.9688,
+          "hard_pass_rate": 1.0,
           "status_accuracy": 1.0,
           "agent_success": 1.0,
           "first_submission_validity": 0.8824,
@@ -1379,9 +1379,9 @@
           "clarification_recall": 1.0,
           "judge_quality": null,
           "latency_p50_ms": 28,
-          "latency_p95_ms": 195,
+          "latency_p95_ms": 199,
           "cost_per_plan_usd": 0.0,
-          "hard_passes": 31,
+          "hard_passes": 32,
           "status_ok_runs": 32,
           "agent_successes": 16,
           "first_submit_valid": 15,
@@ -1399,7 +1399,7 @@
           "pass_hat_k": null,
           "k": 1,
           "cases": 32,
-          "latency_mean_ms": 1443,
+          "latency_mean_ms": 1444,
           "node_latency_p50_ms": {
             "ask_clarification": 0,
             "build_context": 0,
@@ -1444,7 +1444,7 @@
               "model": "fake:agent",
               "kind": "fake",
               "runs": 32,
-              "hard_pass_rate": 0.9688,
+              "hard_pass_rate": 1.0,
               "status_accuracy": 1.0,
               "agent_success": 1.0,
               "first_submission_validity": 0.8824,
@@ -1453,9 +1453,9 @@
               "clarification_recall": 1.0,
               "judge_quality": null,
               "latency_p50_ms": 28,
-              "latency_p95_ms": 195,
+              "latency_p95_ms": 199,
               "cost_per_plan_usd": 0.0,
-              "hard_passes": 31,
+              "hard_passes": 32,
               "status_ok_runs": 32,
               "agent_successes": 16,
               "first_submit_valid": 15,
@@ -1473,7 +1473,7 @@
               "pass_hat_k": null,
               "k": 1,
               "cases": 32,
-              "latency_mean_ms": 1443,
+              "latency_mean_ms": 1444,
               "node_latency_p50_ms": {
                 "ask_clarification": 0,
                 "build_context": 0,
@@ -1558,8 +1558,8 @@
             },
             "grounding": {
               "runs": 3,
-              "hard_passes": 2,
-              "hard_pass_rate": 0.6667
+              "hard_passes": 3,
+              "hard_pass_rate": 1.0
             },
             "infeasible": {
               "runs": 1,
@@ -1602,7 +1602,7 @@
               "hard_pass_rate": 1.0
             }
           },
-          "session": "20261102T160335Z-3cfd6b",
+          "session": "20261102T182203Z-fc18fa",
           "suite": "offline",
           "coverage": {
             "cases": 32,
@@ -1610,17 +1610,17 @@
             "partial": false
           },
           "provenance": {
-            "schema": 1,
-            "git_sha": "053ba54f13de",
+            "schema": 2,
+            "git_sha": "f691753631c6",
             "git_dirty": false,
-            "prompt_hash": "bc580a196065",
+            "prompt_hash": "90d1955e2b22",
             "registry_hash": "368f977310e4",
-            "fixture_hash": "9ed4efc08a04",
-            "eval_cases_hash": "5b8fb28fddc9",
-            "harness_hash": "57d58cff751f"
+            "fixture_hash": "422e1f2f9b84",
+            "eval_cases_hash": "80ad926eed07",
+            "harness_hash": "1d2c2d494433"
           },
-          "started_at": "2026-11-02T16:03:36+00:00",
-          "finished_at": "2026-11-02T16:04:22+00:00",
+          "started_at": "2026-11-02T18:22:03+00:00",
+          "finished_at": "2026-11-02T18:22:49+00:00",
           "files": [
             "2026-11-02/fake_agent.jsonl"
           ]
@@ -1652,7 +1652,7 @@
           "fake:agent": 1.0
         },
         "grounding": {
-          "fake:agent": 0.6667
+          "fake:agent": 1.0
         },
         "infeasible": {
           "fake:agent": 1.0
@@ -1732,34 +1732,7 @@
           "fake:agent": 1
         }
       },
-      "failures": [
-        {
-          "model": "fake:agent",
-          "case": "agent_ends_without_submit",
-          "split": "dev",
-          "category": "grounding",
-          "repeat": 1,
-          "status": "complete",
-          "mode": "agent",
-          "expected_statuses": [
-            "complete",
-            "fallback"
-          ],
-          "error": null,
-          "failed": [
-            {
-              "name": "case.1.one_nudge_then_fallback",
-              "text": "One nudge, then fallback",
-              "detail": "nudges=1, submit_attempts=0, status=complete, mode=agent"
-            },
-            {
-              "name": "case.2.free_form_model_text_never_rendered_as_a_plan",
-              "text": "Free-form model text never rendered as a plan",
-              "detail": "status=complete, mode=agent, submit_attempts=0"
-            }
-          ]
-        }
-      ]
+      "failures": []
     }
   },
   "failures": [
@@ -2633,7 +2606,7 @@
   ],
   "skipped": [],
   "judge": null,
-  "record_count": 335,
+  "record_count": 393,
   "superseded_sessions": [
     {
       "suite": "models",
@@ -2646,6 +2619,13 @@
       "suite": "models",
       "model": "baseline:deterministic",
       "session": "20261102T150457Z-ae15aa",
+      "runs": 26,
+      "relation": "older"
+    },
+    {
+      "suite": "models",
+      "model": "baseline:deterministic",
+      "session": "20261102T160422Z-d66fe8",
       "runs": 26,
       "relation": "older"
     },
@@ -2697,6 +2677,13 @@
       "session": "20261102T150406Z-4da962",
       "runs": 32,
       "relation": "older"
+    },
+    {
+      "suite": "offline",
+      "model": "fake:agent",
+      "session": "20261102T160335Z-3cfd6b",
+      "runs": 32,
+      "relation": "older"
     }
   ],
   "not_run": [
@@ -2716,6 +2703,7 @@
   "stopped_early": [],
   "harness_exceptions": [],
   "record_schemas": {
-    "1": 335
+    "1": 335,
+    "2": 58
   }
 }
