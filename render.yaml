@@ -1,0 +1,107 @@
+# Render Blueprint: one Docker web service in Singapore serving the API and the built UI from one origin.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo. Render asks for every `sync: false` value
+# (secrets and the Neon connection string); leave optional ones empty. Never commit real values here.
+#
+# Database: a Neon Postgres project in AWS ap-southeast-1 (Singapore, next to this service). Paste its
+# connection string into DATABASE_URL, e.g. postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require
+# The app creates its tables and the LangGraph checkpoint tables on startup. Both pools disable server-side
+# prepared statements, so Neon's pooled (-pooler) host works as well as the direct one.
+#
+# Plan: free instances sleep after 15 idle minutes and take about a minute to wake, which reviewers would hit,
+# so this uses an always-on paid instance. Change `plan` if you accept cold starts.
+# PR preview environments (IMPLEMENTATION_PLAN.md section 11) need a Render workspace plan that supports them;
+# enable with `previews: {generation: automatic}` at the top level once available.
+services:
+  - type: web
+    name: saturday-planner
+    runtime: docker
+    region: singapore
+    plan: starter
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    # Deploy a pushed commit only after its GitHub Actions checks pass, so a broken commit never replaces a
+    # working deploy. Rollback: dashboard -> Events -> pick an earlier deploy -> Rollback.
+    autoDeployTrigger: checksPass
+    # In-flight plans are drained on SIGTERM for up to RUN_DEADLINE_S + 10 s.
+    maxShutdownDelaySeconds: 75
+    envVars:
+      # --- Runtime ------------------------------------------------------------------------------------------
+      # PORT is injected by Render and honoured by the image. GIT_SHA is not set: the image falls back to
+      # RENDER_GIT_COMMIT, so /api/health, logs and Sentry releases carry the deployed commit.
+      - key: APP_ENV
+        value: prod
+      # Behind Render's proxy: client IP for rate limits = right-most X-Forwarded-For hop.
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+      - key: FRONTEND_DIST
+        value: /app/frontend/dist
+
+      # --- Models (registry IDs from backend/app/llm/models.yaml) ------------------------------------------
+      - key: PRIMARY_MODEL
+        value: anthropic:claude-opus-5-5
+      # Optional second-provider fallback, e.g. a pinned google_genai:... model once evaluated.
+      - key: FALLBACK_MODEL
+        sync: false
+      # Judge model is used by evals only; leave empty in production.
+      - key: JUDGE_MODEL
+        sync: false
+      # Local models are not reachable from Render; kept so the value is explicit.
+      - key: OLLAMA_BASE_URL
+        value: http://127.0.0.1:11434
+      # Provider keys are read from the environment by the LangChain integrations.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: XAI_API_KEY
+        sync: false
+
+      # --- Data providers ("auto" = live provider when its key is set, else the keyless option) -----------
+      - key: PLACES_PROVIDER
+        value: auto  # google with GOOGLE_MAPS_API_KEY, else osm_snapshot (keyless curated snapshot)
+      - key: EVENTS_PROVIDER
+        value: auto  # tavily with TAVILY_API_KEY, else none
+      - key: WEATHER_PROVIDER
+        value: open_meteo  # keyless
+      - key: GEOCODER
+        value: open_meteo  # keyless
+      - key: GOOGLE_MAPS_API_KEY  # restrict it to Places API (New)
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+
+      # --- Limits ------------------------------------------------------------------------------------------
+      - key: RUN_DEADLINE_S
+        value: "60"
+      - key: MAX_AGENT_TURNS
+        value: "10"
+      - key: MAX_SUBMIT_ATTEMPTS
+        value: "3"
+      - key: DAILY_PLAN_CAP
+        value: "200"
+      - key: RATE_LIMIT_PER_10MIN
+        value: "5"
+      - key: RATE_LIMIT_PER_DAY
+        value: "30"
+      - key: MAX_BODY_BYTES
+        value: "16384"
+      - key: SHARE_TTL_DAYS
+        value: "30"
+
+      # --- Storage and observability -----------------------------------------------------------------------
+      - key: DATABASE_URL  # Neon connection string (see the top of this file)
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: TRACING_ENABLED
+        value: "false"  # set "true" together with LANGSMITH_API_KEY; prod traces hide inputs and outputs
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGSMITH_PROJECT
+        value: saturday-planner-prod
+
+      # Not set on purpose: FIXTURE_WEATHER (fixture weather provider only), FIXED_NOW and FAULT (tests and
+      # evals only; ignored when APP_ENV=prod).

@@ -20,7 +20,7 @@ from app.domain.schemas import (
     WorldContext,
 )
 from app.domain.timeutil import next_saturday
-from app.providers.base import ProviderError
+from app.providers.base import PlacesProvider, ProviderError
 from app.trace import Tracer
 
 PLACES_UNAVAILABLE = "Live place data is temporarily unavailable"
@@ -69,7 +69,7 @@ async def search_places(queries: list[PlaceQuery], ctx: WorldContext, deps: Deps
 
     Returns (candidates, degradations, places_available).
     """
-    async def run(provider_name: str, q: PlaceQuery, provider) -> list[Candidate]:  # type: ignore[no-untyped-def]
+    async def run(provider_name: str, q: PlaceQuery, provider: PlacesProvider) -> list[Candidate]:
         with tracer.tool("search_places", reason=q.intent, node="gather_candidates") as info:
             found = await provider.search(q, ctx)
             info["summary"] = f"{len(found)} places for '{q.intent}' ({provider_name})"

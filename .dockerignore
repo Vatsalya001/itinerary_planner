@@ -1,0 +1,53 @@
+# Keep the build context small and free of secrets and host-specific artifacts. The image installs its own
+# dependencies (npm ci, uv sync --frozen) and builds the frontend itself, so none of these are needed.
+
+# Version control, CI and editors
+.git
+.github
+.gitignore
+.idea
+.vscode
+**/.DS_Store
+**/*.swp
+
+# Secrets and local environment at any depth. Configure the container with environment variables instead.
+# This also stops a local frontend/.env.local from being inlined into the production bundle by Vite.
+**/.env
+**/.env.*
+
+# Python environments and caches
+**/.venv
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.coverage
+**/htmlcov
+
+# Local databases (the container writes its own under /app/var) and eval scratch output.
+# evals/results/summary.json is kept: /api/evals/summary serves it when the DB has no summary.
+backend/data/*.db
+backend/data/*.db-*
+backend/evals/results/tmp
+
+# Node: installed with npm ci inside the image (host binaries are platform-specific); dist is rebuilt there
+**/node_modules
+frontend/dist
+frontend/coverage
+frontend/test-results
+frontend/playwright-report
+**/*.tsbuildinfo
+
+# Not used by the image
+backend/tests
+backend/scripts
+docs
+Makefile
+docker-compose.yml
+render.yaml
+IMPLEMENTATION_PLAN.md
+AGENTS.md
+README.md
+*.pdf

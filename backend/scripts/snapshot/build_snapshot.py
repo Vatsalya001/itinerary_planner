@@ -1,8 +1,10 @@
 """Build backend/data/snapshot/bangalore.json from one Overpass download (curation table below)."""
-import json, sys
+import json
+import sys
 
 src, out = sys.argv[1], sys.argv[2]
-data = json.load(open(src, encoding="utf-8"))
+with open(src, encoding="utf-8") as fh:
+    data = json.load(fh)
 by_key = {(e["type"], e["id"]): e for e in data["elements"]}
 
 # (osm type, id) -> (category, popularity, curation note or None)

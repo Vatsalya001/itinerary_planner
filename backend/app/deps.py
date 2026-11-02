@@ -46,6 +46,7 @@ def build_deps(settings: Settings, http: httpx.AsyncClient | None = None) -> Dep
     from app.providers.fixture import FixtureEvents, FixtureGeocoder, FixturePlaces, FixtureWeather
     from app.providers.snapshot import SnapshotPlaces
 
+    settings.export_provider_env()
     client = http
     needs_http = (
         settings.resolved_places_provider() == "google"

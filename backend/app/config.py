@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     geocoder: Literal["open_meteo", "fixture"] = "open_meteo"
     google_maps_api_key: SecretStr | None = None
     tavily_api_key: SecretStr | None = None
+    # Model-provider keys. LangChain reads these from the process environment; export_provider_env()
+    # copies values that came from .env into os.environ so `uv run uvicorn` works without --env-file.
+    anthropic_api_key: SecretStr | None = None
+    google_api_key: SecretStr | None = None
+    xai_api_key: SecretStr | None = None
+    langsmith_api_key: SecretStr | None = None
     fixture_weather: str = "clear"  # clear | rain_85pct | unavailable (fixture provider only)
 
     # Runtime limits
@@ -68,6 +74,19 @@ class Settings(BaseSettings):
 
     def active_fault(self) -> str | None:
         return None if self.is_prod else self.fault
+
+    def export_provider_env(self) -> None:
+        """Expose provider keys loaded from .env to libraries that read os.environ. Never overwrites."""
+        import os
+
+        for env_name, value in (
+            ("ANTHROPIC_API_KEY", self.anthropic_api_key),
+            ("GOOGLE_API_KEY", self.google_api_key),
+            ("XAI_API_KEY", self.xai_api_key),
+            ("LANGSMITH_API_KEY", self.langsmith_api_key),
+        ):
+            if value is not None and value.get_secret_value() and not os.environ.get(env_name):
+                os.environ[env_name] = value.get_secret_value()
 
 
 @lru_cache(maxsize=1)

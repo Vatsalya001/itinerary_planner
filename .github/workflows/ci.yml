@@ -1,0 +1,287 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Comma-separated registry IDs for the model evals (frozen world)"
+        required: true
+        default: "baseline:deterministic,anthropic:claude-opus-5-5"
+      repeats:
+        description: "Repeats per case and model (3 for the report, 1 for a quick run)"
+        required: true
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.6"
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  backend:
+    name: Backend (ruff, mypy, pytest, offline evals)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Lockfile is up to date with pyproject.toml
+        run: uv lock --check
+      - name: Install dependencies (exactly as locked)
+        run: uv sync --frozen
+      - name: Lint (ruff)
+        run: uv run --frozen ruff check .
+      - name: Type-check (mypy)
+        run: uv run --frozen mypy app
+      - name: Test (offline; live and ollama markers are deselected by pytest addopts)
+        run: uv run --frozen pytest
+      - name: Offline eval suite (scripted fake model, frozen world)
+        run: |
+          if [ -f evals/runner.py ]; then
+            uv run --frozen python -m evals.runner --suite offline
+          else
+            echo "::notice::backend/evals/runner.py not found; offline eval suite skipped"
+          fi
+
+  postgres:
+    name: Postgres store and checkpointer
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: planner
+          POSTGRES_PASSWORD: planner  # throwaway CI credentials
+          POSTGRES_DB: planner
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U planner -d planner"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://planner:planner@localhost:5432/planner
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --frozen
+      - name: Store and checkpointer tests against Postgres
+        run: uv run --frozen pytest -m live tests/store
+
+  frontend:
+    name: Frontend (typecheck, lint, test, build)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint (oxlint)
+        run: npm run lint
+      - name: Test (Vitest)
+        run: npm test
+        env:
+          CI: "true"
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: Docker image (build, container smoke test)
+    if: github.event_name != 'workflow_dispatch'
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      IMAGE: saturday-planner:ci
+      BASE_URL: http://127.0.0.1:8000
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE }}
+          build-args: GIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start the container (frozen world, no LLM, in-memory SQLite, no keys)
+        # A short health interval exercises the image's own HEALTHCHECK command quickly.
+        run: |
+          docker run -d --name app -p 8000:8000 --health-interval 2s --health-start-period 5s \
+            -e APP_ENV=test \
+            -e PRIMARY_MODEL=baseline:deterministic \
+            -e PLACES_PROVIDER=fixture -e EVENTS_PROVIDER=fixture \
+            -e WEATHER_PROVIDER=fixture -e GEOCODER=fixture \
+            -e FIXED_NOW=2026-11-05T04:30:00+00:00 \
+            -e DATABASE_URL=sqlite:///:memory: \
+            "$IMAGE"
+          for _ in $(seq 1 45); do
+            if curl -fsS "$BASE_URL/api/health" >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          curl -fsS "$BASE_URL/api/health"
+          echo
+      - name: Container runs as uid 1000 and cannot modify the app
+        run: |
+          test "$(docker exec app id -u)" = 1000
+          test "$(docker exec app id -g)" = 1000
+          docker exec app sh -c 'test ! -w /app/backend/app && test ! -w /app/frontend/dist && test -w /app/var'
+          for _ in $(seq 1 20); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' app)
+            [ "$status" = healthy ] && break
+            sleep 2
+          done
+          echo "docker health: $status"
+          test "$status" = healthy
+      - name: HTTP smoke test (health, UI, security headers, plan JSON + SSE, share link)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+
+          # Health: 200, DB reachable, baseline model, version = commit
+          curl -fsS "$BASE_URL/api/health" -o "$tmp/health.json"
+          jq -e '.status == "ok" and .db == "ok" and .primary_model == "baseline:deterministic"' "$tmp/health.json"
+
+          # UI served from the same origin, SPA fallback for client routes
+          curl -fsS "$BASE_URL/" -o "$tmp/index.html"
+          grep -qi '<!doctype html' "$tmp/index.html"
+          curl -fsS "$BASE_URL/evals" | grep -qi '<!doctype html'
+          # Unknown API paths are JSON 404s, not the SPA
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/nope")" = 404
+
+          # Security headers on the UI and the API
+          for path in / /api/health; do
+            curl -fsS -D "$tmp/headers" -o /dev/null "$BASE_URL$path"
+            for h in content-security-policy x-content-type-options referrer-policy x-frame-options x-request-id; do
+              grep -qi "^$h:" "$tmp/headers" || { echo "missing $h on $path"; cat "$tmp/headers"; exit 1; }
+            done
+            grep -qi '^x-content-type-options: nosniff' "$tmp/headers"
+          done
+
+          # The brief's example, JSON mode
+          body='{"city":"Bangalore","budget":2000,"available_time":"4 hours","mood":"tired but wants to do something fun","interests":["food","music","walks"],"constraints":["vegetarian","avoid crowded places"]}'
+          code=$(curl -sS -o "$tmp/plan.json" -w '%{http_code}' -X POST "$BASE_URL/api/plan" \
+            -H 'Content-Type: application/json' -H 'Accept: application/json' -d "$body")
+          echo "plan: HTTP $code $(head -c 300 "$tmp/plan.json")"
+          test "$code" = 200
+          jq -e '.status == "complete" and (.plan.stops | length) > 0 and .model == "baseline:deterministic"' "$tmp/plan.json"
+
+          # Share link round trip (stored in redacted form, rehydrated on view)
+          share_id=$(jq -r '.share_id // empty' "$tmp/plan.json")
+          test -n "$share_id"
+          curl -fsS "$BASE_URL/api/plans/$share_id" | jq -e '.status == "complete"'
+
+          # Same request, SSE mode: trace events, then exactly one result event
+          curl -fsSN --max-time 90 -X POST "$BASE_URL/api/plan" \
+            -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d "$body" > "$tmp/stream.txt"
+          grep '^data: ' "$tmp/stream.txt" | sed 's/^data: //' > "$tmp/events.jsonl"
+          echo "sse: $(wc -l < "$tmp/events.jsonl") events"
+          test "$(jq -s '[.[] | select(.type == "result")] | length' "$tmp/events.jsonl")" = 1
+          jq -s -e 'last | .type == "result" and .data.status == "complete"' "$tmp/events.jsonl"
+
+          # Validation errors are 400s that do not echo the input
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/plan" \
+            -H 'Content-Type: application/json' -d '{"budget":"lots"}')" = 400
+          echo "smoke test passed"
+      - name: Container logs
+        if: always()
+        run: docker logs app 2>&1 | tail -n 200 || true
+
+  model-evals:
+    name: Model evals (manual, uses API keys)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      # Inputs go through env (never interpolated into the script) and are validated below.
+      MODELS: ${{ inputs.models }}
+      REPEATS: ${{ inputs.repeats }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Check for the eval harness
+        id: harness
+        run: |
+          if [ -f evals/runner.py ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::backend/evals/runner.py not found; model evals skipped"
+          fi
+      - name: Validate inputs
+        if: steps.harness.outputs.present == 'true'
+        run: |
+          [[ "$MODELS" =~ ^[A-Za-z0-9_.:,-]+$ ]] || { echo "::error::invalid models input"; exit 1; }
+          [[ "$REPEATS" =~ ^[1-9][0-9]?$ ]] || { echo "::error::repeats must be 1-99"; exit 1; }
+      - name: Install dependencies
+        if: steps.harness.outputs.present == 'true'
+        run: uv sync --frozen
+      - name: Run model evals (frozen world)
+        if: steps.harness.outputs.present == 'true'
+        working-directory: .
+        run: make eval MODELS="$MODELS" REPEATS="$REPEATS"
+      - name: Generate the report
+        if: steps.harness.outputs.present == 'true' && hashFiles('backend/evals/report.py') != ''
+        working-directory: .
+        run: make eval-report
+      - name: Upload results
+        if: always() && steps.harness.outputs.present == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-results-${{ github.run_id }}
+          path: |
+            backend/evals/results/
+            docs/EVAL_REPORT.md
+          if-no-files-found: warn

@@ -1,0 +1,70 @@
+# Run the production image locally.
+#
+#   docker compose up --build                       # app on http://localhost:8000, SQLite in a named volume
+#   docker compose --profile postgres up --build    # app + Postgres 17 (prod-like: store and checkpoints in Postgres)
+#
+# Configuration comes from backend/.env (copy .env.example there; optional). Do not quote values in that file:
+# Docker's env-file parser keeps quotes literally. A few values are pinned below to the image layout so host
+# paths in backend/.env cannot break the container.
+#
+# Local models stay on the host: Docker on macOS has no Metal GPU access, so Ollama inside a container would be
+# CPU-only and far too slow. The container reaches the host's Ollama through host.docker.internal (start it
+# with `make ollama`).
+name: saturday-planner
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-local}
+    image: saturday-planner:local
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - path: backend/.env
+        required: false
+    environment:
+      PORT: "8000"
+      FRONTEND_DIST: /app/frontend/dist
+      # Not ${OLLAMA_BASE_URL}: .env points that at localhost, which inside a container is the container itself.
+      OLLAMA_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # Default: SQLite in the app-data volume. With --profile postgres, set
+      #   COMPOSE_DATABASE_URL=postgresql://planner:planner@postgres:5432/planner
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-sqlite:////app/var/app.db}
+    volumes:
+      - app-data:/app/var
+    extra_hosts:
+      # Docker Desktop resolves host.docker.internal on its own; this mapping makes it work on Linux too.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false  # only when the postgres profile is active
+    # In-flight plans are drained on shutdown for up to RUN_DEADLINE_S + 10 s.
+    stop_grace_period: 75s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["postgres"]
+    environment:
+      # Local-only throwaway credentials; production uses a Neon connection string in DATABASE_URL.
+      POSTGRES_USER: planner
+      POSTGRES_PASSWORD: planner
+      POSTGRES_DB: planner
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U planner -d planner"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  pg-data:
