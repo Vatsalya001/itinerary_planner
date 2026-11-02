@@ -5,8 +5,13 @@ Searches (all with the deterministic planner, app.domain.fallback):
 * cheapest_budget: the lowest worst-case cost over valid plans with the budget ignored (cheapest-first beam).
 * min_minutes: the shortest elapsed time over valid plans with the window relaxed to 600 minutes.
 * one drop test per hard constraint: does a plan exist without it?
+* meal timing: if the plan only works with a sit-down meal outside meal times, say so and offer a start time
+  that lets the meal land in its window (and then never offer to drop a diet or accessibility need);
+* pacing rules (seated stop, walking limit, long rides, stop count) relaxed one at a time, so the reason names
+  the energy-profile rule that binds; for a low-energy day, a one-tap "moderate pace" relaxation when that works;
 * if nothing single works: budget and time relaxed together, then (if the start time is not already 15:00)
-  the default 15:00 start.
+  the default 15:00 start. The "even with an unlimited budget and a longer window" sentence is only used when
+  those searches actually ran and failed.
 
 Relaxation patches use PlanRequest field names: ``budget``, ``available_time`` (minutes), ``constraints``
 (remaining constraint texts) and ``start_time``.
@@ -18,14 +23,17 @@ from collections.abc import Sequence
 
 from app.domain.categories import currency_symbol
 from app.domain.constraints import merge_constraints
-from app.domain.evidence import candidate_allowed
+from app.domain.evidence import MEAL_EARLY_MIN, candidate_allowed
 from app.domain.fallback import SearchResult, search_plans
-from app.domain.pacing import meal_windows_between
+from app.domain.pacing import MEAL_WINDOWS, meal_windows_between, profile_for
+from app.domain.parser_rules import DEFAULT_BUDGETS
 from app.domain.schedule import plan_currency
 from app.domain.schemas import (
     Candidate,
     Constraint,
+    Energy,
     InfeasibleReport,
+    PacingProfile,
     Preferences,
     Relaxation,
     WorldContext,
@@ -101,6 +109,29 @@ def _relaxed_time(ctx: WorldContext, prefs: Preferences, start_min: int | None =
     return new_ctx, new_prefs
 
 
+def _hhmm(minutes: int) -> str:
+    h, m = divmod(minutes % (24 * 60), 60)
+    return f"{h:02d}:{m:02d}"
+
+
+def _shifted(ctx: WorldContext, prefs: Preferences, start: int) -> tuple[WorldContext, Preferences]:
+    end = start + prefs.available_minutes
+    new_ctx = ctx.model_copy(update={"start_min": start, "end_min": end, "meal_windows": meal_windows_between(start, end)})
+    return new_ctx, prefs.model_copy(update={"start_min": start})
+
+
+def _meal_aligned_starts(ctx: WorldContext) -> list[int]:
+    """Start times near the requested one that put a main meal window at (or just after) the start."""
+    starts: set[int] = set()
+    for w in MEAL_WINDOWS:
+        if w.name == "snack":
+            continue
+        for t in (w.start_min - MEAL_EARLY_MIN, w.start_min):
+            if t != ctx.start_min and abs(t - ctx.start_min) <= 4 * 60:
+                starts.add(t)
+    return sorted(starts, key=lambda t: (abs(t - ctx.start_min), t))
+
+
 def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs: Preferences,
                        constraints: list[Constraint], travel: TravelEstimator) -> InfeasibleReport:
     """Which constraint removed what; cheapest feasible budget and minimum minutes found by re-running the
@@ -110,6 +141,16 @@ def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs
     unique = list({c.id: c for c in candidates}.values())
 
     if not unique:
+        default = DEFAULT_BUDGETS.get(plan_currency(ctx, prefs))
+        if prefs.budget is not None and default is not None and prefs.budget < default:
+            # searches filter by price for small budgets: an empty pool means nothing affordable, not nothing at all
+            return InfeasibleReport(
+                reason=(f"Nothing affordable turned up in {ctx.location.name} for a budget of {sym}{prefs.budget}; "
+                        "places there may simply cost more. A higher budget would let the search include them."),
+                binding_constraints=["budget"],
+                relaxations=[Relaxation(label=f"Raise budget to {sym}{default}",
+                                        patch={"budget": default, "currency": plan_currency(ctx, prefs)})],
+            )
         return InfeasibleReport(
             reason=f"No places or events were found for {ctx.location.name}, so no plan could be built.",
         )
@@ -143,8 +184,29 @@ def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs
         relaxations.append(Relaxation(label=f"Allow {fmt_duration(min_minutes)}",
                                       patch={"available_time": min_minutes}))
 
+    # meal timing: sit-down meals only go in breakfast/lunch/dinner (or just before); is that what binds?
+    meal_sentence = None
+    meal_start: int | None = None
+    if search_plans(unique, ctx, prefs, enforced, travel, meal_timing=False) is not None:
+        binding.append("meal_timing")
+        for t in _meal_aligned_starts(ctx):
+            m_ctx, m_prefs = _shifted(ctx, prefs, t)
+            if search_plans(unique, m_ctx, m_prefs, enforced, travel) is not None:
+                meal_start = t
+                break
+        if meal_start is not None:
+            meal_sentence = (f"The options that fit include a sit-down meal, and meals are planned inside meal times; "
+                             f"starting at {fmt_clock(meal_start)} lets it land at a proper time.")
+            relaxations.append(Relaxation(label=f"Start at {fmt_clock(meal_start)}",
+                                          patch={"start_time": _hhmm(meal_start)}))
+        else:
+            meal_sentence = ("The options that fit include a sit-down meal, but no meal time (lunch from 12:00 PM, "
+                             "dinner from 7:30 PM) falls inside your window.")
+
     drop_labels: list[str] = []
     for con in enforced:
+        if meal_start is not None and con.kind in {"diet", "access"}:
+            continue  # timing is what binds: never suggest giving up a diet or accessibility need
         remaining = [c for c in enforced if c != con]
         relaxed = prefs.model_copy(update={"hard_constraints": remaining})
         if search_plans(unique, ctx, relaxed, remaining, travel) is not None:
@@ -154,9 +216,39 @@ def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs
             relaxations.append(Relaxation(label=f"Drop '{label}'",
                                           patch={"constraints": _remaining_texts(remaining, con)}))
 
+    # pacing rules (energy profile): test each on its own so the reason names the one that binds
+    pacing = ctx.pacing
+    energy = pacing.energy.value
+    pacing_sentences: list[str] = []
+    rule_tests: list[tuple[str, PacingProfile, str]] = []
+    if pacing.min_seated_stops:
+        rule_tests.append(("seated", pacing.model_copy(update={"min_seated_stops": 0}),
+                           f"A {energy}-energy day needs at least one seated stop, and no seated option fits the rest "
+                           "of your requirements."))
+    rule_tests.append(("walking", pacing.model_copy(update={"max_walk_minutes": RELAXED_MINUTES}),
+                       f"The {energy}-energy walking limit of {pacing.max_walk_minutes} min is too tight for these "
+                       "options."))
+    rule_tests.append(("long_legs", pacing.model_copy(update={"max_long_legs": 10}),
+                       f"A {energy}-energy day allows at most {pacing.max_long_legs} longer ride(s), and the options "
+                       "are spread out."))
+    rule_tests.append(("stops", pacing.model_copy(update={"max_stops": 6}),
+                       f"A {energy}-energy day allows at most {pacing.max_stops} stops, too few for everything you "
+                       "asked to include."))
+    for key, relaxed_pacing, sentence in rule_tests:
+        if search_plans(unique, ctx, prefs, enforced, travel, pacing=relaxed_pacing) is not None:
+            binding.append(f"pacing:{key}")
+            pacing_sentences.append(sentence)
+    medium = profile_for(Energy.MEDIUM)
+    if (pacing.energy == Energy.LOW and pacing_sentences
+            and search_plans(unique, ctx, prefs, enforced, travel, pacing=medium) is not None):
+        relaxations.append(Relaxation(label="Plan at a moderate pace",
+                                      patch={"mood": "feeling okay, happy with a moderate pace"}))
+
     joint_budget: int | None = None
     joint_minutes: int | None = None
+    joint_tested = False
     if not relaxations:
+        joint_tested = True
         joint = search_plans(unique, t_ctx, t_prefs, enforced, travel, objective="cheapest", ignore_budget=True)
         if joint is not None and joint.report.plan is not None:
             joint_budget = joint.report.plan.totals.worst_case
@@ -173,7 +265,7 @@ def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs
                 binding.append("time")
             if patch:
                 relaxations.append(Relaxation(label=(" and ".join(parts)).capitalize(), patch=dict(patch)))
-    if not relaxations and ctx.start_min != DEFAULT_START_MIN:
+    if ctx.start_min != DEFAULT_START_MIN and meal_start is None:
         s_ctx = ctx.model_copy(update={
             "start_min": DEFAULT_START_MIN, "end_min": DEFAULT_START_MIN + prefs.available_minutes,
             "meal_windows": meal_windows_between(DEFAULT_START_MIN, DEFAULT_START_MIN + prefs.available_minutes),
@@ -195,8 +287,13 @@ def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs
     if "time" in binding and min_minutes is not None:
         sentences.append(f"The shortest valid plan needs {fmt_duration(min_minutes)}, more than the "
                          f"{fmt_duration(prefs.available_minutes)} you have.")
-    if cheapest_budget is None and min_minutes is None and joint_budget is None:
-        sentences.append("Even with an unlimited budget or a longer window, nothing found fits this start time "
+    if meal_sentence:
+        sentences.append(meal_sentence)
+    sentences.extend(pacing_sentences)
+    if joint_tested and not pacing_sentences and not meal_sentence and cheapest_budget is None \
+            and min_minutes is None and joint_budget is None:
+        # all three searches ran: budget unlimited, window relaxed, and both together
+        sentences.append("Even with an unlimited budget and a longer window, nothing found fits this start time "
                          "and every hard constraint.")
     if "start_time" in binding:
         sentences.append(f"Starting at {fmt_clock(DEFAULT_START_MIN)} would make a plan possible.")

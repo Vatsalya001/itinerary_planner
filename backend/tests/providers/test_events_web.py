@@ -15,6 +15,8 @@ import respx
 from app.domain.schemas import Evidence, WorldContext
 from app.providers.base import EventsProvider, ProviderError
 from app.providers.events_web import (
+    APPROX_ADDRESS_PREFIX,
+    APPROX_LOCATION_TAG,
     MAX_PAGE_BYTES,
     TAVILY_URL,
     USER_AGENT,
@@ -343,3 +345,117 @@ async def test_live_tavily_events(blr_ctx: WorldContext) -> None:
         events = await TavilyEvents(os.environ["TAVILY_API_KEY"], client).search(["music"], blr_ctx)
     for e in events:  # may legitimately be empty; every returned event must obey the rules
         assert e.event_date == blr_ctx.date and e.source.url and e.source.url.startswith("https://")
+
+
+# ---------------------------------------------------------------------------
+# Verification fixes: D-20 prices, D-27 approximate locations, D-26 robots and response hardening
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("price", "expected"),
+    [
+        ("₹1,500 - ₹2,000", (1500, 2000, "ticket_price")),
+        ("1,500", (1500, 1500, "ticket_price")),
+        ("INR 1500", (1500, 1500, "ticket_price")),
+        ("1500 INR", (1500, 1500, "ticket_price")),
+        ("Rs. 499/-", (499, 499, "ticket_price")),
+        ("₹ 1,50,000", (150000, 150000, "ticket_price")),
+        ("499.50", (499, 500, "ticket_price")),
+        ("299 to 999", (299, 999, "ticket_price")),
+        ("Free", (0, 0, "free")),
+        (1000.0, (1000, 1000, "ticket_price")),
+        ("1e3", (0, 1500, "category_estimate")),  # scientific notation: unknown
+        ("-500", (0, 1500, "category_estimate")),
+        ("from 500", (0, 1500, "category_estimate")),
+        ("TBA", (0, 1500, "category_estimate")),
+        ("2,000 - 1,500", (0, 1500, "category_estimate")),  # inverted
+        ("$20", (0, 1500, "category_estimate")),  # another currency: offer skipped
+        ("1500 XYZ", (0, 1500, "category_estimate")),
+        (True, (0, 1500, "category_estimate")),
+    ],
+)
+def test_listed_price_strings(blr_ctx: WorldContext, price: Any, expected: tuple[int, int, str]) -> None:
+    [c] = extract_events_from_html(page(ev(offers={"price": price})), PAGE, blr_ctx)
+    assert (c.cost.min, c.cost.max, c.cost.basis) == expected
+
+
+def test_low_price_without_ceiling_is_unknown(blr_ctx: WorldContext) -> None:
+    [c] = extract_events_from_html(page(ev(offers={"@type": "AggregateOffer", "lowPrice": "500"})), PAGE, blr_ctx)
+    assert c.cost.basis == "category_estimate"
+
+
+def test_approximate_location_is_labelled(blr_ctx: WorldContext) -> None:
+    [c] = extract_events_from_html(page(ev(location={"@type": "Place", "name": "Hall B"})), PAGE, blr_ctx)
+    assert APPROX_LOCATION_TAG in c.tags
+    assert c.address is not None and c.address.startswith(APPROX_ADDRESS_PREFIX) and "Hall B" in c.address
+    assert c.maps_url is not None and "Hall+B%2C+Bengaluru" in c.maps_url
+    assert f"{blr_ctx.location.lat:.6f}" not in c.maps_url  # never pins the city centre as if it were the venue
+    [no_venue] = extract_events_from_html(page(ev(location=None)), PAGE, blr_ctx)
+    assert no_venue.address == APPROX_ADDRESS_PREFIX
+    [geo] = extract_events_from_html(page(ev()), PAGE, blr_ctx)
+    assert APPROX_LOCATION_TAG not in geo.tags and geo.address is not None
+    assert not geo.address.startswith(APPROX_ADDRESS_PREFIX)
+
+
+def test_one_unreadable_event_does_not_sink_the_page(blr_ctx: WorldContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.providers.events_web as ew
+
+    real = ew.event_to_candidate
+
+    def flaky(obj: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        if obj.get("name") == "Boom":
+            raise RuntimeError("unexpected")
+        return real(obj, *args, **kwargs)
+
+    monkeypatch.setattr(ew, "event_to_candidate", flaky)
+    names = [c.name for c in extract_events_from_html(page([ev(name="Boom"), ev(name="Fine")]), PAGE, blr_ctx)]
+    assert names == ["Fine"]
+
+
+@pytest.mark.parametrize(("robots_response", "fetched"), [
+    # the Disallow line sits beyond the 64 KB cap, so it is never read
+    (httpx.Response(200, text="User-agent: *\n#" + "x" * 70_000 + "\nDisallow: /\n"), True),
+    (httpx.Response(200, text="User-agent: *\nDisallow: /\n"), False),
+    (httpx.Response(301, headers={"location": "https://elsewhere.example/robots.txt"}), False),
+])
+async def test_robots_reads_are_capped(blr_ctx: WorldContext, robots_response: httpx.Response, fetched: bool) -> None:
+    a = "https://www.district.in/events/a"
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(TAVILY_URL).mock(return_value=tavily_results(a))
+        mock.get(ROBOTS).mock(return_value=robots_response)
+        route = mock.get(a).mock(return_value=html_response(page(ev(url=a))))
+        async with httpx.AsyncClient() as client:
+            await TavilyEvents(KEY, client).search([], blr_ctx)
+    assert route.called is fetched
+
+
+async def test_robots_deadline_blocks_fetch(blr_ctx: WorldContext) -> None:
+    a = "https://www.district.in/events/a"
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(TAVILY_URL).mock(return_value=tavily_results(a))
+        mock.get(ROBOTS).mock(side_effect=TimeoutError())
+        route = mock.get(a)
+        async with httpx.AsyncClient() as client:
+            assert await TavilyEvents(KEY, client).search([], blr_ctx) == []
+    assert not route.called
+
+
+@pytest.mark.parametrize("payload", [[], {"results": "nope"}, {"results": {"url": "x"}}])
+async def test_unexpected_tavily_shapes_raise_provider_error(blr_ctx: WorldContext, payload: Any) -> None:
+    with respx.mock() as mock:
+        mock.post(TAVILY_URL).mock(return_value=httpx.Response(200, json=payload))
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(ProviderError) as info:
+                await TavilyEvents(KEY, client).search([], blr_ctx)
+    assert info.value.code == "bad_response"
+
+
+async def test_tavily_skips_userinfo_and_hostless_urls(blr_ctx: WorldContext) -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(TAVILY_URL).mock(return_value=tavily_results(
+            "https://", "https://evil.example@www.district.in/x", "https://www.district.in@evil.example/y"))
+        robots = mock.get(ROBOTS)
+        async with httpx.AsyncClient() as client:
+            assert await TavilyEvents(KEY, client).search([], blr_ctx) == []
+    assert not robots.called

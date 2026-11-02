@@ -306,3 +306,121 @@ async def test_live_google_places_search(blr_ctx: WorldContext) -> None:
         res = await GooglePlaces(os.environ["GOOGLE_MAPS_API_KEY"], client).search(
             PlaceQuery(intent="vegetarian cafe", limit=5), blr_ctx)
     assert res and all(c.id.startswith("gp:") and c.source.attribution == "Google Maps" for c in res)
+
+
+# ---------------------------------------------------------------------------
+# Verification fixes: D-18 malformed places, D-19 midnight join, neighbourhood bias
+# ---------------------------------------------------------------------------
+
+MALFORMED = {
+    "non_string_type": place("BAD", types=[1, "cafe"], primaryType=None),
+    "null_hour": place("BAD", regularOpeningHours={"periods": [{"open": {"day": SAT, "hour": None},
+                                                                "close": _p(SAT, 20)}]}),
+    "day_as_text": place("BAD", regularOpeningHours={"periods": [{"open": {"day": "SAT", "hour": 9},
+                                                                  "close": _p(SAT, 20)}]}),
+    "hour_out_of_range": place("BAD", regularOpeningHours={"periods": [{"open": _p(SAT, 30), "close": _p(SAT, 20)}]}),
+    "negative_price": place("BAD", priceRange={"startPrice": {"currencyCode": "INR", "units": "-500"},
+                                               "endPrice": {"currencyCode": "INR", "units": "-100"}}),
+    "inverted_price": place("BAD", priceRange={"startPrice": {"currencyCode": "INR", "units": "900"},
+                                               "endPrice": {"currencyCode": "INR", "units": "100"}}),
+    "price_units_text": place("BAD", priceRange={"startPrice": {"currencyCode": "INR", "units": "lots"}}),
+    "rating_count_text": place("BAD", userRatingCount="many"),
+    "veg_flag_text": place("BAD", servesVegetarianFood="yes"),
+    "periods_not_list": place("BAD", regularOpeningHours={"periods": "always"}),
+    "not_an_object": "just a string",
+}
+
+
+@pytest.mark.parametrize("bad", list(MALFORMED.values()), ids=list(MALFORMED))
+async def test_one_malformed_place_is_skipped_and_logged_by_index(
+    blr_ctx: WorldContext, bad: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING", logger="app.providers.google_places")
+    res, _ = await run_search([place("GOOD"), bad, place("ALSO_GOOD")], blr_ctx)
+    assert [c.id for c in res] == ["gp:GOOD", "gp:ALSO_GOOD"]
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages == ["google_places: skipped malformed place at index 1"]
+    assert all("BAD" not in m and "Synthetic" not in m for m in messages)  # index only, no place content
+
+
+async def test_missing_or_unusable_location_is_skipped_quietly(blr_ctx: WorldContext) -> None:
+    places = [place("NOLOC", location=None), place("STRLOC", location={"latitude": "12.9", "longitude": "77.5"}),
+              place("OFFMAP", location={"latitude": 123.0, "longitude": 77.5}), place("GOOD")]
+    res, _ = await run_search(places, blr_ctx)
+    assert [c.id for c in res] == ["gp:GOOD"]
+
+
+@pytest.mark.parametrize("payload", [[], "nope", {"places": "nope"}, {"places": {"id": "x"}}])
+async def test_unexpected_response_shapes_raise_provider_error(blr_ctx: WorldContext, payload: Any) -> None:
+    with respx.mock() as mock:
+        mock.post(SEARCH_URL).mock(return_value=httpx.Response(200, json=payload))
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(ProviderError) as info:
+                await GooglePlaces(KEY, client).search(PlaceQuery(intent="cafe"), blr_ctx)
+    assert info.value.code == "bad_response" and not info.value.retryable
+
+
+async def test_empty_response_is_no_results(blr_ctx: WorldContext) -> None:
+    res, _ = await run_search([], blr_ctx)
+    assert res == []
+    with respx.mock() as mock:
+        mock.post(SEARCH_URL).mock(return_value=httpx.Response(200, json={}))
+        async with httpx.AsyncClient() as client:
+            assert await GooglePlaces(KEY, client).search(PlaceQuery(intent="cafe"), blr_ctx) == []
+
+
+async def test_malformed_details_raise_provider_error(blr_ctx: WorldContext) -> None:
+    with respx.mock() as mock:
+        mock.get("https://places.googleapis.com/v1/places/ODDONE").mock(
+            return_value=httpx.Response(200, json=place("ODDONE", types=[1])))
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(ProviderError) as info:
+                await GooglePlaces(KEY, client).get("gp:ODDONE", blr_ctx)
+    assert info.value.code == "bad_response"
+
+
+def test_per_day_24_hour_periods_are_joined_across_midnight() -> None:
+    sat = date(2026, 11, 7)
+    every_day = {"periods": [{"open": _p(d, 0), "close": _p((d + 1) % 7, 0)} for d in range(7)]}
+    hours = google_hours_for_date(every_day, None, sat)
+    assert hours.periods == [(0, 2880)]
+    sat_only = {"periods": [{"open": _p(SAT, 9), "close": _p(0, 0)}]}  # Saturday 09:00 to midnight, Sunday shut
+    assert google_hours_for_date(sat_only, None, sat).periods == [(540, 1440)]
+    late = {"periods": [{"open": _p(SAT, 18), "close": _p(0, 0)}, {"open": _p(0, 0), "close": _p(0, 2)}]}
+    assert google_hours_for_date(late, None, sat).periods == [(1080, 1560)]
+
+
+def test_current_hours_are_joined_across_midnight() -> None:
+    sat = date(2026, 11, 7)
+
+    def dated(d: int, h: int, day: int) -> dict[str, Any]:
+        return {**_p(d, h), "date": {"year": 2026, "month": 11, "day": day}}
+
+    current = {"periods": [
+        {"open": dated(SAT, 20, 7), "close": dated(0, 0, 8)},
+        {"open": dated(0, 0, 8), "close": dated(0, 3, 8)},
+    ]}
+    assert google_hours_for_date(None, current, sat).periods == [(1200, 1620)]
+
+
+async def test_neighbourhood_shapes_text_query_and_bias(blr_ctx: WorldContext) -> None:
+    _, route = await run_search([], blr_ctx, PlaceQuery(intent="vegan cafe", neighbourhood="Indiranagar"))
+    body = json.loads(route.calls.last.request.content)
+    assert body["textQuery"] == "vegan cafe in Indiranagar, Bengaluru"
+    assert body["locationBias"]["circle"]["center"] == {"latitude": 12.9784, "longitude": 77.6408}  # gazetteer
+    _, route = await run_search([], blr_ctx, PlaceQuery(intent="vegan cafe", neighbourhood="Indiranagar",
+                                                        near_lat=12.97, near_lng=77.6))
+    body = json.loads(route.calls.last.request.content)
+    assert body["locationBias"]["circle"]["center"] == {"latitude": 12.97, "longitude": 77.6}
+    _, route = await run_search([], blr_ctx, PlaceQuery(intent="cafe", neighbourhood="Nowhere Nagar"))
+    body = json.loads(route.calls.last.request.content)
+    assert body["textQuery"] == "cafe in Nowhere Nagar, Bengaluru"
+    assert body["locationBias"]["circle"]["center"] == {"latitude": 12.9716, "longitude": 77.5946}
+
+
+def test_text_query_with_neighbourhood() -> None:
+    blr = Location(id="x", name="Bengaluru", country_code="IN", lat=12.97, lng=77.59, timezone="Asia/Kolkata")
+    assert text_query("quiet cafe", blr, "Koramangala") == "quiet cafe in Koramangala, Bengaluru"
+    assert text_query("cafe in Koramangala", blr, "Koramangala") == "cafe in Koramangala, Bengaluru"
+    assert text_query("quiet cafe", blr, None) == "quiet cafe in Bengaluru"
+    assert text_query("quiet cafe", blr, "  ") == "quiet cafe in Bengaluru"

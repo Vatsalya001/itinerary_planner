@@ -3,7 +3,8 @@
 Scores are unitless and only used for ranking. Components: interest-tag overlap (with a small synonym map),
 energy fit (seated / low effort for low energy), rating, crowd penalty under ``crowd:avoid``, indoor bias when
 rain is likely, meal-window fit for meal stops, distance from the neighbourhood (or the candidates' centroid),
-and a mild cost penalty relative to the budget.
+a mild cost penalty relative to the budget, a clear penalty for unknown opening hours, mood words (romantic,
+family, artsy, quiet...) and a preference for events with real coordinates.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.domain.evidence import all_tags, is_meal_stop, is_outdoor
+from app.domain.evidence import all_tags, has_approx_location, is_meal_stop, is_outdoor
 from app.domain.schemas import Candidate, Constraint, Energy, MealWindow, Preferences, WorldContext
 from app.domain.travel import coords_valid, haversine_km
 
@@ -103,6 +104,28 @@ def covered_interests(c: Candidate, interests: Sequence[str]) -> set[str]:
     return {i for i in interests if interest_tags(i) & tags}
 
 
+# mood words -> candidate tags that suit the mood (candidate tags come from providers and categories.yaml)
+MOOD_TAGS: list[tuple[re.Pattern[str], frozenset[str]]] = [
+    (re.compile(r"romantic|date night|\bdate\b|partner|anniversary|couple|girlfriend|boyfriend|wife|husband"),
+     frozenset({"romantic", "views", "live music", "music", "dessert", "fine dining"})),
+    (re.compile(r"famil|kids?\b|children|child"), frozenset({"family", "kids", "nature", "parks", "museums"})),
+    (re.compile(r"arty|artsy|creative|inspired"), frozenset({"art", "culture"})),
+    (re.compile(r"adventur|active|outdoorsy"), frozenset({"outdoors", "games", "walks"})),
+    (re.compile(r"chill|relax|lazy|cosy|cozy|unwind"), frozenset({"relax", "coffee", "books"})),
+]
+_QUIET = re.compile(r"quiet|calm|peaceful|tranquil|serene|low[- ]key|not too (busy|crowded)|away from (the )?crowd")
+
+
+def mood_profile(mood: str) -> tuple[frozenset[str], bool]:
+    """(tags the mood favours, wants quiet places) from free-text mood words."""
+    text = (mood or "").lower()
+    tags: set[str] = set()
+    for pattern, favoured in MOOD_TAGS:
+        if pattern.search(text):
+            tags |= favoured
+    return frozenset(tags), bool(_QUIET.search(text))
+
+
 @dataclass(frozen=True)
 class ScoreInputs:
     interests: tuple[str, ...]
@@ -112,6 +135,8 @@ class ScoreInputs:
     anchor: tuple[float, float] | None
     meal_windows: tuple[MealWindow, ...]
     budget: int | None
+    mood_tags: frozenset[str] = frozenset()
+    quiet: bool = False
 
 
 def anchor_point(candidates: Sequence[Candidate], ctx: WorldContext, prefs: Preferences) -> tuple[float, float] | None:
@@ -133,6 +158,7 @@ def anchor_point(candidates: Sequence[Candidate], ctx: WorldContext, prefs: Pref
 def build_inputs(candidates: Sequence[Candidate], ctx: WorldContext, prefs: Preferences,
                  constraints: Sequence[Constraint]) -> ScoreInputs:
     keys = {c.key for c in constraints}
+    mood_tags, quiet = mood_profile(prefs.mood)
     return ScoreInputs(
         interests=tuple(i for i in prefs.interests if i.strip()),
         energy=prefs.energy,
@@ -141,6 +167,8 @@ def build_inputs(candidates: Sequence[Candidate], ctx: WorldContext, prefs: Pref
         anchor=anchor_point(candidates, ctx, prefs),
         meal_windows=tuple(w for w in ctx.meal_windows if w.name in {"breakfast", "lunch", "dinner"}),
         budget=prefs.budget,
+        mood_tags=mood_tags,
+        quiet=quiet,
     )
 
 
@@ -176,7 +204,18 @@ def score_candidate(c: Candidate, inputs: ScoreInputs) -> float:
     if inputs.budget:
         s -= 1.5 * min(1.0, c.cost.max / inputs.budget)
     if c.kind == "place" and c.hours.status != "known":
-        s -= 0.5
+        s -= 2.0  # verified hours should win; unknown hours are only a fallback
     if c.kind == "event":
         s += 0.8
+    if has_approx_location(c):
+        s -= 2.5  # prefer events with real coordinates (legs to this one are guesses)
+    tags = candidate_tags(c)
+    if inputs.mood_tags:
+        s += min(3.0, 1.5 * len(inputs.mood_tags & tags))
+    if tags & {"kids", "children"} and not inputs.mood_tags & {"kids", "family"}:
+        s -= 2.0  # a kids' park is not an adult's first pick
+    if inputs.quiet:
+        s += {"low": 1.0, "medium": 0.0, "high": -1.5}[c.popularity]
+        if "nightlife" in candidate_tags(c):
+            s -= 1.0
     return s

@@ -125,3 +125,27 @@ def test_every_fare_entry_has_source_and_date():
     assert "bengaluru" in raw["bangalore"]["aliases"]
     assert "bombay" in raw["mumbai"]["aliases"]
     assert "new delhi" in raw["delhi"]["aliases"]
+
+
+def test_same_name_in_another_country_does_not_get_indian_fares():
+    delhi_ca = LONDON.model_copy(update={"id": "x:delhi-ca", "name": "Delhi", "country_code": "CA", "currency": "CAD"})
+    ctx = make_ctx(location=delhi_ca)
+    assert travel.city_key(ctx) == "default"
+    a = make_candidate("fx:a", "cafe")
+    leg = travel.leg(a, make_candidate("fx:b", "cafe", offset_km=(3.0, 0.0)), ctx)
+    assert (leg.mode, leg.fare.currency) == ("cab", "CAD")
+
+
+def test_never_prices_legs_in_a_fallback_currency():
+    # a currency with no fare table: walking legs are free in that currency, motorised legs are not priced
+    baht = LONDON.model_copy(update={"id": "x:bkk", "name": "Bangkok", "country_code": "TH", "currency": "THB"})
+    ctx = make_ctx(location=baht)
+    a = make_candidate("fx:a", "cafe")
+    walk = travel.leg(a, make_candidate("fx:b", "cafe", offset_km=(0.3, 0.0)), ctx)
+    assert walk.mode == "walk" and walk.fare.currency == "THB"
+    with pytest.raises(TransferUnknownError):
+        travel.leg(a, make_candidate("fx:c", "cafe", offset_km=(3.0, 0.0)), ctx)
+    # no currency on the location: the country's currency from countries.yaml
+    paris = LONDON.model_copy(update={"id": "x:paris", "name": "Paris", "country_code": "FR", "currency": None})
+    far = travel.leg(a, make_candidate("fx:d", "cafe", offset_km=(3.0, 0.0)), make_ctx(location=paris))
+    assert far.fare.currency == "EUR"

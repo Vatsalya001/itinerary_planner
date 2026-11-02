@@ -288,3 +288,70 @@ def test_search_local_neighbourhood_centres_the_search(blr_ctx: WorldContext) ->
 def test_search_local_ignores_noise_words(blr_ctx: WorldContext) -> None:
     cands = [_cand("a", "Bean", "cafe", 12.972, 77.595)]
     assert [c.id for c in search_local(cands, PlaceQuery(intent="a nice rooftop cafe this evening"), blr_ctx)] == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# Verification fixes (D-26 https URLs, D-19 midnight join, neighbourhood centring)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "ok"),
+    [
+        ("https://example.com/x", True),
+        ("HTTPS://Example.com/x?q=1", True),
+        ("https://example.com:8443/x", True),
+        ("https://", False),
+        ("https:///path-only", False),
+        ("https://user@evil.example/x", False),
+        ("https://good.example@evil.example/x", False),
+        ("https://user:pw@good.example/", False),
+        ("https://exa mple.com/", False),
+        ("https://example.com/\nx", False),
+        ("https://example.com:99999/", False),
+        ("https://.example.com/", False),
+        ("https:\\\\example.com", False),
+        ("http://example.com/", False),
+        ("javascript:alert(1)", False),
+        ("https://" + "a" * 2050 + ".com", False),
+        (None, False),
+        (42, False),
+    ],
+)
+def test_is_https_url_requires_a_real_host(url: object, ok: bool) -> None:
+    assert nz.is_https_url(url) is ok
+
+
+def test_join_next_day() -> None:
+    assert nz.join_next_day([(600, 1440)], [(0, 1440)]) == [(600, 2880)]
+    assert nz.join_next_day([(600, 1440)], [(60, 600)]) == [(600, 1440)]  # next day opens later: no join
+    assert nz.join_next_day([(600, 1320)], [(0, 1440)]) == [(600, 1320)]  # closes before midnight
+    assert nz.join_next_day([(1080, 1560)], [(0, 300)]) == [(1080, 1740)]
+    assert nz.join_next_day([(600, 1440)], []) == [(600, 1440)]
+
+
+def test_neighbourhood_centre(blr_ctx: WorldContext) -> None:
+    loc = blr_ctx.location
+    table = {"indiranagar": (12.9750, 77.6405)}
+    assert nz.neighbourhood_centre("Indiranagar", loc, table) == (12.9750, 77.6405)
+    assert nz.neighbourhood_centre("  INDIRANAGAR ", loc, table) == (12.9750, 77.6405)
+    assert nz.neighbourhood_centre("Koramangala", loc) == (12.9352, 77.6245)  # gazetteer fallback
+    assert nz.neighbourhood_centre("Bandra", loc) is None  # a Mumbai neighbourhood is not in Bengaluru
+    assert nz.neighbourhood_centre("Atlantis Heights", loc) is None
+    assert nz.neighbourhood_centre("", loc) is None and nz.neighbourhood_centre(None, loc) is None
+
+
+def test_search_local_uses_query_neighbourhood(blr_ctx: WorldContext) -> None:
+    far = _cand("k", "Kora Cafe", "cafe", 12.9352, 77.6245, neighbourhood="Koramangala")  # ~5.2 km out
+    near = _cand("n", "Centre Cafe", "cafe", 12.9720, 77.5950)
+    assert [c.id for c in search_local([far, near], PlaceQuery(intent="cafe"), blr_ctx)] == ["n"]
+    res = search_local([far, near], PlaceQuery(intent="cafe", neighbourhood="Koramangala"), blr_ctx)
+    assert [c.id for c in res] == ["k"]  # centred on the gazetteer centroid, the centre is now ~5 km away
+    res = search_local([far, near], PlaceQuery(intent="cafe in koramangala", neighbourhood="Koramangala",
+                                               radius_m=10000), blr_ctx)
+    assert [c.id for c in res] == ["k", "n"]  # in-neighbourhood boost, the name is not a search word
+    pinned = search_local([far, near], PlaceQuery(intent="cafe", neighbourhood="Koramangala",
+                                                  near_lat=12.9720, near_lng=77.5950), blr_ctx)
+    assert [c.id for c in pinned] == ["n"]  # an explicit near point wins
+    unknown = search_local([far, near], PlaceQuery(intent="cafe", neighbourhood="Nowhere Nagar"), blr_ctx)
+    assert [c.id for c in unknown] == ["n"]  # unknown neighbourhood: city centre

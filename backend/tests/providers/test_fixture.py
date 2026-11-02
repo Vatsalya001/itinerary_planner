@@ -211,3 +211,16 @@ async def test_events_max_price_and_other_cities(blr_ctx: WorldContext, bom_ctx:
     assert await FixtureEvents().search([], bom_ctx) == []
     with pytest.raises(KeyError):
         FixtureEvents(["no_such_scenario"])
+
+
+async def test_query_neighbourhood_centres_fixture_search(blr_ctx: WorldContext) -> None:
+    places = FixturePlaces()
+    vegan = await places.search(PlaceQuery(intent="vegan cafe", neighbourhood="Indiranagar"), blr_ctx)
+    assert vegan[0].id == "fx:blr-sprout-vegan-cafe"
+    art = await places.search(PlaceQuery(intent="art gallery", neighbourhood="koramangala"), blr_ctx)
+    assert art[0].id == "fx:blr-studio-kora-gallery"
+    # without the neighbourhood the Koramangala gallery is outside the default radius from the centre
+    assert "fx:blr-studio-kora-gallery" not in {c.id for c in await places.search(PlaceQuery(intent="art gallery"),
+                                                                                   blr_ctx)}
+    unknown = await places.search(PlaceQuery(intent="cafe", neighbourhood="Nowhere Nagar"), blr_ctx)
+    assert unknown and all(c.id.startswith("fx:blr-") for c in unknown)

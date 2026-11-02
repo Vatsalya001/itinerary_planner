@@ -31,9 +31,11 @@ _RULES: list[tuple[str, str, str]] = [
     (r"(?<!non[- ])(?<!non)\b(pure[- ]?)?veg(etarian|gie|)\b|no (meat|non[- ]?veg)", "diet", "vegetarian"),
     (r"(no|avoid|without|skip|don'?t want|not)\b.{0,20}\b(alcohol|drinks|bars?|pubs?|booze|breweries)"
      r"|teetotal|sober|alcohol[- ]free", "alcohol", "avoid"),
-    (r"wheel ?chair|step[- ]free|mobility|(fully |physically )?accessible", "access", "wheelchair"),
-    (r"(avoid|no|not|hate|less|away from|without)\b.{0,20}\b(crowd|crowded|crowds|busy|packed|rush)"
-     r"|uncrowded|not too crowded|quiet places", "crowd", "avoid"),
+    (r"wheel ?chair|step[- ]free|mobility (aid|issues?|impair\w*|scooter)|(fully|physically|disab\w*)[- ]accessible"
+     r"|accessible (venues?|places?|spots?|for (a )?wheel ?chair)|disabled access|can'?t (do|climb) stairs",
+     "access", "wheelchair"),
+    (r"(avoid|no|hate|less|away from|without|fewer|dislike)\b.{0,20}\b(crowds?|crowded|busy|packed|rush)"
+     r"|uncrowded|not (too )?crowded|less crowded|quiet places", "crowd", "avoid"),
     (r"indoors? only|only indoors?|stay indoors?|no outdoor|nothing outdoors?", "setting", "indoors_only"),
     (r"outdoors? only|only outdoors?|nothing indoors?", "setting", "outdoors_only"),
     (r"sit[- ]down (meal|lunch|dinner|restaurant)|proper (meal|lunch|dinner)|(include|have|want) (a )?(meal|lunch|dinner)",
@@ -55,17 +57,49 @@ def map_constraint_text(text: str) -> list[Constraint]:
     lowered = text.lower()
     found: list[Constraint] = []
     for pattern, kind, value in _RULES:
+        if kind == "diet" and diet_negated(lowered, value):
+            continue
         if re.search(pattern, lowered):
             c = Constraint(kind=kind, value=value, source_text=text)  # type: ignore[arg-type,unused-ignore]
             if c not in found:
                 found.append(c)
-    # vegan/jain imply vegetarian; keep only the strictest diet
-    diets = [c for c in found if c.kind == "diet"]
-    if len(diets) > 1:
-        strict = next((c for c in diets if c.value in {"vegan", "jain"}), diets[0])
-        found = [c for c in found if c.kind != "diet"] + [strict]
-    # "must include an outdoor walk" also matches nothing else; "outdoors only" is setting, not a walk
-    return found
+    return _collapse_diets(found)
+
+
+_DIET_WORDS = {"vegetarian": r"(veg|vegetarian|veggie)", "vegan": r"vegan", "jain": r"jain"}
+
+
+def diet_negated(text: str, diet: str) -> bool:
+    """True when this specific diet word is negated: "I'm not vegetarian", "never vegan", "not a jain place".
+
+    Only the negated word is suppressed, so "I'm vegetarian, not vegan" keeps vegetarian and
+    "no non-veg" (= vegetarian) is not a negation. "non-veg is fine" never matches the vegetarian rule.
+    """
+    word = _DIET_WORDS[diet]
+    lowered = text.lower()
+    if re.search(rf"\b(not|never|isn'?t|am not|i'?m not)\s+(a\s+|really\s+|strictly\s+|fully\s+)?{word}\b", lowered):
+        return True
+    return diet == "vegetarian" and bool(
+        re.search(r"\b(i eat|eat|fine with|ok with|okay with|love)\s+(meat|non[- ]?veg|chicken|fish)\b", lowered)
+    )
+
+
+def negates_all_diets(text: str) -> bool:
+    """A statement that the user has no diet restriction ("I'm not vegetarian", "I eat meat")."""
+    lowered = text.lower()
+    return diet_negated(lowered, "vegetarian") and not any(
+        re.search(pattern, lowered) and not diet_negated(lowered, value)
+        for pattern, kind, value in _RULES if kind == "diet"
+    )
+
+
+def _collapse_diets(constraints: list[Constraint]) -> list[Constraint]:
+    """vegan and jain each imply vegetarian, so drop plain vegetarian when a stricter diet is present.
+    vegan and jain are different requirements and are both kept."""
+    keys = {c.key for c in constraints}
+    if "diet:vegetarian" in keys and ({"diet:vegan", "diet:jain"} & keys):
+        return [c for c in constraints if c.key != "diet:vegetarian"]
+    return constraints
 
 
 def is_valid(constraint: Constraint) -> bool:
@@ -97,14 +131,10 @@ def detect_conflicts(constraints: list[Constraint]) -> list[ConstraintConflict]:
 
 
 def merge_constraints(*groups: list[Constraint]) -> list[Constraint]:
-    """Union preserving first-seen order; a stricter diet replaces vegetarian."""
+    """Union preserving first-seen order; vegan/jain replace plain vegetarian (both strict diets are kept)."""
     merged: list[Constraint] = []
     for group in groups:
         for c in group:
             if c not in merged:
                 merged.append(c)
-    diets = [c for c in merged if c.kind == "diet"]
-    if len(diets) > 1:
-        strict = next((c for c in diets if c.value in {"vegan", "jain"}), diets[0])
-        merged = [c for c in merged if c.kind != "diet" or c == strict]
-    return merged
+    return _collapse_diets(merged)

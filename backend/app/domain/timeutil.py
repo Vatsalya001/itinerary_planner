@@ -81,7 +81,8 @@ def parse_clock(text: str | None) -> int | None:
     """Parse a clock time into minutes since midnight: "15:00", "3pm", "3:30 pm", "noon", "11 am"."""
     if not text:
         return None
-    t = text.strip().lower().replace(".", "")
+    t = re.sub(r"(\d)\.(\d{2})(?!\d)", r"\1:\2", text.strip().lower())  # "4.30pm" / "16.30" -> "4:30pm"
+    t = t.replace(".", "")  # "p.m." -> "pm"
     if t in {"noon", "midday"}:
         return 12 * 60
     if t == "midnight":
@@ -110,7 +111,8 @@ def parse_time_range(text: str) -> tuple[int, int] | None:
         r"(?:from\s+)?(\d{1,2}(?::\d{2})?)\s*(am|pm)?\s*(?:to|till|until|-|–)\s*"
         r"(\d{1,2}(?::\d{2})?)\s*(am|pm)?"
     )
-    for m in re.finditer(pattern, text.lower()):
+    normalized = re.sub(r"(\d)\.(\d{2})(?!\d)", r"\1:\2", text.lower()).replace("a.m.", "am").replace("p.m.", "pm")
+    for m in re.finditer(pattern, normalized):
         s_raw, s_ampm, e_raw, e_ampm = m.groups()
         if not (s_ampm or e_ampm or ":" in s_raw or ":" in e_raw):
             continue  # "4-8" alone is too ambiguous (could be a count)
@@ -122,6 +124,8 @@ def parse_time_range(text: str) -> tuple[int, int] | None:
             start = parse_clock(f"{s_raw}am")  # "10 to 2pm" means 10am-2pm
         if start is None:
             continue
+        if end <= start and not s_ampm and not e_ampm and end < 12 * 60 and end + 12 * 60 > start:
+            end += 12 * 60  # "11.30 to 1.30" means 11:30-13:30, not a 14-hour window
         if end <= start:
             end += 24 * 60
         return start, end

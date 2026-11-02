@@ -1,0 +1,27 @@
+# Approximate reference exchange rates, NOT live rates. Used only by app/domain/parser_rules.apply_defaults to
+# turn a budget stated in one currency into the planning city's currency. The converted amount is rounded down,
+# and the plan shows an assumption such as "₹2,000 ≈ £15 at an approximate reference rate".
+#
+# units_per_usd: how many units of the currency one US dollar buys (mid-market, rounded).
+# Sources (checked 2 November 2026, mid-day quotes; they differ slightly by time of capture):
+#   INR: Trading Economics / Investing.com / OFX USD-INR quotes (94.6-95.1)
+#   EUR, GBP, JPY: X-Rates USD table 13:02 UTC and XE (EUR 0.890-0.892, GBP 0.745, JPY 157.6-157.9)
+#   SGD: OFX / Trading Economics / Bloomberg (1.278-1.280)
+#   AUD: XE and the RBA official rate for 2 Nov 2026 (0.7023 USD per AUD -> 1.424)
+#   CAD: XE (1.398-1.400)
+#   AED: pegged to the US dollar at 3.6725
+# Refresh these by hand before relying on them; never present a converted amount as exact.
+
+label: approximate reference rates, not live
+as_of: 2026-11-02
+source: "Mid-market quotes from Trading Economics, OFX, X-Rates, XE, Bloomberg and the RBA, checked 2026-11-02; AED is the official USD peg"
+units_per_usd:
+  USD: 1.0
+  INR: 95.0
+  EUR: 0.891
+  GBP: 0.745
+  JPY: 157.9
+  AED: 3.6725
+  SGD: 1.279
+  AUD: 1.424
+  CAD: 1.399

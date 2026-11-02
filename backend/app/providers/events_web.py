@@ -8,6 +8,7 @@ respected, 5 s timeout, 1 MB cap, at most three pages per search.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html as html_lib
 import json
@@ -35,6 +36,7 @@ from app.providers.normalize import (
     is_https_url,
     location_currency,
     maps_search_url,
+    maps_text_search_url,
 )
 
 log = logging.getLogger(__name__)
@@ -47,6 +49,10 @@ MAX_PAGES = 3
 PAGE_TIMEOUT_S = 5.0
 SEARCH_TIMEOUT_S = 8.0
 MAX_PAGE_BYTES = 1_000_000
+ROBOTS_MAX_BYTES = 64_000
+FETCH_DEADLINE_S = 8.0  # wall-clock cap per robots.txt or page fetch (slow-drip servers)
+APPROX_LOCATION_TAG = "approx_location"
+APPROX_ADDRESS_PREFIX = "Location approximate - check the venue"
 NAME_MAX = 120
 MAX_EVENTS_PER_PAGE = 50
 DEFAULT_EVENT_MINUTES = 120
@@ -187,26 +193,78 @@ def _parse_dt(value: Any, tz: ZoneInfo) -> datetime | None:
 
 
 def _to_float(value: Any) -> float | None:
+    """A plain number (JSON number or numeric string such as "12.97"); None for anything else."""
     if isinstance(value, bool):
         return None
-    if isinstance(value, int | float):
-        f = float(value)
-    elif isinstance(value, str):
-        cleaned = re.sub(r"[^\d.\-]", "", value.replace(",", ""))
-        if not cleaned or cleaned in {"-", "."}:
-            if value.strip().lower() == "free":
-                return 0.0
-            return None
-        try:
-            f = float(cleaned)
-        except ValueError:
-            return None
-    else:
+    numeric = isinstance(value, int | float) or (
+        isinstance(value, str) and re.fullmatch(r"\s*-?\d+(?:\.\d+)?\s*", value) is not None)
+    if not numeric:
         return None
+    f = float(value)
     return f if math.isfinite(f) else None
 
 
+class _PriceError(ValueError):
+    """A listed price that is present but not plain numeric (e.g. "1e3", "from 500", "TBA")."""
+
+
+class _OtherCurrency(ValueError):
+    """A listed price in a different currency from the city's."""
+
+
+_CURRENCY_MARKS = {"₹": "INR", "rs": "INR", "rs.": "INR", "inr": "INR", "$": "USD", "usd": "USD", "us$": "USD",
+                   "£": "GBP", "gbp": "GBP", "€": "EUR", "eur": "EUR"}
+_AMOUNT = r"\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+_MARK = r"(?:[A-Za-z]{3}|Rs\.?|US\$|[₹$£€])"
+_PRICE_TEXT = re.compile(
+    rf"^(?:(?P<m1>{_MARK})\s*)?(?P<a>{_AMOUNT})\s*(?:/-)?\s*(?P<m2>{_MARK})?"
+    rf"(?:\s*(?:-|–|—|to)\s*(?:(?P<m3>{_MARK})\s*)?(?P<b>{_AMOUNT})\s*(?:/-)?\s*(?P<m4>{_MARK})?)?$",
+    re.IGNORECASE,
+)
+
+
+def parse_price(value: Any, currency: str) -> tuple[float, float] | None:
+    """Listed price -> (min, max) in ``currency``; None when absent.
+
+    Accepts JSON numbers and plain numeric text with optional currency marks, thousands separators and
+    ranges: 1500, "1,500", "INR 1500", "₹1,500 - ₹2,000", "Rs. 499/-", "Free". Raises _PriceError for anything
+    else (scientific notation, negative numbers, "from 500", "TBA") and _OtherCurrency for another currency."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise _PriceError("boolean price")
+    if isinstance(value, int | float):
+        f = float(value)
+        if not math.isfinite(f) or f < 0:
+            raise _PriceError("bad number")
+        return f, f
+    if not isinstance(value, str):
+        raise _PriceError("bad type")
+    text = re.sub(r"\s+", " ", value).strip()
+    if re.fullmatch(r"(?i)free(?: entry| admission)?", text):
+        return 0.0, 0.0
+    m = _PRICE_TEXT.match(text)
+    if not m:
+        raise _PriceError("not a plain price")
+    for mark in (m["m1"], m["m2"], m["m3"], m["m4"]):
+        if mark is None:
+            continue
+        code = _CURRENCY_MARKS.get(mark.lower(), mark.upper() if len(mark) == 3 and mark.isalpha() else None)
+        if code is None:
+            raise _PriceError("unknown currency mark")
+        if code != currency:
+            raise _OtherCurrency(code)
+    lo = float(m["a"].replace(",", ""))
+    hi = float(m["b"].replace(",", "")) if m["b"] else lo
+    if hi < lo:
+        raise _PriceError("inverted range")
+    return lo, hi
+
+
 def _offers_cost(offers: Any, currency: str) -> CostRange | None:
+    """Ticket price from ``offers`` (Offer / AggregateOffer / list). Offers in another currency are skipped;
+    any listed price that cannot be read plainly makes the cost unknown (category estimate), so a listed
+    maximum is never underestimated."""
     items = offers if isinstance(offers, list) else [offers]
     lows: list[float] = []
     highs: list[float] = []
@@ -214,17 +272,24 @@ def _offers_cost(offers: Any, currency: str) -> CostRange | None:
         if not isinstance(offer, dict):
             continue
         cur = _first_str(offer.get("priceCurrency"))
-        if cur and cur.upper() != currency:
-            continue  # never mix currencies; fall back to the category default instead
-        price = _to_float(offer.get("price"))
-        low = _to_float(offer.get("lowPrice"))
-        high = _to_float(offer.get("highPrice"))
-        for v in (price, low):
-            if v is not None and v >= 0:
-                lows.append(v)
-        for v in (price, high, low):
-            if v is not None and v >= 0:
-                highs.append(v)
+        if cur and cur.strip().upper() != currency:
+            continue  # never mix currencies
+        try:
+            price = parse_price(offer.get("price"), currency)
+            low = parse_price(offer.get("lowPrice"), currency)
+            high = parse_price(offer.get("highPrice"), currency)
+        except _OtherCurrency:
+            continue
+        except _PriceError:
+            return None
+        if price is None and high is None and low is not None:
+            return None  # "from X" with no ceiling: the maximum is unknown
+        for rng in (price, low):
+            if rng is not None:
+                lows.append(rng[0])
+        for rng in (price, high, low):
+            if rng is not None:
+                highs.append(rng[1])
     if not lows:
         return None
     lo, hi = math.floor(min(lows)), math.ceil(max(highs))
@@ -302,7 +367,11 @@ def event_to_candidate(
     Rules: a start time is required; with ``require_same_day`` it must fall on ``ctx.date`` in the city's
     timezone; with ``require_https`` the source URL (the event's own URL when it is https on the same site
     as the page, else the page URL) must be https. Online, cancelled and postponed events are dropped, as
-    are events geocoded more than 40 km from the city centre. Descriptions are never read."""
+    are events geocoded more than 40 km from the city centre. Descriptions are never read.
+
+    Events without coordinates are placed at the city centre and clearly labelled: tag "approx_location",
+    an address starting "Location approximate - check the venue", and a Maps link that searches the venue
+    name instead of pinning the centre."""
     tz = ZoneInfo(ctx.location.timezone)
     raw_name = _first_str(obj.get("name"))
     if not raw_name:
@@ -327,9 +396,10 @@ def event_to_candidate(
     if online:
         return None
     tags: list[str] = ["events"]
+    approx = lat is None or lng is None
     if lat is None or lng is None:
         lat, lng = ctx.location.lat, ctx.location.lng
-        tags.append("approx_location")
+        tags.append(APPROX_LOCATION_TAG)
     elif haversine_m(lat, lng, ctx.location.lat, ctx.location.lng) > CITY_RADIUS_M:
         return None
 
@@ -364,6 +434,8 @@ def event_to_candidate(
     key = f"{source_url or ''}|{name}|{start.isoformat()}"
     cid = id_prefix + hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
     full_address = ", ".join(p for p in (venue, address) if p) or None
+    if approx:  # no coordinates: placed at the city centre, so say so wherever the address is shown
+        full_address = APPROX_ADDRESS_PREFIX + (f": {full_address}" if full_address else "")
 
     return Candidate(
         id=cid,
@@ -388,7 +460,8 @@ def event_to_candidate(
         event_start_min=start_min,
         event_end_min=end_min,
         event_date=event_day,
-        maps_url=maps_search_url(venue or name, lat, lng),
+        maps_url=(maps_text_search_url(f"{venue or name}, {ctx.location.name}") if approx
+                  else maps_search_url(venue or name, lat, lng)),
         source=Source(
             provider=provider,
             url=source_url,
@@ -405,7 +478,11 @@ def extract_events_from_html(html: str, url: str, ctx: WorldContext) -> list[Can
     seen: set[str] = set()
     for block in _ld_blocks(html):
         for obj in iter_event_objects(block):
-            cand = event_to_candidate(obj, url, ctx, retrieved_at=now)
+            try:
+                cand = event_to_candidate(obj, url, ctx, retrieved_at=now)
+            except Exception:  # one odd event object never sinks the page
+                log.debug("skipped an unreadable JSON-LD event")
+                continue
             if cand is not None and cand.id not in seen:
                 seen.add(cand.id)
                 out.append(cand)
@@ -469,11 +546,16 @@ class TavilyEvents:
         urls = await self._search_urls(query)
         events: list[Candidate] = []
         seen: set[str] = set()
-        for url in urls[: self._max_pages]:
+        for index, url in enumerate(urls[: self._max_pages]):
             html = await self._fetch_page(url)
             if html is None:
                 continue
-            for cand in extract_events_from_html(html, url, ctx):
+            try:
+                found = extract_events_from_html(html, url, ctx)
+            except Exception:  # an unreadable page is skipped, never a crash
+                log.warning("tavily events: skipped unreadable page at index %d", index)
+                continue
+            for cand in found:
                 if cand.id not in seen:
                     seen.add(cand.id)
                     events.append(cand)
@@ -508,33 +590,44 @@ class TavilyEvents:
             data = resp.json()
         except ValueError as exc:
             raise ProviderError("tavily", "bad_response", "invalid JSON") from exc
+        results = data.get("results", []) if isinstance(data, dict) else None
+        if not isinstance(results, list):
+            raise ProviderError("tavily", "bad_response", "unexpected response shape")
         urls: list[str] = []
-        for result in data.get("results") or []:
+        for result in results:
             url = result.get("url") if isinstance(result, dict) else None
             if isinstance(url, str) and is_https_url(url) and _domain_allowed(url, self._allowed) and url not in urls:
                 urls.append(url)
         return urls
+
+    async def _load_robots(self, origin: str) -> RobotFileParser:
+        """robots.txt for ``origin``: streamed with a 64 KB cap and a wall-clock deadline. 401/403, 5xx,
+        redirects, timeouts and network errors all mean "disallow"; other 4xx mean "no rules"."""
+        parser = RobotFileParser()
+        try:
+            async with asyncio.timeout(FETCH_DEADLINE_S):
+                async with self._client.stream(
+                    "GET", origin + "/robots.txt", headers={"User-Agent": USER_AGENT}, timeout=PAGE_TIMEOUT_S
+                ) as resp:
+                    status = resp.status_code
+                    body = await _read_capped(resp, ROBOTS_MAX_BYTES) if status == 200 else b""
+        except (httpx.HTTPError, TimeoutError):
+            parser.parse(_DISALLOW_ALL)
+            return parser
+        if status == 200:
+            parser.parse(body.decode("utf-8", errors="replace").splitlines())
+        elif status in (401, 403) or not 400 <= status < 500:
+            parser.parse(_DISALLOW_ALL)
+        else:
+            parser.parse([])
+        return parser
 
     async def _robots_allows(self, url: str) -> bool:
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
         parser = self._robots.get(origin)
         if parser is None:
-            parser = RobotFileParser()
-            try:
-                resp = await self._client.get(
-                    origin + "/robots.txt", headers={"User-Agent": USER_AGENT}, timeout=PAGE_TIMEOUT_S
-                )
-                if resp.status_code in (401, 403):
-                    parser.parse(_DISALLOW_ALL)
-                elif 400 <= resp.status_code < 500:
-                    parser.parse([])
-                elif resp.status_code == 200:
-                    parser.parse(resp.text[:200_000].splitlines())
-                else:
-                    parser.parse(_DISALLOW_ALL)  # 5xx: be conservative
-            except httpx.HTTPError:
-                parser.parse(_DISALLOW_ALL)
+            parser = await self._load_robots(origin)
             self._robots[origin] = parser
         return parser.can_fetch(USER_AGENT, url)
 
@@ -544,25 +637,30 @@ class TavilyEvents:
             if not await self._robots_allows(url):
                 log.info("robots.txt disallows %s", _site_name(url))
                 return None
-            async with self._client.stream(
-                "GET", url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"}, timeout=PAGE_TIMEOUT_S
-            ) as resp:
-                if resp.status_code != 200:
-                    return None
-                ctype = resp.headers.get("content-type", "")
-                if "html" not in ctype.lower():
-                    return None
-                if not is_https_url(str(resp.url)) or not _domain_allowed(str(resp.url), self._allowed):
-                    return None  # redirected off the allow-list
-                chunks: list[bytes] = []
-                size = 0
-                async for chunk in resp.aiter_bytes():
-                    chunks.append(chunk)
-                    size += len(chunk)
-                    if size >= MAX_PAGE_BYTES:
-                        break
-                raw = b"".join(chunks)[:MAX_PAGE_BYTES]
-                return raw.decode(resp.encoding or "utf-8", errors="replace")
-        except (httpx.HTTPError, UnicodeDecodeError, LookupError):
+            async with asyncio.timeout(FETCH_DEADLINE_S):
+                async with self._client.stream(
+                    "GET", url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"}, timeout=PAGE_TIMEOUT_S
+                ) as resp:
+                    if resp.status_code != 200:
+                        return None
+                    ctype = resp.headers.get("content-type", "")
+                    if "html" not in ctype.lower():
+                        return None
+                    if not is_https_url(str(resp.url)) or not _domain_allowed(str(resp.url), self._allowed):
+                        return None  # redirected off the allow-list
+                    raw = await _read_capped(resp, MAX_PAGE_BYTES)
+                    return raw.decode(resp.encoding or "utf-8", errors="replace")
+        except (httpx.HTTPError, TimeoutError, UnicodeDecodeError, LookupError):
             return None
 
+
+async def _read_capped(resp: httpx.Response, cap: int) -> bytes:
+    """Read at most ``cap`` bytes of a streamed response body."""
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in resp.aiter_bytes():
+        chunks.append(chunk)
+        size += len(chunk)
+        if size >= cap:
+            break
+    return b"".join(chunks)[:cap]

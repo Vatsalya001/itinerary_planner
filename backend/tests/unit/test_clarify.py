@@ -300,3 +300,32 @@ def test_field_answers():
     prefs = parse_rules(answered, NOW).preferences
     assert (prefs.city, prefs.neighbourhood, prefs.start_min, prefs.available_minutes) == ("Mumbai", "Bandra", 1020, 120)
     assert (prefs.budget, prefs.currency) == (900, "INR")
+
+
+# ---------------------------------------------------------------------------------------------------
+# Verification fixes
+# ---------------------------------------------------------------------------------------------------
+
+
+def test_unread_amount_with_a_city_is_an_assumption_not_a_question():
+    request = PlanRequest(free_text="Bangalore, 600 for us, 4 hours")
+    assert questions_for(request, [BLR]) == []
+
+
+def test_unread_amount_without_a_city_asks_budget_and_time():
+    assert ids(questions_for(PlanRequest(free_text="600 for us, something fun"))) == ["city", "budget_time"]
+
+
+def test_london_answered_inr_is_converted_not_mixed():
+    from app.domain.parser_rules import apply_defaults
+
+    request = build_request("currency_ambiguity_abroad")
+    answered = apply_answers(request, {"currency": "INR"})
+    outcome = parse_rules(answered, NOW)
+    assert clarification_questions(outcome, [LONDON], asked_before=True) == []
+    prefs = apply_defaults(outcome, LONDON)
+    assert prefs.currency == "GBP" and prefs.budget == 15
+
+
+def test_negated_diet_never_blocks():
+    assert questions_for(PlanRequest(free_text="Bangalore, I'm not vegetarian, 2000 rupees, 4 hours"), [BLR]) == []

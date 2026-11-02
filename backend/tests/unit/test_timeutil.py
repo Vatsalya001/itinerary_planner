@@ -77,3 +77,18 @@ def test_formatting():
     assert fmt_duration(45) == "45 min"
     assert fmt_duration(90) == "1 h 30 min"
     assert fmt_duration(120) == "2 h"
+
+
+@pytest.mark.parametrize(("text", "minutes"), [("4.30pm", 990), ("4.30 pm", 990), ("16.30", 990), ("10 p.m.", 1320)])
+def test_parse_clock_dotted(text, minutes):
+    assert parse_clock(text) == minutes
+
+
+def test_parse_time_range_dotted():
+    assert parse_time_range("free from 4.30pm to 8pm") == (990, 1200)
+
+
+@pytest.mark.parametrize(("text", "expected"), [("free 11.30 to 1.30", (690, 810)), ("9.30 to 1", (570, 780)),
+                                                ("9:30 to 1:00", (570, 780)), ("22:00 to 01:00", (1320, 1500))])
+def test_parse_time_range_across_noon(text, expected):
+    assert parse_time_range(text) == expected

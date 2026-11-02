@@ -14,6 +14,7 @@ from typing import Any
 
 import yaml
 
+from app.domain.categories import currency_for_country
 from app.domain.schemas import Candidate, CostRange, Leg, TravelMode, WorldContext
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -70,7 +71,8 @@ class CityTravel:
     speeds_kmh: dict[str, float]
     pickup_min: dict[str, float]
     motor_mode: TravelMode
-    fares: dict[str, Fare]  # mode -> fare for the location's currency
+    fares: dict[str, Fare]  # mode -> fare, only in the location's currency
+    currency: str
 
 
 @lru_cache(maxsize=8)
@@ -100,47 +102,55 @@ class HeuristicTravel:
 
     def __init__(self, cities_path: str | None = None) -> None:
         self._raw = _load(str(cities_path or CITIES_PATH))
-        self._alias: dict[str, str] = {}
+        self._alias: dict[str, list[str]] = {}
         for key, entry in self._raw.items():
             if key.startswith("default"):
                 continue
-            self._alias[key.lower()] = key
-            for alias in entry.get("aliases") or []:
-                self._alias[str(alias).lower()] = key
+            for name in [key, *(entry.get("aliases") or [])]:
+                self._alias.setdefault(str(name).lower(), []).append(key)
         self._cache: dict[tuple[str, str], CityTravel] = {}
 
     # -- configuration -----------------------------------------------------------------------------
 
     def city_key(self, ctx: WorldContext) -> str:
+        """Named city only when both the name (or alias) and the country match; else default_IN / default."""
         name = ctx.location.name.strip().lower()
-        if name in self._alias:
-            return self._alias[name]
-        if ctx.location.country_code.upper() == "IN" and "default_IN" in self._raw:
+        country = ctx.location.country_code.upper()
+        for key in self._alias.get(name, []):
+            if str(self._raw[key].get("country", "")).upper() == country:
+                return key
+        if country == "IN" and "default_IN" in self._raw:
             return "default_IN"
         return "default"
 
+    @staticmethod
+    def location_currency(ctx: WorldContext) -> str:
+        """The currency legs are priced in: the same rule place providers use (location, country, else USD)."""
+        return ctx.location.currency or currency_for_country(ctx.location.country_code) or "USD"
+
     def config(self, ctx: WorldContext) -> CityTravel:
         key = self.city_key(ctx)
-        loc_currency = ctx.location.currency or ""
-        cache_key = (key, loc_currency)
+        currency = self.location_currency(ctx)
+        cache_key = (key, currency)
         if cache_key in self._cache:
             return self._cache[cache_key]
         entry = self._raw[key]
         fares: dict[str, Fare] = {}
         if "fares" in entry:
             for mode, f in entry["fares"].items():
-                fares[mode] = _fare(f, str(f.get("currency") or loc_currency or "INR"))
+                if str(f.get("currency") or currency) == currency:  # never price in another currency
+                    fares[mode] = _fare(f, currency)
         else:
             by_cur: dict[str, Any] = entry.get("fares_by_currency", {})
-            fallback = str(entry.get("fallback_currency", "USD"))
-            cur = loc_currency if loc_currency in by_cur else fallback
-            fares[str(entry.get("motor_mode", "cab"))] = _fare(by_cur[cur], cur)
+            if currency in by_cur:
+                fares[str(entry.get("motor_mode", "cab"))] = _fare(by_cur[currency], currency)
         cfg = CityTravel(
             key=key,
             speeds_kmh={k: float(v) for k, v in entry["speeds_kmh"].items()},
             pickup_min={k: float(v) for k, v in (entry.get("pickup_min") or {}).items()},
             motor_mode=entry.get("motor_mode", "auto"),
             fares=fares,
+            currency=currency,
         )
         self._cache[cache_key] = cfg
         return cfg
@@ -148,22 +158,25 @@ class HeuristicTravel:
     # -- estimation --------------------------------------------------------------------------------
 
     def leg(self, a: Candidate, b: Candidate, ctx: WorldContext) -> Leg:
+        """Raises TransferUnknownError for missing coordinates, or for a motorised leg in a currency with no fare
+        table (fares are never priced in a different currency from the location's)."""
         if not (coords_valid(a.lat, a.lng) and coords_valid(b.lat, b.lng)):
             raise TransferUnknownError(f"missing coordinates for {a.id} or {b.id}")
         cfg = self.config(ctx)
         km = round(haversine_km(a.lat, a.lng, b.lat, b.lng) * DETOUR_FACTOR, 2)
-        currency = next(iter(cfg.fares.values())).currency if cfg.fares else (ctx.location.currency or "INR")
         if km <= WALK_MAX_KM:
             speed = cfg.speeds_kmh.get("walk", WALK_SPEED_KMH)
             minutes = math.ceil(km / speed * 60)
             return Leg(
                 from_id=a.id, to_id=b.id, mode="walk", distance_km=km, minutes=minutes,
                 minutes_max=math.ceil(minutes * MINUTES_MAX_FACTOR),
-                fare=CostRange(min=0, max=0, currency=currency, basis="free"),
+                fare=CostRange(min=0, max=0, currency=cfg.currency, basis="free"),
             )
         mode: TravelMode = cfg.motor_mode
-        if mode not in cfg.speeds_kmh or mode not in cfg.fares:
+        if mode not in cfg.fares:
             mode = "cab"
+        if mode not in cfg.fares or mode not in cfg.speeds_kmh:
+            raise TransferUnknownError(f"no {cfg.currency} fare table for motorised travel in {ctx.location.name}")
         speed = cfg.speeds_kmh[mode]
         minutes = math.ceil(cfg.pickup_min.get(mode, 0.0) + km / speed * 60)
         fare = cfg.fares[mode]

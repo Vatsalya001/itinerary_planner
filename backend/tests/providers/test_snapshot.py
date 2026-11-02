@@ -126,3 +126,15 @@ async def test_get(blr_ctx: WorldContext) -> None:
     c = await sp.get("snap:osm-way-22895320", blr_ctx)
     assert c is not None and c.name == "Cubbon Park" and c.category == "park"
     assert await sp.get("snap:osm-node-1", blr_ctx) is None
+
+
+async def test_query_neighbourhood_centres_snapshot_search(blr_ctx: WorldContext) -> None:
+    sp = SnapshotPlaces()
+    plain = await sp.search(PlaceQuery(intent="vegan cafe", radius_m=1500), blr_ctx)
+    assert all("Copper" not in c.name for c in plain)  # Indiranagar is ~5 km from the centre
+    indira = await sp.search(PlaceQuery(intent="vegan cafe", neighbourhood="Indiranagar", radius_m=1500), blr_ctx)
+    assert indira and indira[0].diet["vegan"] == Evidence.CONFIRMED  # ranked first; diet is not a filter
+    assert any("Copper + Cloves" in c.name for c in indira)
+    # a neighbourhood only the shared gazetteer knows still centres the search
+    jaya = await sp.search(PlaceQuery(intent="", neighbourhood="Jayanagar", radius_m=3000), blr_ctx)
+    assert jaya and all(haversine_m(c.lat, c.lng, 12.9250, 77.5938) <= 3000 for c in jaya)

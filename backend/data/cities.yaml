@@ -1,7 +1,9 @@
 # Per-city travel configuration for app.domain.travel.HeuristicTravel.
 #
-# Keys are lowercase city names; `aliases` lists other spellings. Lookup order: city name or alias
-# (lowercased) -> "default_IN" for other Indian cities -> "default" everywhere else.
+# Keys are lowercase city names; `aliases` lists other spellings and `country` is the ISO 3166-1 alpha-2 code.
+# Lookup order: city name or alias (lowercased) AND matching country -> "default_IN" for other Indian cities ->
+# "default" everywhere else. A same-named city in another country (e.g. Delhi, Ontario) never gets these fares.
+# Fares are always in the location's currency; a currency with no fare table gets no motorised fare at all.
 #
 # speeds_kmh:   average door-to-door speed per mode. Bangalore on a Saturday afternoon is slow.
 # pickup_min:   minutes to find/hail the vehicle before the ride starts.
@@ -16,6 +18,7 @@
 #   * All cab fares and every default_* entry are estimates and are labelled "estimate (unverified)".
 
 bangalore:
+  country: IN
   aliases: [bengaluru, bangalore urban, bengaluru urban, blr]
   speeds_kmh: {walk: 4.5, auto: 16, cab: 18}
   pickup_min: {auto: 5, cab: 8}
@@ -37,6 +40,7 @@ bangalore:
       as_of: "2026-11-02"
 
 mumbai:
+  country: IN
   aliases: [bombay, greater mumbai, mumbai suburban]
   speeds_kmh: {walk: 4.5, auto: 17, cab: 18}
   pickup_min: {auto: 4, cab: 6}
@@ -58,6 +62,7 @@ mumbai:
       as_of: "2026-09-01"
 
 delhi:
+  country: IN
   aliases: [new delhi, delhi ncr, nct of delhi]
   speeds_kmh: {walk: 4.5, auto: 20, cab: 22}
   pickup_min: {auto: 4, cab: 7}
@@ -79,6 +84,7 @@ delhi:
       as_of: "2026-11-02"
 
 default_IN:
+  country: IN
   aliases: []
   speeds_kmh: {walk: 4.5, auto: 18, cab: 20}
   pickup_min: {auto: 5, cab: 8}
@@ -100,13 +106,13 @@ default_IN:
       as_of: "2026-11-02"
 
 # Everywhere else: no auto-rickshaws, so motorised legs are cabs. Fares are keyed by the location's
-# currency; `fallback_currency` is used when the location's currency has no entry.
+# currency (location.currency, else the country's currency from countries.yaml, else USD - the same rule the
+# place providers use to price candidates). There is deliberately no cross-currency fallback.
 default:
   aliases: []
   speeds_kmh: {walk: 4.5, cab: 22}
   pickup_min: {cab: 6}
   motor_mode: cab
-  fallback_currency: USD
   fares_by_currency:
     USD: {base: 4, included_km: 0.0, per_km: 2.0, source: "estimate (unverified)", as_of: "2026-11-02"}
     GBP: {base: 4, included_km: 0.0, per_km: 2.2, source: "estimate (unverified)", as_of: "2026-11-02"}

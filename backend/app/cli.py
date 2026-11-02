@@ -3,6 +3,7 @@
     uv run python -m app.cli plan --fixture                      # brief's example on the frozen world
     uv run python -m app.cli plan --free-text "Indiranagar, 1500 rupees, 4 to 8pm, vegan" --fixture
     uv run python -m app.cli plan --city Bangalore --budget 2000 --json
+    uv run python -m app.cli plan --fixture --model ollama:granite4:tiny-h --deadline 240 --trace
 """
 
 from __future__ import annotations
@@ -82,16 +83,34 @@ def render(result: PlanResult) -> str:
 
 
 async def _plan(args: argparse.Namespace) -> int:
-    settings = fixture_settings(fixture_weather=args.weather) if args.fixture else Settings()
+    overrides: dict = {}
+    if args.deadline:
+        overrides["run_deadline_s"] = args.deadline
+    settings = fixture_settings(fixture_weather=args.weather, **overrides) if args.fixture else Settings(**overrides)
     deps: Deps = build_deps(settings)
     request = _request_from_args(args)
-    from app.baseline import run_baseline
-
+    result: PlanResult | None = None
     try:
-        result = await run_baseline(request, deps)
+        if args.model == "baseline:deterministic" and not args.trace:
+            from app.baseline import run_baseline
+
+            result = await run_baseline(request, deps)
+        else:
+            from app.graph.runner import stream_plan
+
+            async for event in stream_plan(request, deps, model_id=args.model):
+                if args.trace and event.type not in {"heartbeat", "result"}:
+                    label = event.tool or event.node or ""
+                    extra = f" — {event.reason}" if event.reason else ""
+                    print(f"  [{event.seq:>3}] {event.type:<15} {label:<20} {event.summary or ''}{extra}", file=sys.stderr)
+                if event.type == "result" and event.data is not None:
+                    result = PlanResult.model_validate(event.data)
     finally:
         if deps.http is not None:
             await deps.http.aclose()
+    if result is None:
+        print("no result", file=sys.stderr)
+        return 1
     print(json.dumps(result.model_dump(mode="json"), indent=2) if args.json else render(result))
     return 0
 
@@ -112,6 +131,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fixture", action="store_true", help="use the frozen-world fixtures (offline)")
     p.add_argument("--weather", default="clear", help="fixture weather: clear | rain_85pct | unavailable")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--model", default="baseline:deterministic",
+                   help='model id, e.g. "ollama:granite4:tiny-h", "anthropic:claude-opus-5-5", "fake:agent"')
+    p.add_argument("--trace", action="store_true", help="print the live trace to stderr")
+    p.add_argument("--deadline", type=int, help="run deadline in seconds (local models need ~240)")
     args = parser.parse_args(argv)
     if args.command == "plan":
         return asyncio.run(_plan(args))

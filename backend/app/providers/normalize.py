@@ -15,11 +15,12 @@ import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from typing import Any, Literal
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import yaml
 
 from app.domain.categories import DATA_DIR, category, currency_for_country, is_category, load_categories
+from app.domain.parser_rules import lookup_place
 from app.domain.schemas import Candidate, CostRange, Evidence, Hours, Location, PlaceQuery, WorldContext
 
 Popularity = Literal["low", "medium", "high"]
@@ -115,7 +116,7 @@ def google_types_to_categories(primary_type: str | None, types: Sequence[str] | 
     ``*_restaurant`` types not listed explicitly map to ``restaurant``; generic types are ignored."""
     ordered: list[str] = []
     for t in [primary_type, *(types or [])]:
-        if not t:
+        if not t or not isinstance(t, str):
             continue
         key = _GOOGLE_TYPE_MAP.get(t)
         if key is None and (t == "restaurant" or t.endswith("_restaurant") or t in {"diner", "steak_house"}):
@@ -253,8 +254,27 @@ def maps_search_url(name: str, lat: float, lng: float, place_id: str | None = No
     return "https://www.google.com/maps/search/?" + urlencode(params)
 
 
-def is_https_url(url: str | None) -> bool:
-    return bool(url) and isinstance(url, str) and url.lower().startswith("https://") and len(url) <= 2048
+def is_https_url(url: object) -> bool:
+    """True only for a plain ``https://host/...`` URL: non-empty host, no userinfo ("user@host" tricks),
+    no whitespace or control characters, at most 2048 characters."""
+    if not isinstance(url, str) or not url or len(url) > 2048:
+        return False
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in url) or "\\" in url:
+        return False
+    try:
+        parts = urlsplit(url)
+        _ = parts.port  # raises ValueError on a malformed port
+    except ValueError:
+        return False
+    if parts.scheme.lower() != "https" or not parts.netloc or "@" in parts.netloc:
+        return False
+    host = parts.hostname or ""
+    return bool(host) and not host.startswith(".") and ".." not in host
+
+
+def maps_text_search_url(text: str) -> str:
+    """Google Maps search URL for free text (used when coordinates are only approximate)."""
+    return "https://www.google.com/maps/search/?" + urlencode({"api": "1", "query": text})
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +341,18 @@ def _parse_times(spec: str) -> list[tuple[int, int]] | None:
     return periods
 
 
+def join_next_day(today: list[tuple[int, int]], next_day: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Continue periods that reach midnight into the next day's periods that open at 00:00.
+
+    ``next_day`` periods are relative to the next day's midnight. "Open 00:00-24:00 every day" thus becomes
+    one period running past midnight, so a 23:30-00:30 visit is not rejected."""
+    early = [end for start, end in next_day if start == 0 and end > 0]
+    if not early:
+        return today
+    reach = DAY + max(early)
+    return [(s, max(e, reach)) if e >= DAY else (s, e) for s, e in today]
+
+
 def parse_osm_opening_hours(text: str | None, weekday: int) -> Hours:
     """Parse common OSM ``opening_hours`` values for one weekday (Python convention, 0 = Monday).
 
@@ -375,9 +407,7 @@ def parse_osm_opening_hours(text: str | None, weekday: int) -> Hours:
         if end > DAY:
             today.append((0, end - DAY))
     # A period ending at midnight continues into the next day when that day opens at 00:00.
-    next_early = [end for start, end in per_day.get((weekday + 1) % 7, []) if start == 0]
-    if next_early:
-        today = [(s, DAY + max(next_early)) if e == DAY else (s, e) for s, e in today]
+    today = join_next_day(today, per_day.get((weekday + 1) % 7, []))
     return Hours(status="known", periods=merge_periods(today))
 
 
@@ -676,6 +706,23 @@ def _take_neighbourhood(
     return None
 
 
+def neighbourhood_centre(
+    name: str | None, location: Location, table: Mapping[str, tuple[float, float]] | None = None
+) -> tuple[float, float] | None:
+    """Centroid of a named neighbourhood inside ``location`` (within 40 km): the provider's own table first,
+    then the shared gazetteer (data/gazetteer.yaml). None when unknown."""
+    if not name or not name.strip():
+        return None
+    key = " ".join(_raw_tokens(name))
+    for table_name, (lat, lng) in (table or {}).items():
+        if " ".join(_raw_tokens(table_name)) == key and within_city(lat, lng, location):
+            return lat, lng
+    place = lookup_place(name)
+    if place is not None and not place.is_city and within_city(place.lat, place.lng, location):
+        return place.lat, place.lng
+    return None
+
+
 def search_local(
     candidates: Sequence[Candidate],
     query: PlaceQuery,
@@ -690,8 +737,9 @@ def search_local(
     3. Intent words are matched against name, category, tags and neighbourhood with a small synonym table.
        Without a category filter, a candidate must match at least one content word (if the intent has
        any). Words like "quiet", "cheap", "indoor", "vegetarian", "wheelchair", "late" only re-rank.
-    4. Distance from (near_lat, near_lng), else from a neighbourhood named in the intent (e.g. "in
-       Indiranagar"), else from the city centre; must be within ``radius_m``.
+    4. Distance from (near_lat, near_lng), else from ``query.neighbourhood`` (provider table, then the
+       gazetteer), else from a neighbourhood named in the intent (e.g. "in Indiranagar"), else from the city
+       centre; must be within ``radius_m``. Candidates in the named neighbourhood get a small boost.
     5. ``open_at_min`` excludes candidates whose known hours are closed then (unknown hours are kept);
        ``max_price_level`` excludes candidates whose minimum cost is above that level's band.
     6. Sort by relevance desc, distance asc, id asc; return ``limit`` copies with ``city_id`` set.
@@ -705,14 +753,27 @@ def search_local(
     centre_lat, centre_lng = loc.lat, loc.lng
     if query.near_lat is not None and query.near_lng is not None:
         centre_lat, centre_lng = query.near_lat, query.near_lng
+    has_near = query.near_lat is not None and query.near_lng is not None
     raw = _raw_tokens(intent)
     hood: str | None = None
+    if query.neighbourhood and query.neighbourhood.strip():
+        hood = " ".join(_raw_tokens(query.neighbourhood))
+        hood_tokens = hood.split()
+        for i in range(len(raw) - len(hood_tokens) + 1):  # the name is a place, not a search word
+            if hood_tokens and raw[i : i + len(hood_tokens)] == hood_tokens:
+                raw = raw[:i] + raw[i + len(hood_tokens) :]
+                break
+        centre = neighbourhood_centre(query.neighbourhood, loc, neighbourhoods)
+        if centre is not None and not has_near:
+            centre_lat, centre_lng = centre
     if neighbourhoods:
         found = _take_neighbourhood(raw, neighbourhoods)
         if found:
-            hood, hood_lat, hood_lng, raw = found
-            if query.near_lat is None or query.near_lng is None:
-                centre_lat, centre_lng = hood_lat, hood_lng
+            intent_hood, hood_lat, hood_lng, raw = found
+            if hood is None:
+                hood = intent_hood
+                if not has_near:
+                    centre_lat, centre_lng = hood_lat, hood_lng
 
     city_words = set(_raw_tokens(loc.name)) | {"bangalore", "bengaluru", "mumbai", "bombay", "blr"}
     words = [_stem(t) for t in raw if t not in _STOPWORDS and t not in city_words]
@@ -752,7 +813,7 @@ def search_local(
         if cat_filter is None and content and content_score == 0:
             continue
         score = content_score + _modifier_score(mods, c)
-        if hood and c.neighbourhood and hood in c.neighbourhood.lower():
+        if hood and c.neighbourhood and hood in " ".join(_raw_tokens(c.neighbourhood)):
             score += 0.5
         scored.append((-score, round(dist, 1), c.id, c))
 

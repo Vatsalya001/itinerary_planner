@@ -1,6 +1,6 @@
 import pytest
 
-from app.domain.costs import compute_totals, contingency, stop_cost, worst_case
+from app.domain.costs import CurrencyMismatchError, compute_totals, contingency, stop_cost, worst_case
 from app.domain.schemas import CostRange, Leg
 from tests.factories import make_candidate
 
@@ -35,3 +35,15 @@ def test_compute_totals():
     none_budget = compute_totals([a], [], currency="INR", budget=None, elapsed_min=50, available_minutes=240,
                                  walking_min=0)
     assert none_budget.budget_left is None
+
+
+def test_compute_totals_never_mixes_currencies():
+    inr = make_candidate("fx:a", "cafe", cost=(200, 400))
+    gbp = make_candidate("fx:b", "cafe", cost=(10, 20))
+    gbp = gbp.model_copy(update={"cost": gbp.cost.model_copy(update={"currency": "GBP"})})
+    with pytest.raises(CurrencyMismatchError):
+        compute_totals([inr, gbp], [], currency="INR", budget=1000, elapsed_min=60, available_minutes=240,
+                       walking_min=0)
+    partial = compute_totals([inr, gbp], [], currency="INR", budget=1000, elapsed_min=60, available_minutes=240,
+                             walking_min=0, skip_foreign=True)
+    assert partial.stops_cost_max == 400

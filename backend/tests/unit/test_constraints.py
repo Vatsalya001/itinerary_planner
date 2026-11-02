@@ -62,3 +62,49 @@ def test_merge_constraints_union_and_strict_diet():
     a = [Constraint(kind="diet", value="vegetarian"), Constraint(kind="crowd", value="avoid")]
     b = [Constraint(kind="diet", value="vegan")]
     assert [c.key for c in merge_constraints(a, b)] == ["crowd:avoid", "diet:vegan"]
+
+
+def test_vegan_and_jain_are_both_kept():
+    assert sorted(keys("vegan and jain")) == ["diet:jain", "diet:vegan"]
+    merged = merge_constraints(map_constraint_text("vegetarian"), map_constraint_text("jain"))
+    assert [c.key for c in merged] == ["diet:jain"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["I'm not vegetarian", "non-veg is fine", "the venue is accessible by metro", "I'm not busy on Saturday"],
+)
+def test_constraint_false_positives(text):
+    assert keys(text) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("must be wheelchair accessible", ["access:wheelchair"]), ("fully accessible venues please", ["access:wheelchair"]),
+     ("I can't climb stairs", ["access:wheelchair"]), ("hate crowds", ["crowd:avoid"]), ("not too crowded", ["crowd:avoid"])],
+)
+def test_constraint_true_positives(text, expected):
+    assert keys(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("no non-veg", ["diet:vegetarian"]),
+        ("pure veg please, no non-veg places", ["diet:vegetarian"]),
+        ("I'm vegetarian, not vegan", ["diet:vegetarian"]),
+        ("not a vegetarian place please, I'm vegan", ["diet:vegan"]),
+        ("I'm not vegetarian", []),
+        ("I eat meat", []),
+    ],
+)
+def test_diet_negation_is_per_word(text, expected):
+    assert keys(text) == expected
+
+
+def test_negates_all_diets():
+    from app.domain.constraints import negates_all_diets
+
+    assert negates_all_diets("I'm not vegetarian")
+    assert not negates_all_diets("I'm vegetarian, not vegan")
+    assert not negates_all_diets("no non-veg")

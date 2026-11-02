@@ -37,9 +37,11 @@ from app.providers.normalize import (
     google_types_to_categories,
     is_https_url,
     is_open_at,
+    join_next_day,
     location_currency,
     maps_search_url,
     merge_periods,
+    neighbourhood_centre,
     popularity_from_rating_count,
     price_level_band,
     price_level_cap,
@@ -69,85 +71,125 @@ _PLACE_ID = re.compile(r"^[A-Za-z0-9_-]{4,300}$")
 # ---------------------------------------------------------------------------
 
 
+class MalformedPlace(ValueError):
+    """A place object that does not match the documented Places API (New) shape; the place is skipped."""
+
+
+def _int_field(point: dict[str, Any], key: str, lo: int, hi: int, default: int | None = None) -> int:
+    value = point.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+        raise MalformedPlace(f"bad {key}")
+    return value
+
+
 def _hm(point: dict[str, Any]) -> int:
-    return int(point.get("hour", 0)) * 60 + int(point.get("minute", 0))
+    return _int_field(point, "hour", 0, 24, 0) * 60 + _int_field(point, "minute", 0, 59, 0)
 
 
 def _point_date(point: dict[str, Any]) -> date | None:
     d = point.get("date")
-    if not isinstance(d, dict):
+    if d is None:
         return None
+    if not isinstance(d, dict):
+        raise MalformedPlace("bad date")
     try:
         return date(int(d["year"]), int(d["month"]), int(d["day"]))
-    except (KeyError, TypeError, ValueError):
-        return None
+    except (KeyError, TypeError, ValueError) as exc:
+        raise MalformedPlace("bad date") from exc
 
 
-def _current_hours(current: dict[str, Any] | None, day: date) -> Hours | None:
-    """Hours for ``day`` from ``currentOpeningHours`` (dated periods, next seven days), or None when the
-    data does not cover that date."""
-    if not isinstance(current, dict):
+def _periods(block: Any) -> list[tuple[dict[str, Any], dict[str, Any] | None]] | None:
+    """(open, close) points of an opening-hours block; None when absent; MalformedPlace when malformed."""
+    if block is None:
         return None
-    periods = current.get("periods")
-    if not isinstance(periods, list) or not periods:
+    if not isinstance(block, dict):
+        raise MalformedPlace("bad hours")
+    periods = block.get("periods")
+    if periods is None:
         return None
-    dated: list[tuple[date, dict[str, Any], dict[str, Any] | None]] = []
+    if not isinstance(periods, list):
+        raise MalformedPlace("bad periods")
+    out: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
     for p in periods:
         if not isinstance(p, dict) or not isinstance(p.get("open"), dict):
-            continue
-        od = _point_date(p["open"])
+            raise MalformedPlace("bad period")
+        close = p.get("close")
+        if close is not None and not isinstance(close, dict):
+            raise MalformedPlace("bad close")
+        for point in (p["open"], close):
+            if point is not None:
+                _int_field(point, "day", 0, 6)
+                _hm(point)
+                _point_date(point)
+        out.append((p["open"], close))
+    return out
+
+
+def _current_hours(current: Any, day: date) -> Hours | None:
+    """Hours for ``day`` from ``currentOpeningHours`` (dated periods, next seven days), or None when the
+    data does not cover that date. Periods reaching midnight are joined with next-day periods at 00:00."""
+    periods = _periods(current)
+    if not periods:
+        return None
+    dated: list[tuple[date, dict[str, Any], dict[str, Any] | None]] = []
+    for open_, close in periods:
+        od = _point_date(open_)
         if od is None:
             return None  # undated current hours: fall back to regular hours
-        close = p.get("close") if isinstance(p.get("close"), dict) else None
-        dated.append((od, p["open"], close))
-    if not dated:
-        return None
+        dated.append((od, open_, close))
     first = min(d for d, _, _ in dated)
     last = max(d for d, _, _ in dated)
     if not first <= day <= last:
         return None
-    out: list[tuple[int, int]] = []
+    today: list[tuple[int, int]] = []
+    next_day: list[tuple[int, int]] = []
     for od, open_, close in dated:
         if close is None:
             if od <= day:
-                out.append(ALWAYS_OPEN)
+                today.append(ALWAYS_OPEN)
             continue
         cd = _point_date(close) or od
         start = (od - day).days * DAY + _hm(open_)
         end = (cd - day).days * DAY + _hm(close)
+        if end <= start:
+            continue
+        if start == DAY:
+            next_day.append((0, end - DAY))
         if end <= 0 or start >= DAY:
             continue  # another day's period
-        out.append((max(0, start), end))
-    return Hours(status="known", periods=merge_periods(out))
+        today.append((max(0, start), end))
+    return Hours(status="known", periods=merge_periods(join_next_day(today, next_day)))
 
 
-def _regular_hours(regular: dict[str, Any] | None, day: date) -> Hours:
-    """Hours for ``day`` from ``regularOpeningHours`` (Google weekday 0 = Sunday ... 6 = Saturday).
-    Overnight closes become minutes above 1440; a single period without a close means open 24/7."""
-    if not isinstance(regular, dict):
-        return Hours(status="unknown")
-    periods = regular.get("periods")
-    if not isinstance(periods, list) or not periods:
-        return Hours(status="unknown")
-    gday = (day.weekday() + 1) % 7
-    out: list[tuple[int, int]] = []
-    for p in periods:
-        if not isinstance(p, dict) or not isinstance(p.get("open"), dict):
-            continue
-        open_ = p["open"]
-        close = p.get("close") if isinstance(p.get("close"), dict) else None
+def _weekly_spans(periods: list[tuple[dict[str, Any], dict[str, Any] | None]]) -> list[tuple[int, int, int]]:
+    """(open weekday, start, end) with end relative to the opening day's midnight (may exceed 1440)."""
+    spans: list[tuple[int, int, int]] = []
+    for open_, close in periods:
         if close is None:
-            return Hours(status="known", periods=[ALWAYS_OPEN])
-        oday, cday = int(open_.get("day", -1)), int(close.get("day", -1))
-        span_days = (cday - oday) % 7
-        start, end = _hm(open_), span_days * DAY + _hm(close)
+            raise MalformedPlace("missing close")
+        oday, cday = _int_field(open_, "day", 0, 6), _int_field(close, "day", 0, 6)
+        start, end = _hm(open_), ((cday - oday) % 7) * DAY + _hm(close)
         if end <= start:
             end += DAY
-        if oday == gday:
-            out.append((start, end))
-        elif (oday + 1) % 7 == gday and end > DAY:
-            out.append((0, end - DAY))  # previous day's overnight period spilling into this day
-    return Hours(status="known", periods=merge_periods(out))
+        spans.append((oday, start, end))
+    return spans
+
+
+def _regular_hours(regular: Any, day: date) -> Hours:
+    """Hours for ``day`` from ``regularOpeningHours`` (Google weekday 0 = Sunday ... 6 = Saturday).
+    Overnight closes become minutes above 1440; a single period without a close means open 24/7; per-day
+    periods that reach midnight are joined with the next day's 00:00 opening."""
+    periods = _periods(regular)
+    if not periods:
+        return Hours(status="unknown")
+    if any(close is None for _, close in periods):
+        return Hours(status="known", periods=[ALWAYS_OPEN])
+    spans = _weekly_spans(periods)
+    gday = (day.weekday() + 1) % 7
+    today = [(s, e) for d, s, e in spans if d == gday]
+    today += [(0, e - DAY) for d, _s, e in spans if (d + 1) % 7 == gday and e > DAY]  # previous night spills over
+    next_day = [(s, e) for d, s, e in spans if d == (gday + 1) % 7]
+    return Hours(status="known", periods=merge_periods(join_next_day(today, next_day)))
 
 
 def google_hours_for_date(regular: dict[str, Any] | None, current: dict[str, Any] | None, day: date) -> Hours:
@@ -161,26 +203,33 @@ def google_hours_for_date(regular: dict[str, Any] | None, current: dict[str, Any
 
 
 def _units(money: Any) -> int | None:
+    """Whole units of a google.type.Money; None when absent; MalformedPlace when malformed or negative."""
+    if money is None:
+        return None
     if not isinstance(money, dict):
-        return None
-    try:
-        return int(str(money.get("units", "0")))
-    except ValueError:
-        return None
+        raise MalformedPlace("bad money")
+    raw = money.get("units", "0")
+    if isinstance(raw, bool) or not isinstance(raw, str | int) or not re.fullmatch(r"\d{1,9}", str(raw)):
+        raise MalformedPlace("bad money units")
+    return int(raw)
 
 
 def _cost(place: dict[str, Any], key: str, currency: str) -> CostRange:
     pr = place.get("priceRange")
+    if pr is not None and not isinstance(pr, dict):
+        raise MalformedPlace("bad priceRange")
     if isinstance(pr, dict):
         start, end = pr.get("startPrice"), pr.get("endPrice")
+        lo, hi = _units(start), _units(end)
         cur = start.get("currencyCode") if isinstance(start, dict) else None
-        lo = _units(start)
         if lo is not None and cur == currency:
-            hi = _units(end) if isinstance(end, dict) and end.get("currencyCode") == currency else None
-            if hi is None:  # open-ended range ("2000+"): use the band or category upper bound, never below lo
+            if hi is None or not isinstance(end, dict) or end.get("currencyCode") != currency:
+                # open-ended range ("2000+"): use the band or category upper bound, never below lo
                 fallback = price_level_band(place.get("priceLevel"), currency) or category_default_cost(key, currency)
                 hi = max(lo, fallback.max)
-            return CostRange(min=max(0, lo), max=max(lo, hi), currency=currency, basis="listed_price_range")
+            if hi < lo:
+                raise MalformedPlace("inverted priceRange")
+            return CostRange(min=lo, max=hi, currency=currency, basis="listed_price_range")
     band = price_level_band(place.get("priceLevel"), currency)
     if band is not None and band.currency == currency:
         return band
@@ -220,11 +269,41 @@ def _choose_category(place: dict[str, Any], wanted: str | None) -> str | None:
     return None
 
 
+_OPTIONAL_TYPES: dict[str, tuple[type, ...]] = {
+    "primaryType": (str,), "formattedAddress": (str,), "googleMapsUri": (str,), "businessStatus": (str,),
+    "priceLevel": (str,), "rating": (int, float), "userRatingCount": (int,), "servesVegetarianFood": (bool,),
+    "liveMusic": (bool,), "outdoorSeating": (bool,), "accessibilityOptions": (dict,), "displayName": (dict,),
+    "location": (dict,),
+}
+
+
+def _check_shape(place: dict[str, Any]) -> None:
+    """Raise MalformedPlace when a documented field has the wrong type (missing fields are fine)."""
+    for key, kinds in _OPTIONAL_TYPES.items():
+        value = place.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, kinds) or (kinds != (bool,) and isinstance(value, bool)):
+            raise MalformedPlace(f"bad {key}")
+    types = place.get("types")
+    if types is not None and (not isinstance(types, list) or not all(isinstance(t, str) for t in types)):
+        raise MalformedPlace("bad types")
+    count = place.get("userRatingCount")
+    if count is not None and count < 0:
+        raise MalformedPlace("negative userRatingCount")
+    opts = place.get("accessibilityOptions")
+    if isinstance(opts, dict) and opts.get("wheelchairAccessibleEntrance") not in (None, True, False):
+        raise MalformedPlace("bad wheelchairAccessibleEntrance")
+
+
 def place_to_candidate(
     place: dict[str, Any], ctx: WorldContext, wanted_category: str | None = None, now: datetime | None = None
 ) -> Candidate | None:
     """One Places API (New) place -> Candidate, or None (not operational, no location, no category,
-    or more than 40 km from the city centre)."""
+    or more than 40 km from the city centre). Raises MalformedPlace for wrongly typed fields."""
+    if not isinstance(place, dict):
+        raise MalformedPlace("place is not an object")
+    _check_shape(place)
     pid = place.get("id")
     if not isinstance(pid, str) or not pid:
         return None
@@ -232,9 +311,13 @@ def place_to_candidate(
     if status is not None and status != "OPERATIONAL":
         return None
     loc = place.get("location") or {}
-    try:
-        lat, lng = float(loc["latitude"]), float(loc["longitude"])
-    except (KeyError, TypeError, ValueError):
+    lat_raw, lng_raw = loc.get("latitude"), loc.get("longitude")
+    if not isinstance(lat_raw, int | float) or not isinstance(lng_raw, int | float):
+        return None
+    if isinstance(lat_raw, bool) or isinstance(lng_raw, bool):
+        return None
+    lat, lng = float(lat_raw), float(lng_raw)
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
         return None
     if not within_city(lat, lng, ctx.location):
         return None
@@ -290,14 +373,17 @@ def place_to_candidate(
     )
 
 
-def text_query(intent: str, location: Location) -> str:
-    """``"{intent} in {city}"``; an intent that already names a place ("cafe in Indiranagar") gets the city
-    appended after a comma instead."""
+def text_query(intent: str, location: Location, neighbourhood: str | None = None) -> str:
+    """``"{intent} in {neighbourhood}, {city}"`` or ``"{intent} in {city}"``; an intent that already names a
+    place ("cafe in Indiranagar") gets the city appended after a comma instead."""
     intent = re.sub(r"\s+", " ", intent).strip()
     city = location.name
+    hood = re.sub(r"\s+", " ", neighbourhood or "").strip()
+    if hood and hood.lower() not in intent.lower():
+        return f"{intent} in {hood}, {city}"
     if city.lower() in intent.lower():
         return intent
-    if re.search(r"\b(in|near|around|at)\s+\w", intent, flags=re.IGNORECASE):
+    if re.search(r"\b(in|near|around|at)\s+\w", intent, flags=re.IGNORECASE) or hood:
         return f"{intent}, {city}"
     return f"{intent} in {city}"
 
@@ -342,25 +428,36 @@ class GooglePlaces:
             raise ProviderError(PROVIDER, "bad_response", "invalid JSON") from exc
 
     async def search(self, query: PlaceQuery, ctx: WorldContext) -> list[Candidate]:
-        lat = query.near_lat if query.near_lat is not None else ctx.location.lat
-        lng = query.near_lng if query.near_lng is not None else ctx.location.lng
+        lat, lng = ctx.location.lat, ctx.location.lng
+        if query.near_lat is not None and query.near_lng is not None:
+            lat, lng = query.near_lat, query.near_lng
+        elif query.neighbourhood:
+            centre = neighbourhood_centre(query.neighbourhood, ctx.location)
+            if centre is not None:
+                lat, lng = centre
         intent = query.intent.strip() or (query.category or "things to do").replace("_", " ")
         body: dict[str, Any] = {
-            "textQuery": text_query(intent, ctx.location),
+            "textQuery": text_query(intent, ctx.location, query.neighbourhood),
             "pageSize": min(query.limit, 10),
             "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lng}, "radius": float(query.radius_m)}},
             "languageCode": "en",
             "regionCode": ctx.location.country_code,
         }
         data = await self._call("POST", SEARCH_URL, SEARCH_FIELD_MASK, body)
-        places = data.get("places") if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            raise ProviderError(PROVIDER, "bad_response", "unexpected response shape")
+        places = data.get("places", [])
+        if not isinstance(places, list):
+            raise ProviderError(PROVIDER, "bad_response", "unexpected places field")
         now = datetime.now(UTC)
         currency = location_currency(ctx.location)
         out: list[Candidate] = []
-        for place in places or []:
-            if not isinstance(place, dict):
+        for index, place in enumerate(places):
+            try:
+                cand = place_to_candidate(place, ctx, query.category, now)
+            except Exception:  # one malformed place must never sink the whole search
+                log.warning("google_places: skipped malformed place at index %d", index)
                 continue
-            cand = place_to_candidate(place, ctx, query.category, now)
             if cand is None:
                 continue
             if query.open_at_min is not None and is_open_at(cand.hours, query.open_at_min) is False:
@@ -383,7 +480,9 @@ class GooglePlaces:
         if not _PLACE_ID.match(pid):
             return None
         data = await self._call("GET", DETAILS_URL.format(place_id=pid), DETAILS_FIELD_MASK)
-        if not isinstance(data, dict):
+        if data is None:
             return None
-        return place_to_candidate(data, ctx)
-
+        try:
+            return place_to_candidate(data, ctx)
+        except Exception as exc:
+            raise ProviderError(PROVIDER, "bad_response", "malformed place details") from exc

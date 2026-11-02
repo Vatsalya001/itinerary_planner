@@ -251,8 +251,13 @@ def test_outdoor_walk_after_sunset_fails():
     before = run(make_draft(("fx:p", 40)), [park], ctx=make_ctx(start_min=1000, sunset_min=1070, energy="medium"),
                  prefs=make_prefs(start_min=1000))
     assert "DAYLIGHT_CONFLICT" not in codes(before)
+    # no forecast sunset: a conservative computed sunset still applies (Bangalore, early November)
     unknown = run(make_draft(("fx:p", 40)), [park], ctx=make_ctx(start_min=1050, sunset_min=None, energy="medium"))
-    assert "DAYLIGHT_CONFLICT" not in codes(unknown)
+    assert "DAYLIGHT_CONFLICT" in codes(unknown)
+    night = run(make_draft(("fx:p", 40)), [park], ctx=make_ctx(start_min=1200, weather="unavailable", energy="medium"))
+    assert "DAYLIGHT_CONFLICT" in codes(night)
+    afternoon = run(make_draft(("fx:p", 40)), [park], ctx=make_ctx(start_min=900, weather="unavailable", energy="medium"))
+    assert "DAYLIGHT_CONFLICT" not in codes(afternoon)
     mall = make_candidate("fx:mall", "mall")  # walking category but indoors
     assert "DAYLIGHT_CONFLICT" not in codes(run(make_draft(("fx:mall", 45)), [mall],
                                                 ctx=make_ctx(start_min=1100, energy="medium")))
@@ -508,6 +513,12 @@ def _scenarios() -> dict[str, Callable[[], set[str]]]:
                                                 original=["vegetarian"])),
         "PLAN_B_INVALID": lambda: codes(run(PlanDraft(stops=[stop("fx:p", 40, plan_b_candidate_id="fx:none")]),
                                             [park])),
+        "CURRENCY_MISMATCH": lambda: codes(run(make_draft(("fx:x", 40)), [
+            CAFE.model_copy(update={"id": "fx:x", "cost": CAFE.cost.model_copy(update={"currency": "GBP"})})])),
+        "PACING_RELAXED": lambda: codes(run(make_draft(("fx:p", 40)), [park],
+                                            prefs=make_prefs(constraints=["outdoors only"]))),
+        "LOCATION_APPROXIMATE": lambda: codes(run(make_draft(("ev:a", 90)), [
+            make_candidate("ev:a", "event", tags=["approx_location"])], prefs=make_prefs(budget=None))),
     }
 
 
@@ -554,3 +565,165 @@ def test_summarize_checks_failures_and_unverified():
     items = {i.name: i for i in summarize_checks(broken, make_ctx(), make_prefs(), [])}
     assert items["sources"].status == "fail"
     assert items["budget"].status == "unverified"
+
+
+# --- verification follow-ups (D-01, D-03, D-06, D-11, D-17, D-22, D-27) -------------------------------
+
+
+def _gbp(c: Candidate) -> Candidate:
+    return c.model_copy(update={"cost": c.cost.model_copy(update={"currency": "GBP"})})
+
+
+def test_currency_mismatch_returns_plan_but_never_mixes_amounts():
+    gbp = _gbp(make_candidate("fx:g", "cafe", offset_km=(0.3, 0.0), cost=(500, 900)))
+    report = run(make_draft(("fx:cafe", 40), ("fx:g", 40)), [CAFE, gbp], ctx=make_ctx(energy="medium"))
+    assert not report.ok
+    mismatch = [v for v in report.violations if v.code == "CURRENCY_MISMATCH"]
+    assert mismatch and mismatch[0].stop_index == 1 and mismatch[0].severity == "error"
+    assert report.plan is not None
+    assert report.plan.totals.stops_cost_max == CAFE.cost.max  # the GBP amount is left out, not added as INR
+    items = {i.name: i for i in summarize_checks(report, make_ctx(), make_prefs(), [])}
+    assert items["budget"].status == "fail"
+
+
+def test_plan_b_currency_mismatch():
+    park = make_candidate("fx:p", "park")
+    museum = _gbp(make_candidate("fx:m", "museum", offset_km=(0.3, 0.0)))
+    report = run(PlanDraft(stops=[stop("fx:p", 40, plan_b_candidate_id="fx:m")]), [park, museum],
+                 ctx=make_ctx(weather="rain", energy="medium"))
+    assert "CURRENCY_MISMATCH" in codes(report)
+
+
+def test_plan_b_must_be_open_distinct_and_affordable():
+    park = make_candidate("fx:p", "park", cost=0)
+    closed = make_candidate("fx:closed", "museum", offset_km=(0.3, 0.0), hours=Hours(status="known", periods=[(1020, 1200)]))
+    unknown = make_candidate("fx:unknown", "museum", offset_km=(0.3, 0.0), hours=Hours())
+    pricey = make_candidate("fx:spa", "spa", offset_km=(0.3, 0.0), cost=(1500, 2500))
+    ctx = make_ctx(weather="rain", energy="medium")
+
+    def with_b(plan_b: str, *cands: Candidate, budget: int | None = 2000) -> ValidationReport:
+        return run(PlanDraft(stops=[stop("fx:p", 40, plan_b_candidate_id=plan_b), stop("fx:cafe", 40)]),
+                   [park, CAFE, *cands], ctx=ctx, prefs=make_prefs(budget=budget))
+
+    assert "PLAN_B_INVALID" in codes(with_b("fx:closed", closed))
+    assert "PLAN_B_INVALID" in codes(with_b("fx:cafe"))  # already a stop
+    over = with_b("fx:spa", pricey, budget=600)
+    assert any(v.code == "PLAN_B_INVALID" and "budget" in v.message for v in over.violations)
+    assert "PLAN_B_INVALID" not in codes(with_b("fx:spa", pricey, budget=None))
+    warn = with_b("fx:unknown", unknown)
+    assert warn.ok and any(v.code == "HOURS_UNVERIFIED" and "Plan B" in v.message for v in warn.violations)
+
+
+def test_food_event_needs_diet_evidence():
+    feast = make_candidate("ev:feast", "event", name="Kebab and Grill Dinner Night", tags=["events"], diet={})
+    tagged = make_candidate("ev:food", "event", name="Saturday social", tags=["food"], diet={})
+    talk = make_candidate("ev:talk", "event", name="Poetry reading", tags=["books"], diet={})
+    prefs = make_prefs(constraints=["vegetarian"], budget=None)
+    for ev in (feast, tagged):
+        report = run(make_draft((ev.id, 90)), [ev], prefs=prefs)
+        assert "DIET_UNVERIFIED" in codes(report), ev.name
+        diet = next(i for i in summarize_checks(report, make_ctx(), prefs, prefs.hard_constraints) if i.name == "diet")
+        assert diet.status != "pass"
+    confirmed = tagged.model_copy(update={"diet": {"vegetarian": Evidence.CONFIRMED}})
+    assert run(make_draft((confirmed.id, 90)), [confirmed], prefs=prefs).ok
+    assert run(make_draft((talk.id, 90)), [talk], prefs=prefs).ok
+
+
+def test_sit_down_meal_needs_a_seated_meal():
+    stall = make_candidate("fx:stall", "street_food")
+    report = run(make_draft(("fx:stall", 30)), [stall], ctx=make_ctx(energy="medium"),
+                 prefs=make_prefs(constraints=["include a sit-down meal"]))
+    assert "MUST_INCLUDE_MISSING" in codes(report)
+
+
+def test_seated_rule_waived_only_without_seated_outdoor_options():
+    park = make_candidate("fx:p", "park")
+    prefs = make_prefs(constraints=["outdoors only"])
+    waived = run(make_draft(("fx:p", 40)), [park], prefs=prefs)
+    assert waived.ok and {(v.code, v.severity) for v in waived.violations} == {("PACING_RELAXED", "warning")}
+    time_check = next(i for i in summarize_checks(waived, make_ctx(), prefs, prefs.hard_constraints) if i.name == "time")
+    assert time_check.status == "warn"
+    seated_outdoor = make_candidate("fx:terrace", "street_food", seated=True, offset_km=(0.4, 0.0))
+    strict = run(make_draft(("fx:p", 40)), [park, seated_outdoor], prefs=prefs)
+    assert any(v.code == "PACING_EXCEEDED" and "seated" in v.message for v in strict.violations)
+    no_setting = run(make_draft(("fx:p", 40)), [park])
+    assert "PACING_RELAXED" not in codes(no_setting) and "PACING_EXCEEDED" in codes(no_setting)
+
+
+def test_weather_detail_does_not_repeat_rain_chance():
+    ctx = make_ctx()
+    ctx = ctx.model_copy(update={"weather": ctx.weather.model_copy(update={"summary": "Clear, 10% chance of rain"})})
+    report = validate_plan(make_draft(("fx:cafe", 45)), make_ledger(CAFE), ctx, make_prefs(), [], travel)
+    detail = next(i.detail for i in summarize_checks(report, ctx, make_prefs(), []) if i.name == "weather")
+    assert detail.count("chance of rain") == 1
+    plain = make_ctx()
+    plain = plain.model_copy(update={"weather": plain.weather.model_copy(update={"summary": "Partly cloudy"})})
+    report = validate_plan(make_draft(("fx:cafe", 45)), make_ledger(CAFE), plain, make_prefs(), [], travel)
+    detail = next(i.detail for i in summarize_checks(report, plain, make_prefs(), []) if i.name == "weather")
+    assert detail == "Partly cloudy; 10% chance of rain"
+
+
+def test_location_approximate_warns_for_stop_and_plan_b():
+    from app.domain.evidence import APPROX_ADDRESS_PREFIX, APPROX_LOCATION_TAG
+    from app.providers import events_web
+
+    assert (APPROX_LOCATION_TAG, APPROX_ADDRESS_PREFIX) == (events_web.APPROX_LOCATION_TAG,
+                                                              events_web.APPROX_ADDRESS_PREFIX)
+    ev = make_candidate("ev:approx", "event", tags=["events", APPROX_LOCATION_TAG])
+    report = run(make_draft(("ev:approx", 90)), [ev], prefs=make_prefs(budget=None))
+    assert report.ok
+    assert [(v.code, v.severity) for v in report.violations] == [("LOCATION_APPROXIMATE", "warning")]
+    assert report.plan is not None and report.plan.stops[0].warnings
+    sources = next(i for i in summarize_checks(report, make_ctx(), make_prefs(), []) if i.name == "sources")
+    assert sources.status == "warn"
+    park = make_candidate("fx:p", "park")
+    museum = make_candidate("fx:m", "museum", offset_km=(0.3, 0.0), address=APPROX_ADDRESS_PREFIX)
+    pb = run(PlanDraft(stops=[stop("fx:p", 40, plan_b_candidate_id="fx:m")]), [park, museum],
+             ctx=make_ctx(weather="rain", energy="medium"))
+    assert "LOCATION_APPROXIMATE" in codes(pb)
+
+
+@pytest.mark.parametrize("text", ["spend an hour here", "about an hour", "a few minutes away", "1.5k rupees", "2k",
+                                  "arrive by noon", "open till midnight", "a half-hour stroll", "an hour-long walk"])
+def test_prose_everyday_phrasing_is_caught(text):
+    assert numeric_claims(text)
+
+
+# --- re-verification follow-ups (R-7, R-10, D-15 residual) ---------------------------------------------
+
+
+def test_place_names_are_not_numeric_claims():
+    scoops = make_candidate("fx:scoops", "dessert", name="Midnight Scoops Dessert Bar")
+    noon = make_candidate("fx:noon", "cafe", name="High Noon Coffee", offset_km=(0.3, 0.0))
+    draft = PlanDraft(stops=[
+        stop("fx:scoops", 30, why="Midnight Scoops is a sweet, relaxed way to end the day."),
+        stop("fx:noon", 40, why="High Noon Coffee keeps things calm."),
+    ])
+    report = run(draft, [scoops, noon], ctx=make_ctx(energy="medium"))
+    assert "PROSE_NUMERIC_CLAIM" not in codes(report)
+    # real claims are still caught next to a name
+    claim = PlanDraft(stops=[stop("fx:scoops", 30, why="Midnight Scoops, open till midnight.")])
+    assert "PROSE_NUMERIC_CLAIM" in codes(run(claim, [scoops], ctx=make_ctx(energy="medium")))
+
+
+def test_standing_only_restaurant_is_not_a_sit_down_meal():
+    stand = make_candidate("fx:stand", "restaurant", seated=False)
+    report = run(make_draft(("fx:stand", 45)), [stand], ctx=make_ctx(energy="medium"),
+                 prefs=make_prefs(constraints=["include a sit-down meal"], energy="medium"))
+    assert "MUST_INCLUDE_MISSING" in codes(report)
+
+
+def test_programme_venue_with_unknown_hours_is_an_error():
+    hall = make_candidate("fx:hall", "live_music_venue", hours=Hours())
+    report = run(make_draft(("fx:hall", 90)), [hall], ctx=make_ctx(energy="medium"))
+    hours = [v for v in report.violations if v.code == "HOURS_UNVERIFIED"]
+    assert not report.ok and hours and hours[0].severity == "error"
+    for key in ("theatre", "cinema"):
+        venue = make_candidate("fx:v", key, hours=Hours())
+        assert not run(make_draft(("fx:v", venue.duration_range[1])), [venue], ctx=make_ctx(energy="medium")).ok
+    known = make_candidate("fx:known", "live_music_venue")  # verified hours: fine
+    assert run(make_draft(("fx:known", 90)), [known], ctx=make_ctx(energy="medium")).ok
+    museum = make_candidate("fx:m", "museum", hours=Hours())  # other categories: still only a warning
+    assert run(make_draft(("fx:m", 60)), [museum], ctx=make_ctx(energy="medium")).ok
+    gig = make_candidate("ev:gig", "event", event_start_min=900, event_end_min=1020)
+    assert run(make_draft(("ev:gig", 90)), [gig], ctx=make_ctx(energy="medium")).ok

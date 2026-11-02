@@ -169,3 +169,31 @@ async def test_live_open_meteo() -> None:
         assert blr.timezone == "Asia/Kolkata" and blr.currency == "INR"
         w = await OpenMeteoWeather(client).forecast(blr, date.today())
     assert w.status == "ok" and w.sunset_min is not None
+
+
+@pytest.mark.parametrize("payload", [[], "nope", {"results": "nope"}, {"results": {"id": 1}}])
+async def test_geocode_unexpected_shapes_raise_provider_error(payload: Any) -> None:
+    with respx.mock() as mock:
+        mock.get(GEOCODE_URL).mock(return_value=httpx.Response(200, json=payload))
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(ProviderError) as info:
+                await OpenMeteoGeocoder(client).resolve("Mumbai")
+    assert info.value.code == "bad_response"
+
+
+async def test_geocode_skips_odd_results() -> None:
+    odd = [geo_result(latitude="north"), "string", geo_result(country_code=7), geo_result(id=99, name="Good")]
+    with respx.mock() as mock:
+        mock.get(GEOCODE_URL).mock(return_value=httpx.Response(200, json={"results": odd}))
+        async with httpx.AsyncClient() as client:
+            res = await OpenMeteoGeocoder(client).resolve("Good")
+    assert [r.id for r in res] == ["geonames:99"]
+
+
+@pytest.mark.parametrize("payload", [[], {"daily": []}, {"daily": "x"}, {"daily": {"time": "2026-11-07"}}])
+async def test_forecast_unexpected_shapes_are_unavailable(locations: dict[str, Location], payload: Any) -> None:
+    with respx.mock() as mock:
+        mock.get(FORECAST_URL).mock(return_value=httpx.Response(200, json=payload))
+        async with httpx.AsyncClient() as client:
+            w = await OpenMeteoWeather(client).forecast(locations["blr"], SAT)
+    assert w.status == "unavailable"

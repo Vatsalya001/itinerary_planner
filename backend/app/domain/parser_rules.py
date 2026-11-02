@@ -24,9 +24,11 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date as Date
+from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -38,7 +40,14 @@ from app.domain.categories import (
     load_categories,
     load_countries,
 )
-from app.domain.constraints import detect_conflicts, is_valid, map_constraint_text, merge_constraints
+from app.domain.constraints import (
+    detect_conflicts,
+    diet_negated,
+    is_valid,
+    map_constraint_text,
+    merge_constraints,
+    negates_all_diets,
+)
 from app.domain.pacing import energy_from_mood, meal_windows_between
 from app.domain.schemas import (
     ClarificationQuestion,
@@ -207,7 +216,28 @@ def _normalize_text(text: str | None) -> str:
     t = re.sub(r"(?<=[\d\s])([ap])\.\s?m\b", r"\1m", t, flags=re.IGNORECASE)  # 8 p.m. -> 8 pm.
     t = re.sub(r"\b(rs)\.(?=\s*\d)", r"\1 ", t, flags=re.IGNORECASE)  # Rs. 1500 -> Rs 1500
     t = re.sub(r"\b([A-Z])\.\s?([A-Z])\.", r"\1\2", t)  # M.G. Road -> MG Road, D.C. -> DC
+    t = _dotted_times(t)
     return re.sub(r"[ \t]+", " ", t).strip()
+
+
+# Dotted clock times (common Indian notation) become colon times so every time parser reads them:
+# "4.30pm", "4.30 pm", "from 4.30", "4.30 to 8", "16.30". Amounts ("₹4.50", "1.5k", "2.5 hours") are untouched.
+_NOT_AFTER_MONEY = r"(?<![\d.,₹$£€¥])(?<!rs )(?<!rs)"
+_DOTTED_TIME_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(rf"{_NOT_AFTER_MONEY}\b(\d{{1,2}})\.([0-5]\d)(?=\s*[ap]m\b)", re.IGNORECASE), r"\1:\2"),
+    (re.compile(r"\b(from|till|until|to|after|by|before|starting|start|begin|free)\s+(\d{1,2})\.([0-5]\d)"
+                r"(?![\d.,])", re.IGNORECASE), r"\1 \2:\3"),
+    (re.compile(rf"{_NOT_AFTER_MONEY}\b(\d{{1,2}})\.([0-5]\d)(?=\s*(?:to|till|until|-|–)\s*\d)", re.IGNORECASE),
+     r"\1:\2"),
+    (re.compile(rf"{_NOT_AFTER_MONEY}\b(1[3-9]|2[0-3])\.([0-5]\d)(?![\d.,])(?!\s*(?:k\b|rupees?|rs\b|inr\b|dollars?"
+                rf"|pounds?|euros?|bucks|hours?|hrs?))", re.IGNORECASE), r"\1:\2"),
+]
+
+
+def _dotted_times(text: str) -> str:
+    for rx, repl in _DOTTED_TIME_RULES:
+        text = rx.sub(repl, text)
+    return text
 
 
 def _sentences(text: str) -> list[str]:
@@ -313,8 +343,13 @@ _MONEY_PER_PERSON = re.compile(
     re.IGNORECASE)
 _MONEY_CONTEXT = re.compile(
     rf"(?:\b(?P<ctx>budget(?:\s+(?:of|is|was|around|about|under|max|roughly|approx))*|got|have|spend(?:ing)?"
-    rf"|around|about|approx(?:imately)?|roughly|under|below|upto|up\s+to|max(?:imum)?|within|less\s+than)|~)"
+    rf"|around|about|approx(?:imately)?|roughly|under|below|upto|up\s+to|max(?:imum)?|within|less\s+than|with"
+    rf"|cap|limit)|~)"
     rf"\s*[:=]?\s*(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?{_NOT_MONEY_UNIT}",
+    re.IGNORECASE)
+_MONEY_CUE_AFTER = re.compile(  # "600 budget", "2500 max", "1500 all in", "2k tops"
+    rf"(?<![\d.,:])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?P<ctx>budget|max(?:imum)?|tops|all[\s-]+in"
+    rf"|in\s+total|total|limit|cap)\b",
     re.IGNORECASE)
 _MONEY_K = re.compile(r"(?<![\d.,])(?P<num>\d+(?:\.\d+)?)\s*(?P<mult>k)(?![a-z])(?!\s*(?:run|race|steps|km))",
                       re.IGNORECASE)
@@ -365,7 +400,7 @@ def _extract_money(text: str, bare_ok: bool = False) -> _Money | None:
         amount = _amount(m.group("num"), m.group("mult"))
         if amount is not None:
             bare.append(_Money(amount, None, False, m.start()))
-    for m in _MONEY_CONTEXT.finditer(text):
+    for m in [*_MONEY_CONTEXT.finditer(text), *_MONEY_CUE_AFTER.finditer(text)]:
         amount = _amount(m.group("num"), m.group("mult"))
         is_budget_word = (m.group("ctx") or "").lower().startswith("budget")
         if amount is not None and (is_budget_word or amount >= _MIN_BARE_BUDGET):
@@ -470,29 +505,49 @@ def _extract_duration(text: str) -> int | None:
     return None
 
 
+# An explicit "am" attached to a number ("6am", "6 am", "6 a.m.") or an early-hours word means the user meant the
+# early hours, so an early start is never moved to the afternoon. ("I am free" is not an am marker.)
+_EARLY_HINT = re.compile(r"\d\s*a\.?\s?m\b|\b(?:morning|dawn|sunrise|midnight|night|overnight|early)\b",
+                         re.IGNORECASE)
+_EARLY_START_MIN = 7 * 60
+_AMPM_TOKEN = re.compile(r"[ap]m|noon|midday", re.IGNORECASE)
+_AMPM_ANYWHERE = re.compile(r"\d\s*[ap]m\b", re.IGNORECASE)
+
+
 def _extract_time(text: str) -> _TimeInfo:
-    """Start and duration from free text: "4 to 8pm", "from 4pm", "free for 3 hours", "afternoon"."""
+    """Start and duration from free text: "4 to 8pm", "from 4pm", "free for 3 hours", "afternoon".
+
+    A clock time before 07:00 written without am/pm, when the text has no explicit "am" and no early-hours word,
+    means the afternoon ("from 4:30 to 8" -> 16:30-20:00). Explicit "6am" / "12am" is never moved."""
     low = text.lower()
+    early = bool(_EARLY_HINT.search(low))
     rng = parse_time_range(low)
     if rng:
-        return _TimeInfo(rng[0], _clamp_minutes(rng[1] - rng[0]))
-    start: int | None = None
+        range_start, range_end = rng
+        if not early and range_start < _EARLY_START_MIN and not _AMPM_ANYWHERE.search(low):
+            range_start += 720
+            range_end = range_end if range_end > range_start else range_end + 720
+        return _TimeInfo(range_start, _clamp_minutes(range_end - range_start))
+    start_tok: int | None = None
     end: int | None = None
     bare: list[int] = []
     for m in _CLOCK_TOKEN.finditer(low):
         value = parse_clock(m.group(1))
         if value is None:
             continue
+        if not early and value < _EARLY_START_MIN and not _AMPM_TOKEN.search(m.group(1)):
+            value += 720  # "from 4:30" -> 16:30
         before = low[max(0, m.start() - 20):m.start()]
-        is_range_end = bool(_RANGE_CUE.search(before)) and (start is not None or bool(bare))
+        is_range_end = bool(_RANGE_CUE.search(before)) and (start_tok is not None or bool(bare))
         if _END_CUE.search(before) or is_range_end:
             end = value if end is None else end
         elif _START_CUE.search(before):
-            start = value if start is None else start
+            start_tok = value if start_tok is None else start_tok
         elif _AT_CUE.search(before):
             continue  # "dinner at 8pm" is an activity time, not the start
         else:
             bare.append(value)
+    start: int | None = start_tok
     if start is None and len(bare) == 1:
         start = bare[0]
     minutes = _extract_duration(low)
@@ -792,6 +847,19 @@ def _clause_consumed(clause: str) -> bool:
     )
 
 
+NO_DIET_RESTRICTION = "No diet restriction"
+
+
+def _diet_negation_note(text: str) -> str | None:
+    """A statement that only negates a diet ("I'm not vegetarian", "I eat meat") is a disclosed preference, never
+    a hard constraint or a clarification."""
+    if negates_all_diets(text):
+        return NO_DIET_RESTRICTION
+    if any(diet_negated(text, diet) for diet in ("vegan", "jain", "vegetarian")):
+        return text.strip()[:120]
+    return None
+
+
 def _unmapped_and_soft(request: PlanRequest) -> tuple[list[str], list[str]]:
     """Hard-sounding text that maps to no vocabulary constraint, and disclosed soft preferences."""
     unmapped: list[str] = []
@@ -799,7 +867,10 @@ def _unmapped_and_soft(request: PlanRequest) -> tuple[list[str], list[str]]:
     for entry in request.constraints:
         if map_constraint_text(entry):
             continue
-        if _is_instruction_like(entry) or _HARD_RE.search(entry):
+        diet_note = _diet_negation_note(entry)
+        if diet_note and not _is_instruction_like(entry):
+            soft.append(diet_note)
+        elif _is_instruction_like(entry) or _HARD_RE.search(entry):
             unmapped.append(entry)
         else:
             soft.append(entry)
@@ -810,7 +881,10 @@ def _unmapped_and_soft(request: PlanRequest) -> tuple[list[str], list[str]]:
         for clause in _clauses(sentence):
             if map_constraint_text(clause) or _BENIGN_RE.search(clause):
                 continue
-            if _HARD_RE.search(clause) and not _clause_consumed(clause):
+            diet_note = _diet_negation_note(clause)
+            if diet_note:
+                soft.append(diet_note)
+            elif _HARD_RE.search(clause) and not _clause_consumed(clause):
                 unmapped.append(clause[:120])
             elif _SOFT_RE.search(clause) and not _clause_consumed(clause):
                 soft.append(clause[:120])
@@ -847,6 +921,123 @@ def _conflict_options(conflict: ConstraintConflict) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------------------------------
+# Unread amounts, date bounds, order hints
+# ---------------------------------------------------------------------------------------------------
+
+_TIME_RANGE_SPAN = re.compile(
+    r"(?:from\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:to|till|until|-|–)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?",
+    re.IGNORECASE)
+_MONTHS = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?"
+           r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?")
+_DATE_SPAN = re.compile(
+    rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:{_MONTHS})\b(?:,?\s+\d{{4}})?"
+    rf"|\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?\b(?:,?\s+\d{{4}})?"
+    rf"|\b\d{{1,4}}[/-]\d{{1,2}}[/-]\d{{1,4}}\b",
+    re.IGNORECASE)
+_CANDIDATE_AMOUNT = re.compile(
+    rf"(?<![\w.,:/#₹$£€¥-])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?{_NOT_MONEY_UNIT}"
+    r"(?!\s*(?:feet|ft|road|rd|main|cross|block|sector|street|lane|floor|phase|stage|layout|nagar)\b)",
+    re.IGNORECASE)
+_READ_SPANS: list[re.Pattern[str]] = [
+    _MONEY_PREFIX, _MONEY_SUFFIX, _MONEY_PER_PERSON, _MONEY_CONTEXT, _MONEY_CUE_AFTER, _MONEY_K, _TIME_RANGE_SPAN,
+    _CLOCK_TOKEN, _DURATION_RE, *(rx for rx, _ in _FUZZY_DURATIONS), _GROUP_PLUS_ME, _GROUP_TOTAL, _DATE_SPAN,
+]
+_MIN_UNREAD_AMOUNT = 50
+UNREAD_AMOUNT_PREFIX = "Couldn't tell whether "
+
+
+_LOOSE_CUE_BEFORE = re.compile(
+    r"\b(?:like|maybe|say|about|around|roughly|approx(?:imately)?|spend|spending|budget(?:\s+is)?)\s*$", re.IGNORECASE)
+_LOOSE_CUE_AFTER = re.compile(r"^\s*(?:or\s+so|-?ish|odd|or\s+thereabouts)\b", re.IGNORECASE)
+LOOSE_AMOUNT_PREFIX = "Read "
+
+
+def _unread_amounts(text: str) -> list[tuple[int, re.Match[str], str]]:
+    """Plausible money amounts that no extractor attributed, as (amount, match, text searched)."""
+    work = _blank_places(text)
+    for rx in _READ_SPANS:
+        work = rx.sub(lambda m: " " * len(m.group(0)), work)
+    found: list[tuple[int, re.Match[str], str]] = []
+    for m in _CANDIDATE_AMOUNT.finditer(work):
+        amount = _amount(m.group("num"), m.group("mult"))
+        if amount is not None and amount >= _MIN_UNREAD_AMOUNT:
+            found.append((amount, m, work))
+    return found
+
+
+def _unread_amount(text: str) -> str | None:
+    """A plausible money amount that no extractor attributed ("600 for us"); None if there is none."""
+    found = _unread_amounts(text)
+    return found[0][1].group(0).strip() if found else None
+
+
+def _loose_amount(text: str) -> tuple[int, str] | None:
+    """"spend like 600 or so", "about 800-ish": the budget, when it is the only money-like number in the text."""
+    found = _unread_amounts(text)
+    if len(found) != 1:
+        return None
+    amount, m, work = found[0]
+    if _LOOSE_CUE_BEFORE.search(work[:m.start()]) or _LOOSE_CUE_AFTER.search(work[m.end():]):
+        return amount, m.group(0).strip()
+    return None
+
+
+MAX_DAYS_AHEAD = 60
+DATE_PASSED = "That date has passed; planning for the coming Saturday"
+DATE_TOO_FAR = f"That date is more than {MAX_DAYS_AHEAD} days away; planning for the coming Saturday"
+
+
+def _usable_date(day: Date | None, city: str | None, now: datetime) -> tuple[Date | None, str | None]:
+    """The requested date if it is today..today+60 days in the city's timezone, else (None, assumption)."""
+    if day is None:
+        return None, None
+    place = lookup_place(city)
+    local = now.astimezone(ZoneInfo(place.timezone)) if place is not None and now.tzinfo else now
+    today = local.date()
+    if day < today:
+        return None, DATE_PASSED
+    if day > today + timedelta(days=MAX_DAYS_AHEAD):
+        return None, DATE_TOO_FAR
+    return day, None
+
+
+_ORDER_SPLIT = re.compile(r"\s*,?\s*\b(?:and\s+then|then|followed\s+by|after\s+that|afterwards)\b\s*", re.IGNORECASE)
+_MEAL_WORD = re.compile(r"breakfast|brunch|lunch|dinner", re.IGNORECASE)
+ORDER_PREFIX = "order: "
+
+
+def _first_activity(clause: str) -> str | None:
+    """Earliest activity in a clause: a meal word (brunch, dinner) or a canonical interest tag."""
+    best: tuple[int, str, tuple[str, ...]] | None = None
+    for rx, tags in _INTEREST_LEXICON:
+        m = rx.search(clause)
+        if m and not _NEGATION_RE.search(clause[:m.start()]) and (best is None or m.start() < best[0]):
+            best = (m.start(), m.group(0).lower(), tags)
+    if best is None:
+        return None
+    return best[1] if _MEAL_WORD.fullmatch(best[1]) else best[2][0]
+
+
+def _order_hint(sentences: list[str]) -> str | None:
+    """Stated order ("late brunch then something artsy") as "order: brunch > art"; None when not stated."""
+    for sentence in sentences:
+        parts = _ORDER_SPLIT.split(sentence)
+        if len(parts) < 2:
+            continue
+        items: list[str] = []
+        for i, part in enumerate(parts):
+            clauses = [c.strip() for c in re.split(r"[,;]", _blank_places(part)) if c.strip()]
+            if not clauses:
+                continue
+            item = _first_activity(clauses[-1] if i == 0 else clauses[0])
+            if item and item not in items:
+                items.append(item)
+        if len(items) >= 2:
+            return ORDER_PREFIX + " > ".join(items)
+    return None
+
+
+# ---------------------------------------------------------------------------------------------------
 # parse_rules
 # ---------------------------------------------------------------------------------------------------
 
@@ -854,9 +1045,9 @@ def _conflict_options(conflict: ConstraintConflict) -> tuple[str, str]:
 def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
     """Regex/rule parser over free_text + structured fields. Structured fields win over free text.
 
-    ``now`` is accepted for interface parity with the LLM parser; dates are resolved by compute_window.
+    ``now`` bounds ``request.date``: a past date or one more than 60 days ahead is ignored (the coming
+    Saturday is planned instead) and the reason is recorded in preferences.assumptions.
     """
-    del now
     text = _normalize_text(request.free_text)
     sentences = [s for s in _sentences(text) if not _is_instruction_like(s)]
     clean = ". ".join(sentences)
@@ -901,12 +1092,27 @@ def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
 
     hard = original_constraints(request)
     unmapped, soft = _unmapped_and_soft(request)
+    order = _order_hint(sentences)
+    if order:
+        soft.append(order)
+
+    if budget is None:
+        loose = _loose_amount(clean)
+        unread = None if loose else _unread_amount(clean)
+        if loose:
+            budget = loose[0]
+            assumptions.append(f"{LOOSE_AMOUNT_PREFIX}“{loose[1]}” as your budget per person")
+        elif unread:  # never silently replace a number the user wrote with a default budget
+            assumptions.append(f"{UNREAD_AMOUNT_PREFIX}“{unread}” is your budget, so it wasn't used")
+    day, date_note = _usable_date(request.date, city, now)
+    if date_note:
+        assumptions.append(date_note)
 
     missing = [name for name, absent in (("city", city is None), ("budget", budget is None),
                                          ("available_time", minutes is None)) if absent]
     prefs = Preferences(
         city=city, budget=budget, currency=currency, start_min=start,
-        available_minutes=minutes if minutes is not None else DEFAULT_MINUTES, date=request.date, mood=mood,
+        available_minutes=minutes if minutes is not None else DEFAULT_MINUTES, date=day, mood=mood,
         energy=energy_from_mood(mood) if mood else Energy.MEDIUM, interests=interests, hard_constraints=hard,
         soft_preferences=soft, neighbourhood=neighbourhood, group_size=group, assumptions=assumptions,
     )
@@ -956,19 +1162,22 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     else:
         neighbourhood = m.neighbourhood or llm_nb or r.neighbourhood
 
-    budget = r.budget if request.budget is not None or m.budget is None else m.budget
+    # The model's time and budget fields count only when the user's text actually contains a time expression
+    # or a money-like number; otherwise they were invented and the rules value or a disclosed default is used.
+    time_seen, money_seen = _text_evidence(request)
+    budget = m.budget if request.budget is None and m.budget is not None and money_seen else r.budget
     explicit = request.currency is not None or rules.budget_currency_explicit  # only text we can see
     if request.currency is not None:
         currency: str | None = request.currency
     elif rules.budget_currency_explicit:
         currency = r.currency
     else:
-        currency = m.currency or r.currency
+        currency = (m.currency if money_seen else None) or r.currency
 
     llm_minutes_found = "available_time" not in llm.missing
     if request.available_time is not None and parse_duration(request.available_time) is not None:
         minutes, minutes_found = r.available_minutes, True
-    elif llm_minutes_found and m.available_minutes != DEFAULT_MINUTES:  # default-valued == not found
+    elif time_seen and llm_minutes_found and m.available_minutes != DEFAULT_MINUTES:  # default-valued == not found
         minutes, minutes_found = m.available_minutes, True
     elif rules_minutes_found:
         minutes, minutes_found = r.available_minutes, True
@@ -977,7 +1186,7 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
 
     if _structured_start(request.start_time) is not None:
         start, start_found = r.start_min, True
-    elif m.start_min != DEFAULT_START_MIN:  # a default-valued LLM start is indistinguishable from "not found"
+    elif time_seen and m.start_min != DEFAULT_START_MIN:  # a default-valued LLM start counts as "not found"
         start, start_found = m.start_min, True
     elif rules_start_found:
         start, start_found = r.start_min, True
@@ -994,13 +1203,15 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     else:
         group = m.group_size if m.group_size != 1 else r.group_size
 
-    assumptions = [a for a in _dedupe([*r.assumptions, *m.assumptions]) if not a.startswith(START_ASSUMPTION)]
+    assumptions = [a for a in _dedupe([*r.assumptions, *m.assumptions]) if not a.startswith(START_ASSUMPTION)
+                   and not (budget is not None and a.startswith(UNREAD_AMOUNT_PREFIX))]
     if not start_found:
         assumptions.insert(0, _start_assumption(start))
 
     prefs = Preferences(
         city=city, budget=budget, currency=currency, start_min=start, available_minutes=minutes,
-        date=request.date or m.date or r.date, mood=mood, energy=m.energy, interests=interests,
+        date=r.date if request.date is not None else (m.date or r.date), mood=mood, energy=m.energy,
+        interests=interests,
         hard_constraints=hard, soft_preferences=_dedupe([*r.soft_preferences, *m.soft_preferences]),
         neighbourhood=neighbourhood, group_size=group, assumptions=assumptions,
     )
@@ -1009,6 +1220,14 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
         unmapped_constraints=_dedupe([*rules.unmapped_constraints, *llm.unmapped_constraints]),
         conflicts=detect_conflicts(hard), budget_currency_explicit=explicit, source="llm",
     )
+
+
+def _text_evidence(request: PlanRequest) -> tuple[bool, bool]:
+    """(time expression seen, money-like number seen) in the free text, ignoring instruction-like sentences."""
+    clean = ". ".join(s for s in _sentences(_normalize_text(request.free_text)) if not _is_instruction_like(s))
+    if not clean:
+        return False, False
+    return _has_time(clean), bool(_extract_money(clean) or _unread_amount(clean))
 
 
 def _missing(city: str | None, budget: int | None, minutes_found: bool) -> list[str]:
@@ -1271,6 +1490,31 @@ def _replace_unmapped(data: dict[str, Any], answer: str) -> None:
 # ---------------------------------------------------------------------------------------------------
 
 
+@lru_cache(maxsize=1)
+def _fx() -> dict[str, Any]:
+    path = DATA_DIR / "fx.yaml"
+    if not path.exists():
+        return {}
+    data: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return data
+
+
+def fx_as_of() -> str:
+    """Date of the reference rates in data/fx.yaml (approximate, not live)."""
+    return str(_fx().get("as_of", "undated"))
+
+
+def convert_amount(amount: int, source: str, target: str) -> int | None:
+    """Convert with the approximate reference rates in data/fx.yaml, rounded down so a converted budget never
+    allows more than the original. None when either currency has no reference rate."""
+    rates: dict[str, Any] = _fx().get("units_per_usd") or {}
+    if source == target:
+        return amount
+    if source not in rates or target not in rates or not rates[source]:
+        return None
+    return math.floor(amount * float(rates[target]) / float(rates[source]) + 1e-9)
+
+
 def apply_defaults(outcome: ParseOutcome, location: Location) -> Preferences:
     """Final preferences for planning: currency from the location when not explicit, a default budget per
     currency when missing (INR 1500, GBP 40, USD 50, EUR 45, else None), start 15:00 and 240 minutes when
@@ -1285,6 +1529,22 @@ def apply_defaults(outcome: ParseOutcome, location: Location) -> Preferences:
         if local and prefs.budget is not None:
             assumptions.append(f"Budget read as {_fmt_money(prefs.budget, local)} ({local}, the local currency)")
         prefs.currency = local  # a non-explicit guess is never kept; None when the country has no default
+    elif local and prefs.currency != local:
+        if prefs.budget is None:
+            prefs.currency = local  # nothing to convert; the default budget below is in the local currency
+        else:
+            converted = convert_amount(prefs.budget, prefs.currency, local)
+            if converted is not None:
+                assumptions.append(
+                    f"{_fmt_money(prefs.budget, prefs.currency)} ≈ {_fmt_money(converted, local)} at an approximate "
+                    f"reference rate ({fx_as_of()}, not live)")
+                prefs.budget, prefs.currency = converted, local
+            else:  # left unconverted: the validator blocks plans priced in another currency
+                assumptions.append(
+                    f"Couldn't convert {_fmt_money(prefs.budget, prefs.currency)} to {local} (no reference rate), so "
+                    f"places priced in {local} can't be checked against this budget")
+    elif local is None and prefs.budget is not None:
+        assumptions.append(f"No local currency is known for {location.name}; the budget stays in {prefs.currency}")
 
     if prefs.budget is None:
         default = DEFAULT_BUDGETS.get(prefs.currency or "")

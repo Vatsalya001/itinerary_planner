@@ -225,3 +225,34 @@ def test_candidate_allowed_excludes_known_and_unverified_violations():
 def test_event_date_is_not_a_constraint_concern():
     ev = make_candidate("ev:e", "event", event_date=TARGET_DATE)
     assert candidate_allowed(ev, [], CTX) == (True, [])
+
+
+def test_food_events_and_meal_alignment():
+    from app.domain.evidence import calm_at, is_food_event, is_full_meal, main_meal_window
+
+    assert is_food_event(make_candidate("ev:f", "event", tags=["food"]))
+    assert is_food_event(make_candidate("ev:b", "event", name="Sunday Brunch Club", tags=[]))
+    assert not is_food_event(make_candidate("ev:t", "event", name="Poetry night", tags=["books"]))
+    assert is_food_stop(make_candidate("ev:f", "event", tags=["food"]))
+    assert is_full_meal(make_candidate("fx:r", "restaurant"))
+    assert not is_full_meal(make_candidate("fx:s", "street_food"))
+    assert main_meal_window(900, 970) is None  # 15:00 thali
+    window = main_meal_window(1170, 1240)
+    assert window is not None and window.name == "dinner"
+    assert main_meal_window(1076, 1186) is None  # 17:56-19:46: starts before dinner
+    assert main_meal_window(1310, 1390) is None  # starts in dinner but mostly after it
+    calm = make_candidate("fx:c", "cafe", popularity="low", busy_windows=[(1020, 1110)])
+    assert calm_at(calm, 900, 960) and not calm_at(calm, 1000, 1050)
+    assert not calm_at(make_candidate("fx:m", "cafe", popularity="medium", busy_windows=[]), 900, 960)
+
+
+def test_meal_slot_allows_a_short_early_start():
+    from app.domain.evidence import is_full_meal, meal_slot
+
+    slot = meal_slot(1140, 1250)  # 19:00-20:50: half an hour before dinner opens, mostly inside
+    assert slot is not None and slot[0].name == "dinner" and slot[1] == 30
+    assert meal_slot(1100, 1170) is None  # more than half an hour early
+    assert meal_slot(900, 970) is None  # 15:00 thali
+    in_window = meal_slot(1170, 1240)
+    assert in_window is not None and in_window[1] == 0
+    assert not is_full_meal(make_candidate("fx:stand", "restaurant", seated=False))

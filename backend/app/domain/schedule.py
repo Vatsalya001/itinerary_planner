@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from urllib.parse import urlencode
 
-from app.domain.costs import compute_totals
+from app.domain.categories import currency_for_country
+from app.domain.costs import compute_totals, foreign_currencies
 from app.domain.evidence import is_walking_stop
 from app.domain.schemas import (
     Candidate,
@@ -24,13 +25,12 @@ MAPS_DIR_URL = "https://www.google.com/maps/dir/"
 
 
 def plan_currency(ctx: WorldContext, prefs: Preferences, stops: Sequence[Candidate] = ()) -> str:
+    """The budget currency: the user's currency, else the location's (location, country, else USD - the same
+    rule providers and travel use to price things). ``stops`` is accepted for compatibility and ignored, so a
+    stop's own currency can never redefine the budget currency."""
     if prefs.currency:
         return prefs.currency
-    if ctx.location.currency:
-        return ctx.location.currency
-    for c in stops:
-        return c.cost.currency
-    return "INR"
+    return ctx.location.currency or currency_for_country(ctx.location.country_code) or "USD"
 
 
 def stop_start(c: Candidate, arrival_min: int) -> int:
@@ -72,6 +72,8 @@ def build_schedule(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: World
     Also builds a Google Maps directions URL for the route.
 
     Violations returned here: UNKNOWN_ID (hydration), TRANSFER_UNKNOWN (missing coordinates; no plan),
+    CURRENCY_MISMATCH (a stop or leg not priced in the budget currency; the plan is returned for feedback but
+    its totals leave the foreign amounts out - they are never added as if they were the budget currency),
     and HOURS_CONFLICT when the arrival at an event is after the event's start (plan still returned).
     """
     violations: list[Violation] = []
@@ -134,10 +136,25 @@ def build_schedule(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: World
         ))
         prev_end = end
 
+    currency = plan_currency(ctx, prefs, candidates)
+    for i, cand in enumerate(candidates):
+        if cand.cost.currency != currency:
+            violations.append(Violation(
+                code="CURRENCY_MISMATCH", severity="error", stop_index=i, candidate_id=cand.id,
+                message=f"{cand.name} is priced in {cand.cost.currency}, not the budget's {currency}",
+            ))
+    for i, leg in enumerate(legs):
+        if leg.fare.currency != currency:
+            violations.append(Violation(
+                code="CURRENCY_MISMATCH", severity="error", stop_index=i + 1, candidate_id=leg.to_id,
+                message=f"The fare to stop {i + 2} is estimated in {leg.fare.currency}, not the budget's {currency}",
+            ))
+    mixed = bool(foreign_currencies(currency, candidates, legs))  # CURRENCY_MISMATCH raised above
+
     elapsed = prev_end - ctx.start_min
     totals = compute_totals(
-        candidates, legs, currency=plan_currency(ctx, prefs, candidates), budget=prefs.budget,
-        elapsed_min=elapsed, available_minutes=prefs.available_minutes, walking_min=walking,
+        candidates, legs, currency=currency, budget=prefs.budget,
+        elapsed_min=elapsed, available_minutes=prefs.available_minutes, walking_min=walking, skip_foreign=mixed,
     )
     plan = CanonicalPlan(
         date=ctx.date, city=ctx.location.name, timezone=ctx.location.timezone,

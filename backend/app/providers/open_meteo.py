@@ -83,9 +83,17 @@ class OpenMeteoGeocoder:
             data = resp.json()
         except ValueError as exc:
             raise ProviderError("open_meteo_geocoding", "bad_response", "invalid JSON") from exc
+        results = data.get("results") if isinstance(data, dict) else "not an object"
+        if results is None:
+            results = []  # Open-Meteo omits "results" when nothing matches
+        if not isinstance(results, list):
+            raise ProviderError("open_meteo_geocoding", "bad_response", "unexpected response shape")
         out: list[Location] = []
-        for result in data.get("results") or []:
-            loc = _location_from(result) if isinstance(result, dict) else None
+        for result in results:
+            try:
+                loc = _location_from(result) if isinstance(result, dict) else None
+            except Exception:  # one odd result is skipped, never a crash
+                loc = None
             if loc is not None:
                 out.append(loc)
         return out
@@ -146,31 +154,37 @@ class OpenMeteoWeather:
             if resp.status_code != 200:
                 log.info("open-meteo forecast HTTP %s", resp.status_code)
                 return _unavailable()
-            daily = resp.json().get("daily") or {}
-        except (httpx.HTTPError, ValueError, AttributeError):
+            return _parse_forecast(resp.json(), day)
+        except Exception:  # network, JSON or shape problems: the plan proceeds without weather
             return _unavailable()
-        if _first(daily, "time") != day.isoformat():
-            return _unavailable()
-        code = _first(daily, "weather_code")
-        tmax = _first(daily, "temperature_2m_max")
-        tmin = _first(daily, "temperature_2m_min")
-        precip = _first(daily, "precipitation_probability_max")
-        if code is None and tmax is None and precip is None:
-            return _unavailable()
-        try:
-            weather_code = int(code) if code is not None else None
-            precip_pct = round(float(precip)) if precip is not None else None
-            temp_max = float(tmax) if tmax is not None else None
-            temp_min = float(tmin) if tmin is not None else None
-        except (TypeError, ValueError):
-            return _unavailable()
-        return Weather(
-            status="ok",
-            summary=weather_summary(weather_code, temp_max, precip_pct),
-            precip_prob_max=precip_pct,
-            temp_max_c=temp_max,
-            temp_min_c=temp_min,
-            weather_code=weather_code,
-            sunrise_min=_local_minutes(_first(daily, "sunrise"), day),
-            sunset_min=_local_minutes(_first(daily, "sunset"), day),
-        )
+
+
+def _parse_forecast(data: Any, day: date) -> Weather:
+    daily = data.get("daily") if isinstance(data, dict) else None
+    if not isinstance(daily, dict):
+        return _unavailable()
+    if _first(daily, "time") != day.isoformat():
+        return _unavailable()
+    code = _first(daily, "weather_code")
+    tmax = _first(daily, "temperature_2m_max")
+    tmin = _first(daily, "temperature_2m_min")
+    precip = _first(daily, "precipitation_probability_max")
+    if code is None and tmax is None and precip is None:
+        return _unavailable()
+    try:
+        weather_code = int(code) if code is not None else None
+        precip_pct = round(float(precip)) if precip is not None else None
+        temp_max = float(tmax) if tmax is not None else None
+        temp_min = float(tmin) if tmin is not None else None
+    except (TypeError, ValueError):
+        return _unavailable()
+    return Weather(
+        status="ok",
+        summary=weather_summary(weather_code, temp_max, precip_pct),
+        precip_prob_max=precip_pct,
+        temp_max_c=temp_max,
+        temp_min_c=temp_min,
+        weather_code=weather_code,
+        sunrise_min=_local_minutes(_first(daily, "sunrise"), day),
+        sunset_min=_local_minutes(_first(daily, "sunset"), day),
+    )

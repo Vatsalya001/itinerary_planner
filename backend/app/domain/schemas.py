@@ -272,6 +272,7 @@ class Candidate(StrictModel):
 class PlaceQuery(StrictModel):
     intent: str = Field(max_length=200)  # e.g. "quiet vegetarian cafe"
     category: str | None = None
+    neighbourhood: str | None = Field(default=None, max_length=80)  # bias text/location to this area
     near_lat: float | None = None
     near_lng: float | None = None
     radius_m: int = Field(default=5000, ge=200, le=40000)

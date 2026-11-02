@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.deps import Deps
 from app.domain.constraints import merge_constraints
@@ -19,7 +21,8 @@ from app.domain.schemas import (
     Weather,
     WorldContext,
 )
-from app.domain.timeutil import next_saturday
+from app.domain.sun import SAFETY_MARGIN_MIN, sun_times
+from app.domain.timeutil import fmt_clock, next_saturday
 from app.providers.base import PlacesProvider, ProviderError
 from app.trace import Tracer
 
@@ -38,16 +41,45 @@ async def geocode(city: str, deps: Deps, tracer: Tracer) -> list[Location]:
 
 async def build_context(prefs: Preferences, location: Location, deps: Deps, tracer: Tracer,
                         now: datetime) -> tuple[WorldContext, list[str]]:
+    """Target date, time window, weather (with an astronomical sunset fallback) and pacing.
+
+    If the plan is for today (a Saturday) and the start time has already passed, the start moves to the
+    next quarter hour (the window length is kept) and an assumption is added to ``prefs``.
+    """
     degradations: list[str] = []
     day = prefs.date or next_saturday(now, location.timezone)
-    with tracer.tool("get_weather", node="get_weather") as info:
-        try:
-            weather = await deps.weather.forecast(location, day)
-        except Exception:  # weather is optional; providers should not raise, but never fail the run on it
-            weather = Weather(status="unavailable", summary="Weather not available")
-        info["summary"] = weather.summary or weather.status
-    if weather.status != "ok":
+    local_now = now.astimezone(ZoneInfo(location.timezone))
+    if day == local_now.date():
+        earliest = local_now.hour * 60 + local_now.minute + 15
+        earliest = -(-earliest // 15) * 15  # round up to the quarter hour
+        if prefs.start_min < earliest:
+            prefs.start_min = earliest
+            prefs.assumptions = [a for a in prefs.assumptions if not a.startswith("Starting at ")]
+            prefs.assumptions.append(f"Starting at {fmt_clock(earliest)} because the usual start time has passed")
+
+    tracer.emit("tool_called", node="get_weather", tool="get_weather", reason=f"forecast for {day.isoformat()}")
+    t0 = time.perf_counter()
+    try:
+        weather = await deps.weather.forecast(location, day)
+    except Exception:  # weather is optional; never fail the run on it
+        weather = Weather(status="unavailable", summary="Weather not available")
+    elapsed = int((time.perf_counter() - t0) * 1000)
+    if weather.status == "ok":
+        tracer.emit("tool_completed", node="get_weather", tool="get_weather", duration_ms=elapsed,
+                    summary=weather.summary or "forecast received")
+    else:
         degradations.append(WEATHER_UNAVAILABLE)
+        tracer.emit("tool_failed", node="get_weather", tool="get_weather", duration_ms=elapsed,
+                    summary="Weather unavailable; planning without a forecast",
+                    data={"code": "weather_unavailable", "recovered": True})
+    if weather.sunset_min is None:
+        # Computed sun times carry formula error; a safety margin keeps walks out of the dusk window.
+        times = sun_times(day, location.lat, location.lng, location.timezone)
+        if times is not None:
+            weather = weather.model_copy(
+                update={"sunrise_min": times[0] + SAFETY_MARGIN_MIN, "sunset_min": times[1] - SAFETY_MARGIN_MIN}
+            )
+
     start = prefs.start_min
     end = start + prefs.available_minutes
     ctx = WorldContext(

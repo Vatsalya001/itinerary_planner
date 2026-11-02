@@ -15,10 +15,12 @@ Conventions for ``ConstraintCheck``:
 
 from __future__ import annotations
 
+import re
 from typing import Literal, NamedTuple
 
 from app.domain.categories import CategoryInfo, load_categories
-from app.domain.schemas import Candidate, Constraint, Evidence, WorldContext
+from app.domain.pacing import MEAL_WINDOWS
+from app.domain.schemas import Candidate, Constraint, Evidence, MealWindow, WorldContext
 from app.domain.timeutil import overlaps
 
 DAY_START_MIN = 10 * 60  # "most of the day" for the crowd prefilter is judged over at least 10:00-22:00
@@ -45,7 +47,42 @@ def category_info(c: Candidate) -> CategoryInfo | None:
     return load_categories().get(c.category)
 
 
+# Event tags or name words that make an event a food stop (FoodEvent, brunches, tastings, food markets...).
+FOOD_EVENT_TAGS = frozenset({
+    "food", "dining", "dinner", "lunch", "brunch", "breakfast", "tasting", "street food", "dessert", "coffee",
+    "food festival", "supper",
+})
+_FOOD_EVENT_NAME = re.compile(
+    r"\b(food|foodie|brunch|breakfast|lunch|dinner|supper|tasting|feast|thali|buffet|grill|bbq|barbecue|kebab|"
+    r"biryani|dosa|street food|food market|chef|cook[- ]?off|supper club|pop[- ]?up kitchen)\b",
+    re.IGNORECASE,
+)
+
+
+# Same values as app.providers.events_web.APPROX_LOCATION_TAG / APPROX_ADDRESS_PREFIX (kept here so the domain
+# never imports providers; a unit test asserts they match).
+APPROX_LOCATION_TAG = "approx_location"
+APPROX_ADDRESS_PREFIX = "Location approximate - check the venue"
+
+
+def has_approx_location(c: Candidate) -> bool:
+    """The provider had no real coordinates (e.g. an event placed at the city centre)."""
+    return APPROX_LOCATION_TAG in {t.lower() for t in c.tags} or (c.address or "").startswith(APPROX_ADDRESS_PREFIX)
+
+
+def is_food_event(c: Candidate) -> bool:
+    """An event that serves food: tagged food (e.g. schema.org FoodEvent) or named after food."""
+    if c.kind != "event":
+        return False
+    if {t.lower() for t in c.tags} & FOOD_EVENT_TAGS:
+        return True
+    return bool(_FOOD_EVENT_NAME.search(c.name))
+
+
 def is_food_stop(c: Candidate) -> bool:
+    """Diet constraints apply here. Food events count, with the event's own (usually unknown) diet evidence."""
+    if is_food_event(c):
+        return True
     info = category_info(c)
     if info is None:
         return False
@@ -55,6 +92,58 @@ def is_food_stop(c: Candidate) -> bool:
 def is_meal_stop(c: Candidate) -> bool:
     info = category_info(c)
     return bool(info and info.meal)
+
+
+def is_full_meal(c: Candidate) -> bool:
+    """A sit-down meal: a meal category where you sit (restaurant, brewery) and this place has seating.
+    Street food and standing-only restaurants are not."""
+    info = category_info(c)
+    return bool(info and info.meal and info.seated and c.seated)
+
+
+def is_snack_stop(c: Candidate) -> bool:
+    """Food that suits the afternoon snack window: cafes, desserts, street food (not a full meal)."""
+    return is_food_stop(c) and not is_full_meal(c)
+
+
+def main_meal_window(start_min: int, end_min: int) -> MealWindow | None:
+    """The breakfast/lunch/dinner window a visit belongs to: it must start inside the window and spend at least
+    half of the visit inside it. None when the visit isn't aligned with a main meal."""
+    duration = max(1, end_min - start_min)
+    for w in MEAL_WINDOWS:
+        if w.name == "snack":
+            continue
+        if w.start_min <= start_min < w.end_min:
+            inside = min(end_min, w.end_min) - start_min
+            if inside * 2 >= duration:
+                return w
+    return None
+
+
+# Venues that are only worth visiting when something is on: unknown hours can't be planned as a stand-alone stop.
+PROGRAMME_CATEGORIES = frozenset({"live_music_venue", "theatre", "cinema"})
+
+MEAL_EARLY_MIN = 30  # a sit-down meal may start this much before its window opens (an early lunch/dinner)
+
+
+def meal_slot(start_min: int, end_min: int, early_min: int = MEAL_EARLY_MIN) -> tuple[MealWindow, int] | None:
+    """(main meal window, minutes before it opens) for a sit-down meal at [start, end): it may start up to
+    ``early_min`` before breakfast/lunch/dinner opens and must spend at least half of the visit inside the
+    window. None when the meal isn't reasonably timed. ``main_meal_window`` is the strict form (no early start)."""
+    duration = max(1, end_min - start_min)
+    for w in MEAL_WINDOWS:
+        if w.name == "snack":
+            continue
+        if w.start_min - early_min <= start_min < w.end_min:
+            inside = min(end_min, w.end_min) - max(start_min, w.start_min)
+            if inside * 2 >= duration:
+                return w, max(0, w.start_min - start_min)
+    return None
+
+
+def calm_at(c: Candidate, start_min: int, end_min: int) -> bool:
+    """True only when a calm claim is backed: low popularity and no overlap with the stop's busy windows."""
+    return c.popularity == "low" and not any(overlaps(start_min, end_min, ws, we) for ws, we in c.busy_windows)
 
 
 def is_outdoor(c: Candidate) -> bool:
@@ -210,7 +299,7 @@ def satisfies_include(c: Candidate, value: str) -> bool:
     tags = all_tags(c)
     cat = c.category
     if value == "sit_down_meal":
-        return bool(info and info.meal)
+        return is_full_meal(c)
     if value == "outdoor_walk":
         return bool(info and info.walking) and c.indoor is False
     if value == "live_music":
