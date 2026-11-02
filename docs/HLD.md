@@ -72,7 +72,7 @@ stay on the server (`app.config.Settings`; secrets are `SecretStr`).
 | 1. Deterministic core | `a461315` (pre-verification checkpoint), `00142cd` (verified) | Evidence, travel, schedule, costs, validator, scoring, fallback planner, infeasibility; rules parser and clarification policy; providers; baseline and CLI. `a461315` also contained the first API/storage and frontend. `00142cd` fixed D-01..D-27 and R-1..R-12 from [PHASE1.md](verification/PHASE1.md) (currency conversion and `CURRENCY_MISMATCH`, diet negation, dotted times, astronomical sunset, meal windows, Plan B rules) |
 | 2. Agent and product | `6b75075` | LangGraph graph with interrupt/resume, agent loop, ledger, caps, deadline, validate and repair, fallback, finalize; model registry (Claude, Ollama, fake; Gemini/Grok placeholders); API fixes from [PHASE2.md](verification/PHASE2.md) (bounded `available_time`, `relaxed_constraints`, resume-safe rate limits, retention sweeper, keep-alive comments, IPv6 /64 keys, per-DB checkpoint files, single resume per thread, checked-draft salvage) |
 | 3. Evals, hardening, docs | `fe378a3` (ops), `053ba54` (evals) | Dockerfile, compose, Render blueprint, CI, Makefile, `.env.example`; eval harness, first results and [EVAL_REPORT.md](EVAL_REPORT.md); eval-driven fixes (LLM constraints need textual support, Ollama `num_predict` cap, salvage on text-only endings, gazetteer-first live geocoding, distances in the prose check). The first HLD/LLD/README followed in `bcd5695` |
-| 3b. Hardening | Frontend `28d963d` (merge `93c67ad`); evals `c27314b`, `7d56159` (merge `b99e885`); backend `f3f6a15`, `ae3786c`, `8a19d97` (merge `14a871e`) | Fixes for the issues found while documenting. Backend: Place Details with hours and rating for share links, `/api/health` 503 on DB failure and a `places` status, `httpx.Timeout` with a 4 s connect limit everywhere, concurrent event pages under a 15 s budget, robots.txt cache with expiry, one ERROR log for a rejected Maps key, atomic multi-limit rate checks, newest eval summary served, currencies, fares and price bands for every gazetteer country, known-fault list. Evals: `JUDGE_MODEL` default judge, record schema 2, wider prompt hash, dirty-tree resume key, harness-error records, `backend/.env` loading, cost per plan and per run, `--max-cost-usd`. Frontend: owned aborts, legs matched by ID, shared-plan focus, honest calendar status, per-currency digit grouping |
+| 3b. Hardening | Frontend `28d963d` (merge `93c67ad`); evals `c27314b` (merge `b99e885`), then `7d56159`; backend `f3f6a15`, `ae3786c`, `8a19d97` (merge `14a871e`) | Fixes for the issues found while documenting. Backend: Place Details with hours and rating for share links, `/api/health` 503 on DB failure and a `places` status, `httpx.Timeout` with a 4 s connect limit everywhere, concurrent event pages under a 15 s budget, robots.txt cache with expiry, one ERROR log for a rejected Maps key, atomic multi-limit rate checks, newest eval summary served, currencies, fares and price bands for every gazetteer country, known-fault list. Evals: `JUDGE_MODEL` default judge, record schema 2, wider prompt hash, dirty-tree resume key, harness-error records, `backend/.env` loading, cost per plan and per run, `--max-cost-usd`. Frontend: owned aborts, legs matched by ID, shared-plan focus, honest calendar status, per-currency digit grouping |
 
 ## 5. End-to-end flows
 
@@ -211,7 +211,7 @@ graph TD
 |---|---|
 | Deterministic guardrails around a model | The model never computes a price, time, address or verdict. `validate_plan` recomputes schedule and totals from ledger records; `finalize` re-validates every draft and replaces a failing one with `no_feasible_plan` |
 | Numbers only from data | `PROSE_NUMERIC_CLAIM` rejects currency amounts, durations, distances and clock times in `why`, `tradeoff`, `summary_note` and omission reasons (place names from the ledger are blanked first). Template prose in the fallback planner is checked with the same function |
-| Unknown is never yes | `Evidence.CONFIRMED` is required for diet, wheelchair, setting; `LIKELY`/`UNKNOWN` fail with `*_UNVERIFIED`. Unknown hours are `HOURS_UNVERIFIED` (an error for concert halls, theatres and cinemas) |
+| Unknown is never yes | `Evidence.CONFIRMED` is required for diet and wheelchair (`LIKELY`/`UNKNOWN` fail with `DIET_UNVERIFIED`/`ACCESSIBILITY_UNVERIFIED`); an indoor/outdoor constraint needs a known `indoor` value (unknown is `SETTING_CONFLICT`). Unknown hours are `HOURS_UNVERIFIED` (an error for live-music venues, theatres and cinemas) |
 | Grounding | The ledger holds every candidate any tool returned in this run; unknown IDs are `UNKNOWN_ID`. Plan B must also be a ledger ID |
 | Append-only messages | `messages` uses `add_messages`; AIMessages are stored unchanged (Claude thinking blocks), every tool call gets one ToolMessage, repairs arrive as the `submit_plan` error result |
 | Constraints only tighten | Original constraints are mapped from the raw request and always enforced (`CONSTRAINT_DROPPED` warns if a parser lost one). LLM-proposed constraints are kept only with textual support in the user's words |
@@ -272,7 +272,7 @@ Provenance and licences are in [backend/data/SOURCES.md](../backend/data/SOURCES
 |---|---|
 | Run deadline | `RUN_DEADLINE_S` 60; nodes route to the deterministic planner when under 12 s remain (`DEADLINE_RESERVE_S`); `build_context` skips the agent under 15 s; the runner stops at deadline + 5 s with a `rejected` "Planning took too long" result |
 | Per-call timeouts | Model calls `min(registry timeout, remaining - 12 s)`; every provider request uses `httpx.Timeout(..., connect=4.0)`: Google, Open-Meteo and Tavily search 8 s, event pages and robots.txt 5 s per operation with an 8 s wall-clock each, and 15 s for a whole event search; Anthropic SDK request timeout 60 s, 1 retry |
-| Retries | Geocoder node `RetryPolicy` (2 attempts, jittered backoff, retryable `ProviderError` only). No other HTTP retries |
+| Retries | Geocoder node `RetryPolicy` (2 attempts, jittered backoff, retryable `ProviderError` only). No other HTTP retries apart from the model SDKs' single retry (`max_retries` 1) |
 | Circuit behaviour | Per run, not per process: the first live Places failure switches the run to the snapshot (`places_mode` live -> snapshot -> unavailable); an events failure marks `events_failed` and is not retried. There is no cross-run circuit breaker; the Google provider remembers its last outcome (`status`) for `/api/health` only, and robots.txt failures are cached for 1 hour |
 | Model fallback | Primary -> optional fallback model -> deterministic planner; refusals are exceptions that move down the chain |
 | Salvage | A draft that passed `check_plan` without errors is re-validated and used (`complete`, `agent`) when the loop stops for time, the turn cap or a text-only ending |
@@ -311,7 +311,7 @@ flowchart LR
   `HEALTHCHECK` on `/api/health` (503 when the database is unreachable).
 * **Render:** `render.yaml` defines one Docker web service, `autoDeployTrigger: checksPass`, health check path, prod
   limits and `sync: false` secrets (`DATABASE_URL` is the Neon connection string).
-* **Local:** `docker compose up` (SQLite volume) or `--profile postgres` (Postgres 17); Ollama stays on the host.
+* **Local:** `docker compose up` (SQLite volume) or `--profile postgres` with `COMPOSE_DATABASE_URL=postgresql://planner:planner@postgres:5432/planner` (Postgres 17); Ollama stays on the host.
 * **CI:** on push and PR: ruff, mypy, pytest and the offline eval suite; Postgres store and checkpointer tests
   against a service container; frontend typecheck, lint, Vitest and build; Docker build plus a container smoke test
   (health, SPA, headers, plan JSON and SSE, share link, 400). A manual `workflow_dispatch` job runs model evals with
@@ -332,8 +332,10 @@ off) scores plan quality on a versioned rubric; hard checks never depend on it. 
 are upgraded on read), harness exceptions are recorded as failed runs, cost is reported per plan and per run, and
 `--max-minutes`/`--max-cost-usd` budgets stop a run early for a later `--resume`.
 
-Latest committed results: the report generated 2026-11-02T15:53:14Z (commit `053ba54`) covers the baseline and
-`ollama:granite4:tiny-h` on the `models` suite and `fake:agent` on the `offline` suite, one repeat per case, no judge.
+Latest committed results: the report generated 2026-11-02T15:53:14Z (runs on a dirty tree at `6b75075`, committed
+in `053ba54`) covers the baseline and `ollama:granite4:tiny-h` on the `models` suite and `fake:agent` on the `offline`
+suite, one repeat per case, no judge. It predates the eval-harness hardening, so it shows cost per run only until
+`make eval-report` regenerates it.
 Claude, qwen3.5 and gemma4 have no committed results, and Gemini and Grok are not pinned. Read the report for the
 numbers.
 
@@ -341,7 +343,7 @@ numbers.
 
 | Area | Limitation |
 |---|---|
-| Live data | Live Google Places, Tavily, Open-Meteo, Claude, Postgres/Neon and the Render deploy were not exercised by the verifiers (no keys or services); see PHASE1 §6 and PHASE2 §7 |
+| Live data | Live Google Places, Tavily, Claude, Postgres/Neon and the Render deploy were not exercised by the verifiers (no keys or services); see PHASE1 §6 and PHASE2 §7. The keyless Open-Meteo forecast was exercised once by the docs verification ([DOCS.md](verification/DOCS.md)) |
 | Coverage | The keyless snapshot covers Bangalore only; elsewhere a Places outage gives `no_feasible_plan`. Fixtures cover Bengaluru and Mumbai |
 | Local models | Small Ollama models often fall back (text-only endings, timeouts); see the report's error categories |
 | Single instance | Resume locks, compiled-graph cache and the in-memory default checkpointer are per process; multi-instance deployments need a shared claim |
@@ -365,7 +367,7 @@ numbers.
 | `RetryPolicy` on every node calling external services | Only `resolve_location` |
 | HTTP retries for GETs, 60 s circuit breaker after 3 failures, weather cache 1 h, events cache 6 h | Not implemented; per-run sticky provider modes instead. Only robots.txt is cached (24 h after a read, 1 h after a failure) |
 | Heartbeat `TraceEvent` every 10 s | SSE comment `: keep-alive` after 10 s of silence; the `heartbeat` type exists in `TraceType` but is never emitted |
-| Per-IP 5 plans/10 min and 30/day, fixed windows | 15/10 min and 60/day, two-window sliding estimate, checked together with the daily cap and counted only when all allow; resumes and share reads have their own limits |
+| Per-IP 5 plans/10 min and 30/day | 15/10 min and 60/day, two-window sliding estimate, checked together with the daily cap and counted only when all allow; resumes and share reads have their own limits |
 | Production model from `models.yaml` `production.primary` | Runtime uses `PRIMARY_MODEL` (config default `ollama:qwen3.5:9b`); `production.primary` is read by the eval runner |
 | Gemini and Grok pinned in the registry | `pending: true` placeholders |
 | Validator code list | 31 codes, including `HOURS_UNVERIFIED`, `PLAN_B_INVALID`, `CURRENCY_MISMATCH`, `LOCATION_APPROXIMATE`, `IDLE_WAIT`, `PACING_RELAXED`; `CONSTRAINT_DROPPED` is a warning (the constraint is still enforced) |

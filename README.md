@@ -120,8 +120,8 @@ Details: [docs/HLD.md](docs/HLD.md) (design) and [docs/LLD.md](docs/LLD.md) (mod
 | Command | What it runs |
 |---|---|
 | `make test` | Backend pytest suite (offline: no network, keys or Ollama) and frontend Vitest |
-| `make lint`, `make typecheck` | ruff and oxlint; mypy and tsc |
-| `cd backend && uv run pytest -m live` | Live provider and Postgres tests (need `RUN_LIVE=1` with keys, or a Postgres `DATABASE_URL`) |
+| `make lint`, `make typecheck` | ruff, tsc and oxlint; mypy and tsc |
+| `cd backend && uv run pytest -m live` | Live provider and Postgres tests (need `RUN_LIVE=1`, plus `GOOGLE_MAPS_API_KEY` or `TAVILY_API_KEY` for those providers; the Postgres tests need a Postgres `DATABASE_URL`) |
 | `cd backend && RUN_OLLAMA=1 uv run pytest -m ollama tests/graph/test_ollama_e2e.py` | One end-to-end plan with a local model |
 | `cd frontend && npx playwright install chromium && npm run e2e` | Browser tests against a locally started backend on the frozen world |
 | `make eval-offline` | Offline eval suite (scripted fake model and injected faults; what CI runs) |
@@ -135,8 +135,9 @@ Details: [docs/HLD.md](docs/HLD.md) (design) and [docs/LLD.md](docs/LLD.md) (mod
 shows, per model, hard pass rate, status accuracy, agent success, first-submission validity, tool-protocol errors,
 clarification precision and recall, parse accuracy, security, latency and cost, with dev and holdout cases reported
 separately and every number shown with its `n`. Baseline, hosted-API and local-model rows are separate populations,
-and all comparisons run on the synthetic frozen world. Cost is shown per plan and per run, and runs the harness
-could not finish are counted as failures, not dropped. The same summary feeds the `/evals` page. Read the report for
+and all comparisons run on the synthetic frozen world. The generator shows cost per plan and per run and counts runs
+the harness could not finish as failures, not dropped; the committed report predates those changes (it shows cost per
+run only) until `make eval-report` regenerates it. The same summary feeds the `/evals` page. Read the report for
 the current numbers and the list of models that have not been run yet.
 
 ## Deployment (Render + Neon)
@@ -146,7 +147,8 @@ the current numbers and the list of models that have not been run yet.
 2. In Render: New -> Blueprint -> select this repository. `render.yaml` defines one Docker web service in Singapore
    on an always-on plan, with health check `/api/health` and deploys only after the GitHub checks pass.
 3. Fill the `sync: false` values: `DATABASE_URL` (Neon), `ANTHROPIC_API_KEY`, and optionally `GOOGLE_MAPS_API_KEY`,
-   `TAVILY_API_KEY`, `FALLBACK_MODEL`, `SENTRY_DSN`, `LANGSMITH_API_KEY` (with `TRACING_ENABLED=true`).
+   `TAVILY_API_KEY`, `FALLBACK_MODEL`, `JUDGE_MODEL`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `SENTRY_DSN` and `LANGSMITH_API_KEY`
+   (with `TRACING_ENABLED=true`, which `render.yaml` sets to `false`).
 4. On startup the app creates its tables and the LangGraph checkpoint tables. `/api/health` answers 503 when the
    database is unreachable, so Render's health check catches a broken `DATABASE_URL`; its `places` field shows a
    rejected Maps key (`auth_error`). The image includes `backend/evals/results/summary.json` for `/evals`;
@@ -173,12 +175,13 @@ All settings are environment variables (or `backend/.env`); the full list with d
 | `RATE_LIMIT_PER_10MIN`, `RATE_LIMIT_PER_DAY`, `DAILY_PLAN_CAP` | 15, 60, 200 | Per-IP and global plan limits |
 | `TRUST_PROXY_HEADERS` | false | `true` behind Render's proxy |
 | `SENTRY_DSN`, `TRACING_ENABLED`, `LANGSMITH_API_KEY` | none, false, none | Error tracking and tracing |
-| `JUDGE_MODEL` | none | Default judge for `make eval` (the app never reads it) |
+| `JUDGE_MODEL` | none | Default judge for `make eval` (a `Settings` field, but only the eval runner uses it) |
 
 ## Limitations
 
-* Live providers (Google Places, Tavily, Open-Meteo), Claude, Postgres/Neon and the Render deploy were not exercised
-  by the verification runs, which had no keys; see the verification reports.
+* Live Google Places, Tavily, Claude, Postgres/Neon and the Render deploy were not exercised by the verification runs,
+  which had no keys; the keyless Open-Meteo forecast was exercised once by the docs verification. See the verification
+  reports.
 * Without a Google key, places come only from the Bangalore snapshot. Fares, price bands and FX rates are dated
   estimates (price bands and cab fares are hand-set, roughest outside INR, GBP, USD and EUR; only the Indian auto
   tariffs come from reports of notified fares); "likely busy" is a heuristic.
@@ -198,7 +201,7 @@ All settings are environment variables (or `backend/.env`); the full list with d
 | [AGENTS.md](AGENTS.md) | Engineering rules for humans and coding agents |
 | [eval_cases.json](eval_cases.json) | Behaviour spec for the eval harness |
 | [docs/EVAL_REPORT.md](docs/EVAL_REPORT.md) | Generated eval report |
-| [docs/verification/PHASE1.md](docs/verification/PHASE1.md), [PHASE2.md](docs/verification/PHASE2.md) | Independent verification reports |
+| [docs/verification/PHASE1.md](docs/verification/PHASE1.md), [PHASE2.md](docs/verification/PHASE2.md), [DOCS.md](docs/verification/DOCS.md) | Independent verification reports (code phases 1-2; documentation and fresh-clone quick start) |
 | [backend/data/SOURCES.md](backend/data/SOURCES.md) | Data provenance and licences |
 
 ## AI tools used

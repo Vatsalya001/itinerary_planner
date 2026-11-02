@@ -30,6 +30,7 @@ Paths are relative to the repository root unless they start with `app/`, `data/`
 
 ```text
 .
+├── README.md                      Overview, features, quick start, deployment, configuration
 ├── AGENTS.md                      Engineering guide: phases, ownership, units, evidence and test rules
 ├── IMPLEMENTATION_PLAN.md         Design plan v2 (see HLD §16 for where the code differs)
 ├── eval_cases.json                Behaviour spec: eval suites, model matrix, 44 cases, validator unit cases
@@ -44,7 +45,7 @@ Paths are relative to the repository root unless they start with `app/`, `data/`
 │   ├── HLD.md                     High-level design
 │   ├── LLD.md                     This document
 │   ├── EVAL_REPORT.md             Generated eval report (python -m evals.report)
-│   └── verification/PHASE1.md, PHASE2.md   Independent verification reports
+│   └── verification/PHASE1.md, PHASE2.md, DOCS.md   Independent verification reports
 ├── backend/
 │   ├── pyproject.toml, uv.lock    Python 3.12 project, dependencies, pytest/ruff/mypy config
 │   ├── app/
@@ -338,7 +339,7 @@ hash use `key`.
 |---|---|---|---|
 | `run_id` | `str` | | `r_` + 12 hex chars |
 | `status` | `Status` | | |
-| `mode` | `Mode \| None` | None | None for clarification and rejected results |
+| `mode` | `Mode \| None` | None | None for clarification, rejected and location-failure (`check_clarity` -> `finalize`) results; the graph-free `app/baseline.py` sets `deterministic` on every result |
 | `model` | `str \| None` | None | Model that produced the plan, or `baseline:deterministic` |
 | `plan` | `CanonicalPlan \| None` | None | Only for `complete`/`fallback` |
 | `checks` | `list[CheckItem]` | [] | Checks panel |
@@ -539,7 +540,7 @@ Helpers:
 | `PROGRAMME_CATEGORIES` | `live_music_venue`, `theatre`, `cinema`: only worth visiting when something is on |
 | `calm_at(c, start, end)` | `popularity == "low"` and no busy-window overlap (backs "usually calm" claims) |
 | `is_outdoor(c)` | `indoor is False`, or category not indoor when `indoor` is None |
-| `opening_status(c, start, end)` | Events: `open` if inside `[event_start, event_end]` (end defaults to start + max duration), else `closed`; places: `unknown` without known hours, `open` if the visit fits one period (close <= open means after midnight), else `closed` |
+| `opening_status(c, start, end)` | Events: `unknown` without a start time, `open` if inside `[event_start, event_end]` (end defaults to start + max duration), else `closed`; places: `unknown` without known hours, `open` if the visit fits one period (close <= open means after midnight), else `closed` |
 | `open_overlap_minutes` | Longest known-open stretch inside a window (None when unknown) |
 | `busy_most_of_day(c, ctx)` | High popularity and busy windows covering more than half of `[min(start, 10:00), max(end, 22:00)]` |
 | `has_approx_location(c)` | Tag `approx_location` or address starting with `Location approximate - check the venue` |
@@ -719,8 +720,8 @@ Constants: `BEAM_WIDTH = 30`, `POOL_LIMIT = 40`, `POOL_PER_NEED = 5`, `FINALISTS
 4. **Ranking** (`_quality`): node base score + 6 per covered interest + 6 per included requirement - 0.08 per leg
    minute - 0.03 per idle minute; meal credit (snack 1.5; main meal 7.0 when the window spans it by 60+ min, else
    3.0); -2 per early meal; -4 per wait over 20 min; -4 per required meal at an odd time; time use
-   `4 * min(1, used / 0.6) + 3 * min(1, (used - 0.6) / 0.25)`; -4 per outdoor stop when rain is likely; -2.5 per
-   repeated category; -5 per missing seated stop; plus the stated-order score. `cheapest` ranks by (unmet, worst
+   `4 * min(1, used / 0.6) + 3 * min(1, max(0, used - 0.6) / 0.25)` (used = share of the window at stops or
+   travelling, idle waits excluded); -4 per outdoor stop when rain is likely; -2.5 per repeated category; -5 per missing seated stop; plus the stated-order score. `cheapest` ranks by (unmet, worst
    case, -quality) and `shortest` by (unmet, elapsed, -quality).
 5. **Durations** (`_stretch`): for objective `best`, each stop is stretched from its default toward its maximum by
    `STRETCH_SHARE[energy]`; if the plan uses under 60% of the window, a second pass stretches fully.
@@ -756,7 +757,8 @@ draft passes `validate_plan`), `ledger_of`.
    stops to 6) and, for a low-energy day, the medium profile; if nothing single works, budget and time together;
    and, when the start is not 15:00 and meal timing was not the fix, a 15:00 start.
 4. `binding_constraints` lists what binds (`budget`, `time`, `meal_timing`, constraint keys, `pacing:<rule>`,
-   `start_time`); when nothing was found, the two constraints that remove the most candidates.
+   `start_time`); when nothing was found, the (up to) three constraints that remove the most candidates (the reason
+   text names the top two).
 5. `reason` sentences are computed by code (cheapest valid worst case, shortest valid duration, meal timing, pacing
    rule, start time, "X rules out N of M places", "Dropping 'X' would make a plan possible").
 
@@ -766,7 +768,7 @@ Relaxation patches use `PlanRequest` fields:
 |---|---|
 | Raise budget to X | `{"budget": X}` (plus `currency` in the empty-pool case) |
 | Allow N h M min | `{"available_time": minutes}` |
-| Start at H:MM | `{"start_time": "HH:MM"}` |
+| Start at H:MM AM/PM (e.g. `Start at 3:00 PM`) | `{"start_time": "HH:MM"}` |
 | Drop 'X' | `{"relaxed_constraints": ["kind:value"]}` (the client unions it with keys already relaxed) |
 | Plan at a moderate pace | `{"mood": "feeling okay, happy with a moderate pace"}` |
 | Raise budget and allow time | `{"budget": X, "available_time": N}` |
@@ -795,7 +797,7 @@ unlimited budget, `you are now`, `act as`, jailbreak, reveal prompt/secrets, ...
 | Interests | Structured interests normalised (`normalize_interest`), else `_INTEREST_LEXICON` over text with places blanked; an interest preceded by a negation in its clause is skipped. `CANONICAL_INTERESTS`: coffee, books, music, live music, food, walks, art, museums, history, nature, shopping, movies, games, theatre, dessert, street food, drinks, nightlife, wellness, views, events, culture, relax, outdoors |
 | Group size | Structured value if not 1; else "with my 3 friends" (n + 1), "for 4 people"/"party of"/"we are", or partner/date words (2); max 20 |
 | Hard constraints | `original_constraints(request)`: `map_constraint_text` over each constraint entry and each free-text sentence (source text narrowed to the triggering clause), merged, minus `relaxed_constraints`; relaxed keys add `Dropped: <label> (as you chose)` |
-| Unmapped, soft | Constraint entries and clauses that map to nothing: diet negations become soft notes (`No diet restriction`); instruction-like or hard-sounding text (`_HARD_RE`: must, only, no, not, never, avoid, need, allergic, strictly, ...) not consumed by another field becomes `unmapped_constraints`; `_SOFT_RE` text (prefer, ideally, would like, if possible) becomes `soft_preferences`; `_BENIGN_RE` phrases (no idea, not sure, don't mind, only have, need ideas) are ignored |
+| Unmapped, soft | Constraint entries and clauses that map to nothing: diet negations become soft notes (`No diet restriction`); instruction-like or hard-sounding text (`_HARD_RE`: must, only, no, not, never, avoid, need, allergic, strictly, ...) not consumed by another field becomes `unmapped_constraints`; `_SOFT_RE` free-text clauses (prefer, ideally, would like, if possible) and structured constraint entries that are neither hard-sounding nor instruction-like become `soft_preferences`; `_BENIGN_RE` phrases (no idea, not sure, don't mind, only have, need ideas) are ignored |
 | Order hint | "X then Y" / "followed by" / "after that": first activity per part, stored as soft preference `order: x > y` |
 | Date | `_usable_date`: a date before today or more than 60 days ahead is dropped with "That date has passed..." or "That date is more than 60 days away..." |
 | `missing` | `city`, `budget`, `available_time` when absent |
@@ -1029,7 +1031,7 @@ seated, diet, wheelchair) only re-rank; neighbourhood match +0.5; sort by score,
   vegetarian); wheelchair `yes` -> `CONFIRMED`, `no` -> `NO`, `limited`/missing -> `UNKNOWN`; `Source(provider=
   "curated_snapshot", url="https://www.openstreetmap.org/<type>/<id>", last_checked, attribution="© OpenStreetMap
   contributors")`.
-* Built offline by `backend/scripts/snapshot/build_snapshot.py` from `query.overpassql` (§13.5).
+* Built offline by `backend/scripts/snapshot/build_snapshot.py` from `query.overpassql` (§13.8).
 
 ### 4.8 Frozen world (`fixture.py`, `data/fixtures/`)
 
@@ -1065,7 +1067,7 @@ weather is not a fault: use `FIXTURE_WEATHER=unavailable`.
 | `countries.yaml` | 34 countries `{currency, symbol}` (every gazetteer country; 27 currencies). Ambiguous or postfix symbols use the ISO code as a prefix (`CHF `, `SEK `, `LKR `, ...) |
 | `gazetteer.yaml` | 93 cities in 34 countries (`country_code`, `timezone`, `lat`, `lng`, `aliases`), neighbourhoods for Bangalore (30), Mumbai (26) and Delhi (5) |
 | `fx.yaml` | "approximate reference rates, not live", `as_of` 2026-11-02, `units_per_usd` for all 27 currencies; the header lists the quote sources per currency (Trading Economics, OFX, X-Rates, XE, Wise, Bloomberg, the RBA, ECB reference rates) and the pegs (AED, QAR, NPR) |
-| `price_bands.yaml` | Per-person `[min, max]` per Google price level for all 27 currencies (the 23 added on 2026-11-02 are rough estimates derived from the USD bands), plus `category_levels` per category; labelled estimates |
+| `price_bands.yaml` | Per-person `[min, max]` per Google price level for all 27 currencies (every band except INR, GBP, USD and EUR is a rough estimate; the 18 added in the hardening pass were derived from the USD bands at the `fx.yaml` rates), plus `category_levels` per category; labelled estimates |
 | `snapshot/bangalore.json` | §4.7 |
 | `fixtures/world.json`, `weather.json`, `events.json` | §4.8 |
 | `SOURCES.md` | Provenance, status and licence of every data file |
@@ -1120,7 +1122,7 @@ Events emitted by the graph run:
 | `ask_clarification` | node events (after resume; nothing is emitted before `interrupt()`) |
 | `build_context` | node events (`data {location_id, timezone, currency}`); `tool_called` + `tool_completed`/`tool_failed` `get_weather` (node `get_weather`); `degraded` (node `get_weather`, `data {tool, recovered}`) when weather is unavailable |
 | `plan_agent` | node events (`data {turn, model, tool_calls}` or `{turn, model, stop}`); `degraded` "The primary AI model (X) failed; switched to Y" (`data {from_model, to_model}`) |
-| `tools` | node events (`data {ledger_size, places_mode}`); per call `tool_called` (with the model's `reason`), then `tool_completed` or `tool_failed` (`data.code`: `MALFORMED_ARGS`, `UNKNOWN_TOOL`, `DUPLICATE_SUBMIT`, `CAP_REACHED`, `SCHEMA_INVALID`, `UNKNOWN_ID`, `TOOL_ERROR`, `PLACES_UNAVAILABLE`, `EVENTS_UNAVAILABLE`; `recovered`); `degraded` for snapshot use, places unavailable or events unavailable |
+| `tools` | node events (`data {ledger_size, places_mode}`); per call `tool_called` (with the model's `reason`), then `tool_completed` or `tool_failed` (`data.code`: `MALFORMED_ARGS`, `UNKNOWN_TOOL`, `DUPLICATE_SUBMIT`, `CAP_REACHED`, `SCHEMA_INVALID`, `UNKNOWN_ID`, `TOOL_ERROR`, `TRANSFER_UNKNOWN`, `PLACES_UNAVAILABLE`, `EVENTS_UNAVAILABLE`; `recovered`); `degraded` for snapshot use, places unavailable or events unavailable |
 | `validate_plan` | node events (`data {attempt, ok, codes}`); `validation` (`data {ok, attempt, max_attempts, source: "agent", violations}`; invented IDs removed); `tool_completed` `submit_plan` "plan accepted", or `tool_failed` `submit_plan` (`data {code: "VALIDATION_FAILED", codes, attempt, recovered}`) |
 | `fallback_planner` | node events (`data {ledger_size, source}` or `{ledger_size, searched_defaults}`); `validation` (`source` `agent_checked_draft` or `deterministic`); `degraded` (salvage note or the agent stop reason); `search_places`/`search_events` tool events and `degraded` under node `gather_candidates` when default searches run |
 | `explain_infeasible` | node events (`data {binding_constraints, relaxations}`) |
@@ -1310,8 +1312,8 @@ planner..."; `AGENT_REPAIRS_EXHAUSTED` "The AI planner's plan failed validation 
 ### 7.4 Agent tools (`tools.py`)
 
 Schemas are OpenAI function format (`tool_schemas()`); every tool has a `reason` string ("under 140 characters. Shown
-to the user"), required in the schema and clipped to `REASON_MAX = 140` by the argument models (which default it to
-""). Argument models use `extra="ignore"` and treat `""`, `null`, `none`, `n/a` as missing.
+to the user"), required in the schema for the search and travel tools (optional for `check_plan` and `submit_plan`)
+and clipped to `REASON_MAX = 140` by the argument models (which default it to ""). Argument models use `extra="ignore"` and treat `""`, `null`, `none`, `n/a` as missing.
 
 | Tool | Arguments | Cap per run | Result `content` (compact JSON) | Artifact |
 |---|---|---:|---|---|
@@ -1351,8 +1353,8 @@ Execution details:
 |---|---|---|
 | `malformed_args` | An `invalid_tool_calls` entry (arguments not valid JSON) | No |
 | `unknown_tool` | Tool name not in `TOOL_NAMES` | No |
-| `schema_invalid` | Arguments fail the tool's model, or a malformed `check_plan`/`submit_plan` | No |
-| `unknown_id` | `near_candidate_id`, `estimate_travel`, `check_plan` or `submit_plan` references an ID no tool returned | `check_plan` yes; others no |
+| `schema_invalid` | Arguments fail the tool's model, or a malformed `check_plan`/`submit_plan` | No, except that a malformed `submit_plan` still counts as one of the `MAX_SUBMIT_ATTEMPTS` submissions |
+| `unknown_id` | `near_candidate_id`, `estimate_travel`, `check_plan` or `submit_plan` references an ID no tool returned | `check_plan` and `submit_plan` yes (every validated submission counts toward `MAX_SUBMIT_ATTEMPTS`); others no |
 | `cap_reached` | A call beyond the tool's per-run cap | No |
 | `duplicate_submit` | A second `submit_plan` in one turn | No |
 
@@ -1391,7 +1393,8 @@ degradation. Repairs exhausted and refusals do not salvage.
 ### 7.8 Runner (`runner.py`)
 
 `stream_plan(request, deps, thread_id=None, resume_answers=None, model_id=None, run_id=None) -> AsyncIterator[TraceEvent]`
-is the single entry point for the API, the CLI and the eval harness; `run_plan(...)` collects it into
+is the single entry point for the API, the eval harness and the CLI (except `baseline:deterministic` without `--trace`,
+which uses `run_baseline`, §5.2); `run_plan(...)` collects it into
 `(PlanResult, events)`.
 
 | Concern | Implementation |
@@ -1428,7 +1431,7 @@ run. Both paths intercept the `result` event in `persist_result`:
 1. Fill `latency_ms` if missing.
 2. For `complete` and `fallback`: `share_id = token_urlsafe(8)`, `store.save_plan(share_id, redact.for_storage(result),
    ttl_days=SHARE_TTL_DAYS)`; the forwarded result carries `share_id`.
-3. `store.record_run(build_run_record(result, finalize_metrics))`.
+3. `store.record_run(build_run_record(result, finalize_metrics, deps))`.
 4. Paused threads: `record_paused_thread(thread_id)` for `needs_clarification`; `forget_paused_thread` when a resume
    ends.
 5. One `plan finished` log line (status, mode, model, latency, shared, degradation count).
@@ -1475,7 +1478,7 @@ Pure ASGI middleware (streaming passes through unbuffered), outermost first:
 
 | Middleware | Behaviour |
 |---|---|
-| `SecurityHeadersMiddleware` | Request ID from `X-Request-ID` when it matches `^[A-Za-z0-9_-]{8,64}$`, else `q_` + 16 hex; adds `Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY` (unless already set) and `X-Request-ID` to every response; logs one access line (method, path without query, status, duration) |
+| `SecurityHeadersMiddleware` | Request ID from `X-Request-ID` when it matches `^[A-Za-z0-9_-]{8,64}$`, else `q_` + 16 hex; adds `Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY` (each only when the response does not already set it) and `X-Request-ID` to every response; logs one access line (method, path without query, status, duration) |
 | `ErrorShieldMiddleware` | Unhandled exceptions: logged, sent to Sentry, answered with 500 `{"status": "rejected", "detail": "Something went wrong", "request_id", "run_id"?}` when headers were not sent yet; client disconnects are logged at info |
 | `BodySizeLimitMiddleware(max_bytes=MAX_BODY_BYTES)` | For POST/PUT/PATCH/DELETE: a declared `Content-Length` above the cap gets 413 (with `Connection: close`); an invalid one gets 400 "Invalid Content-Length"; the body is read up to the cap (chunked bodies included) and replayed to the app |
 
@@ -1648,7 +1651,7 @@ and Playwright. No other runtime dependencies.
 |---|---|
 | Scripts (`package.json`) | `dev` (`vite`), `build` (`tsc -b && vite build`), `preview`, `test` (`vitest run`), `test:watch`, `typecheck` (`tsc -b`), `lint` (`tsc -b && oxlint --deny-warnings src`), `e2e` (`playwright test --config e2e/playwright.config.ts`) |
 | `vite.config.ts` | Plugins `react()`, `tailwindcss()`; dev and preview proxy `/api` to `API_PROXY_TARGET` (default `http://127.0.0.1:8000`); build to `dist` without source maps; tests in jsdom with `src/test/setup.ts`, files `src/**/*.test.{ts,tsx}` (`sse`, `lib`, `format`, `ics` tests run in the node environment) |
-| `.oxlintrc.json` | Plugins react, typescript, oxc; `react/rules-of-hooks` error |
+| `.oxlintrc.json` | Plugins react, typescript, oxc; `react/rules-of-hooks` error, `react/only-export-components` warn (`allowConstantExport`; warnings fail `npm run lint`, which passes `--deny-warnings`) |
 | `tsconfig.app.json` | ES2023, bundler resolution, `strict`, `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax` |
 | `index.html` | `lang="en"`, title "Perfect Saturday Planner", theme colour `#c2410c`, `/favicon.svg` |
 
@@ -1675,7 +1678,7 @@ and Playwright. No other runtime dependencies.
 | `components/DegradationNotices.tsx` | One notice per degradation kind (`planner`, `model`, `parser`, `data`) with titles such as "The rule-based planner took over", "Switched to the backup AI model", "Read with the rule-based parser", "Running with reduced data" |
 | `components/PreferencesSummary.tsx` | "What I understood": city, budget, start, duration, energy, neighbourhood, group, interests and hard constraints as chips; soft preferences |
 | `components/PlanView.tsx` | `h2#plan-title` "Your Saturday in <city>"; byline (model or "backup planner (no AI model)"); fallback notice "This is a backup plan"; `SummaryBar`; summary note; timeline of `StopCard`s with `LegRow`s; "Trade-offs and what I left out" (`omissionLabel` hides raw IDs); `ChecksPanel`; Assumptions; "Before you go" warnings; `PlanActions`; `Feedback` when shared; data attribution footer (Google Maps, © OpenStreetMap contributors, synthetic test data) |
-| `components/StopCard.tsx` | Clock times, category, name, address; cost range with basis badge (`listed price`, `price level estimate`, `ticket price`, `free`, `estimate`); why, trade-off, warnings; "Plan B if it rains" box; source badge (Google Maps, Curated · OpenStreetMap with `last_checked`, Web event · check before you go, Test data); "Open in Google Maps" (new tab, `rel="noopener noreferrer"`). `LegRow`: mode, minutes, km, fare, "estimate" badge |
+| `components/StopCard.tsx` | Clock times, category, name, address; cost range with basis badge (`listed price`, `price level estimate`, `ticket price`, `free`, `estimate`); why, trade-off, warnings; "Plan B if it rains" box; source badge (Live · Google Maps, Curated · OpenStreetMap, Web event · check before you go, Test data) and attribution (Google Maps, © OpenStreetMap contributors with `last_checked`, or the event page link); "Open in Google Maps" (new tab, `rel="noopener noreferrer"`). `LegRow`: mode, minutes, km, fare, "estimate" badge |
 | `components/SummaryBar.tsx` | When, Weather, "Worst-case cost per person" with a `role="meter"` budget meter and the contingency, Left over (money, minutes, walking) |
 | `components/ChecksPanel.tsx` | "Checks": one row per `CheckItem` with Pass/Warning/Unverified/Failed pills; labels for the eight names `summarize_checks` emits (others are humanized); subtitle "Recomputed by the server from the data, not taken from the model." |
 | `components/ClarificationCard.tsx` | `h2#clarify-title` ("One quick question" / "Two quick questions"); per question a fieldset with quick-reply buttons (`aria-pressed`) and "Or type your own answer" (200 chars; typed text wins); "Continue planning" is enabled only when every question has an answer |
@@ -1749,8 +1752,9 @@ Relaxation buttons apply `relaxation.patch` to the last request with `lib/plan.a
 * One polite status region for run milestones (the trace list is deliberately not live); polite status for actions
   and countdowns; `role="alert"` for form and feedback errors.
 * Labelled controls (`htmlFor`), `aria-describedby`/`aria-invalid`, `aria-expanded`/`aria-controls` on disclosures,
-  `aria-pressed` on toggles, meter ARIA on the budget meter, captions and scope on tables, `aria-hidden` icons,
-  "(opens in a new tab)" text on external links.
+  `aria-pressed` on toggles, meter ARIA on the budget meter, `scope` on table headers (captions on the
+  leaderboard tables; the other tables sit in labelled scroll regions), `aria-hidden` icons, "(opens in a new tab)"
+  text on the Google Maps and WhatsApp links (the OpenStreetMap copyright and event-page links lack it).
 * `prefers-reduced-motion` disables animations and smooth scrolling; visible `:focus-visible` outline.
 * No `dangerouslySetInnerHTML` or `innerHTML`; every URL from data passes `safeHttpsUrl`; external links use
   `rel="noopener noreferrer"`.
@@ -1847,7 +1851,9 @@ and `budget_stop`.
 ### 13.4 Assertions (`assertions.py`)
 
 Hard checks recompute ground truth from `data/fixtures/*.json`, `data/snapshot/bangalore.json`, `categories.yaml`
-and `cities.yaml` and from the request text; only `app.domain.pacing.PROFILES` is imported from the app.
+and `cities.yaml` and from the request text. The only planner rule imported from the app is `app.domain.pacing.PROFILES`;
+the other app imports are schema types (`app.domain.schemas`) and fixed texts (system prompts for the leak check,
+degradation and assumption messages from `app.pipeline` and `app.graph.nodes.common`).
 `hard_pass` is false when any `kind == "code"` check has `passed is False`; judge checks and not-applicable checks
 never count.
 
@@ -1877,7 +1883,8 @@ never count.
 Case assertions (`CASE_CHECKS`) map each assertion text in `eval_cases.json` to a function; IDs are
 `case.<n>.<slug>` (e.g. `case.1.between_4_and_6_stops`). All 107 texts are mapped: 105 code checks and 2 judge
 checks (`benign_ignore_phrase` "prefers free or low-cost stops"; `xss_in_input`, which needs a browser). Five checks
-are keyword proxies over trade-offs, omissions and summaries (budget, weather and music/quiet compromises), marked in
+are keyword proxies (budget, weather and music/quiet compromises in trade-offs, omissions and summaries; weather in a
+stop's `why`), marked in
 their detail. Unmapped texts would become `case.unmapped.<slug>` judge checks.
 
 ### 13.5 Metrics (`metrics.py`)
@@ -1911,8 +1918,8 @@ Breakdowns: `by_split`, `by_category`, `failures`.
 Runs when a judge model is resolved: `--judge-model`, else `JUDGE_MODEL` for the `models` and `live` suites (the
 `offline` suite only on request; `none` disables). `RUBRIC_VERSION = "rubric-v1-2026-11-02"`; axes `fit`, `practicality`,
 `explanation`, `fun`, each 1-5 with a reason; called through `build_structured_runnable([model], JudgeVerdict,
-purpose="judge")`. The plan is sent as JSON data without internal IDs. A run that failed a hard check is scored 1 on
-every axis without calling the model (`hard_fail`); runs that correctly ended without a plan are not judged; judge
+settings, purpose="judge")`. The plan is sent as JSON data without internal IDs. A run that failed a hard check is
+scored 1 on every axis without calling the model (`hard_fail`); runs that correctly ended without a plan are not judged; judge
 errors never fail a run.
 
 ### 13.7 Report (`python -m evals.report`)
@@ -2047,7 +2054,7 @@ per ref. Versions: uv 0.13.6, Python 3.12, Node 22.
 | `backend` | push/PR | `uv lock --check`, `uv sync --frozen`, `ruff check .`, `mypy app`, `pytest`, `python -m evals.runner --suite offline` |
 | `postgres` | push/PR | Postgres 17 service; `pytest -m live tests/store` with `DATABASE_URL=postgresql://planner:planner@localhost:5432/planner` |
 | `frontend` | push/PR | `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`, `npm run build` |
-| `docker` | push/PR, after backend and frontend | Build with Buildx (GHA cache); run the container on the frozen world with `PRIMARY_MODEL=baseline:deterministic` and in-memory SQLite; check uid/gid 1000, read-only app directories, `healthy` status; smoke test: `/api/health` (`db ok`, baseline model), SPA at `/` and `/evals`, JSON 404 for `/api/nope`, security headers, brief plan in JSON (`complete`, share link round trip) and SSE (exactly one `result`, last), 400 for `{"budget": "lots"}` |
+| `docker` | push/PR, after backend and frontend | Build with Buildx (GHA cache); run the container on the frozen world with `PRIMARY_MODEL=baseline:deterministic` and in-memory SQLite; check uid/gid 1000, read-only app directories, `healthy` status; smoke test: `/api/health` (`db ok`, baseline model), SPA at `/` and `/evals`, 404 (not the SPA) for `/api/nope`, security headers, brief plan in JSON (`complete`, share link round trip) and SSE (exactly one `result`, last), 400 for `{"budget": "lots"}` |
 | `model-evals` | `workflow_dispatch` only | Validates inputs, `make eval MODELS=... REPEATS=...`, `make eval-report`, uploads `backend/evals/results/` and `docs/EVAL_REPORT.md` as an artifact; uses repository secrets for model keys |
 
 ### 15.5 Makefile targets
@@ -2077,7 +2084,7 @@ Architecture-level differences are in HLD §16. Lower-level ones:
 
 | Area | Plan | Code |
 |---|---|---|
-| Tool `reason` | Required on every tool | Required in the JSON schema shown to the model; the argument models default it to "" |
+| Tool `reason` | Required on every tool | Required in the JSON schemas of `search_places`, `search_events` and `estimate_travel`, optional for `check_plan` and `submit_plan`; the argument models default it to "" |
 | Validation of durations | Category's sane range | The candidate's `duration_range` (events: 30 min up to the event length) |
 | Pacing table | Low: one leg over 15 min | `max_long_legs` 1 / 2 / 3; walking minutes include walking-category stops |
 | Costs for unknown prices | The category's upper default | The full category range `[min, max]` with basis `category_estimate`; price levels use per-currency bands |
