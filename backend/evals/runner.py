@@ -585,6 +585,7 @@ def error_categories(obs: Observation) -> list[str]:
         AGENT_NO_SUBMIT,
         AGENT_NO_TIME,
         AGENT_NOT_CONFIGURED,
+        AGENT_RATE_LIMITED,
         AGENT_REFUSED,
         AGENT_REPAIRS_EXHAUSTED,
         AGENT_TIMEOUT,
@@ -595,7 +596,8 @@ def error_categories(obs: Observation) -> list[str]:
     from app.graph.runner import GENERIC_ERROR, TOO_SLOW
 
     mapping = [(AGENT_TIMEOUT, "model_timeout"), (AGENT_REFUSED, "model_refusal"),
-               (AGENT_UNAVAILABLE, "model_unavailable"), (AGENT_NOT_CONFIGURED, "model_not_configured"),
+               (AGENT_UNAVAILABLE, "model_unavailable"), (AGENT_RATE_LIMITED, "provider_rate_limited"),
+               (AGENT_NOT_CONFIGURED, "model_not_configured"),
                (AGENT_NO_SUBMIT, "agent_no_submit"), (AGENT_TURN_CAP, "agent_turn_cap"),
                (AGENT_NO_TIME, "agent_no_time"), (PARSER_DEGRADED, "parser_degraded")]
     out: list[str] = []

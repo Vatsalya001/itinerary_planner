@@ -284,3 +284,18 @@ async def test_batched_search_groups_results_and_lists_each_candidate_once() -> 
     assert len(listed) == len(set(listed)) == len(outcome.candidates)
     assert any(r.get("also") for r in body["results"][1:2])  # overlapping cafe results are referenced, not repeated
     assert env.queries_used == 3 and outcome.data and outcome.data["queries"] == 3
+
+
+def test_rate_limit_errors_are_told_apart_from_outages() -> None:
+    from app.graph.nodes.common import is_rate_limit_error
+
+    class RateLimitError(Exception):
+        status_code = 429
+
+    class ServiceUnavailable(Exception):
+        status_code = 503
+
+    assert is_rate_limit_error(RateLimitError("Requests per minute limit exceeded"))
+    assert is_rate_limit_error(RuntimeError("429 rate limit reached for model"))
+    assert not is_rate_limit_error(ServiceUnavailable("high demand"))
+    assert not is_rate_limit_error(TimeoutError())

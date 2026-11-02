@@ -20,6 +20,7 @@ from app.graph.nodes.common import (
     AGENT_NO_SUBMIT,
     AGENT_NO_TIME,
     AGENT_NOT_CONFIGURED,
+    AGENT_RATE_LIMITED,
     AGENT_REFUSED,
     AGENT_TIMEOUT,
     AGENT_TURN_CAP,
@@ -27,6 +28,7 @@ from app.graph.nodes.common import (
     DEADLINE_RESERVE_S,
     MIN_LLM_CALL_S,
     degrade,
+    is_rate_limit_error,
     tracer_of,
 )
 from app.graph.prompts import AGENT_SYSTEM_PROMPT, NUDGE_TEXT, agent_payload, agent_payload_message
@@ -110,7 +112,7 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
                 failure = AGENT_NOT_CONFIGURED
             except Exception as exc:  # provider SDK errors vary; all of them mean "use the fallback planner"
                 log.warning("agent turn failed", extra={"error_type": type(exc).__name__, "model": chain[0]})
-                failure = AGENT_UNAVAILABLE
+                failure = AGENT_RATE_LIMITED if is_rate_limit_error(exc) else AGENT_UNAVAILABLE
             usage = tracker.usage
         if ai is not None:
             info["summary"] = _summary(turns, ai)
