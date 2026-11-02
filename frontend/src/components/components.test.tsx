@@ -1,8 +1,11 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fixtures } from '../test/utils'
+import type { CheckItem } from '../types'
+import { ChecksPanel } from './ChecksPanel'
 import { ClarificationCard } from './ClarificationCard'
 import { InfeasibleCard } from './InfeasibleCard'
+import { PlanActions } from './PlanActions'
 import { PlanView } from './PlanView'
 
 describe('PlanView', () => {
@@ -119,6 +122,19 @@ describe('PlanView', () => {
     expect(screen.getAllByRole('article')).toHaveLength(2)
   })
 
+  it('pairs each leg with its stops by ID even when the legs arrive out of order', () => {
+    const result = fixtures.complete()
+    const plan = result.plan!
+    plan.legs = [...plan.legs].reverse() // [park->gig auto, cafe->park walk]
+    render(<PlanView result={result} />)
+    const items = screen.getAllByRole('article').map((a) => a.closest('li') as HTMLElement)
+    expect(within(items[0]).getByText('Walk')).toBeInTheDocument()
+    expect(within(items[0]).queryByText('Auto-rickshaw')).not.toBeInTheDocument()
+    expect(within(items[1]).getByText('Auto-rickshaw')).toBeInTheDocument()
+    expect(within(items[2]).queryByText('Walk')).not.toBeInTheDocument()
+    expect(within(items[2]).queryByText('Auto-rickshaw')).not.toBeInTheDocument()
+  })
+
   it('labels fixture data as test data', () => {
     const result = fixtures.complete()
     result.plan!.stops[0].candidate.source = { provider: 'fixture' }
@@ -165,5 +181,78 @@ describe('InfeasibleCard', () => {
     expect(screen.getByText('₹850')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Raise budget to ₹850' }))
     expect(onApply).toHaveBeenCalledWith({ label: 'Raise budget to ₹850', patch: { budget: 850 } })
+  })
+})
+
+describe('ChecksPanel', () => {
+  it("labels every check name the backend emits (summarize_checks) and humanizes anything else", () => {
+    // backend/app/domain/validator.py summarize_checks: one item per name, in this order.
+    const names = ['budget', 'time', 'opening_hours', 'diet', 'accessibility', 'crowds', 'weather', 'sources', 'new_check']
+    const checks: CheckItem[] = names.map((name) => ({ name, status: 'pass', detail: `${name} detail` }))
+    render(<ChecksPanel checks={checks} />)
+    const labels = within(screen.getByRole('region', { name: 'Checks' }))
+      .getAllByRole('listitem')
+      .map((li) => li.querySelector('.font-medium')?.textContent)
+    expect(labels).toEqual([
+      'Budget',
+      'Time',
+      'Opening hours',
+      'Diet',
+      'Accessibility',
+      'Crowds (heuristic)',
+      'Weather',
+      'Sources',
+      'New check',
+    ])
+  })
+})
+
+describe('PlanActions: Add to calendar', () => {
+  const plan = fixtures.complete().plan!
+
+  const originals = {
+    create: Object.getOwnPropertyDescriptor(URL, 'createObjectURL'),
+    revoke: Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL'),
+  }
+
+  function stubUrl(name: 'createObjectURL' | 'revokeObjectURL', value: unknown) {
+    Object.defineProperty(URL, name, { value, configurable: true, writable: true })
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    for (const [name, desc] of [
+      ['createObjectURL', originals.create],
+      ['revokeObjectURL', originals.revoke],
+    ] as const) {
+      if (desc) Object.defineProperty(URL, name, desc)
+      else delete (URL as unknown as Record<string, unknown>)[name]
+    }
+  })
+
+  function clickCalendar() {
+    render(<PlanActions plan={plan} shareUrl={null} shareId="sh_test123" />)
+    fireEvent.click(screen.getByRole('button', { name: /Add to calendar/ }))
+    return screen.getByRole('status')
+  }
+
+  it('confirms the download only when the file was handed to the browser', () => {
+    const create = vi.fn(() => 'blob:calendar')
+    stubUrl('createObjectURL', create)
+    stubUrl('revokeObjectURL', vi.fn())
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    expect(clickCalendar()).toHaveTextContent('Calendar file downloaded.')
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(click).toHaveBeenCalledTimes(1)
+  })
+
+  it('says so when the download fails instead of claiming success', () => {
+    stubUrl('createObjectURL', () => {
+      throw new Error('blocked')
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const status = clickCalendar()
+    expect(status).toHaveTextContent("Couldn't create the calendar file. Please try again.")
+    expect(status).not.toHaveTextContent('Calendar file downloaded.')
   })
 })

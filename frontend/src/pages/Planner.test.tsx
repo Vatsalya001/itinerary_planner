@@ -205,6 +205,43 @@ describe('Planner', () => {
     expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled()
   })
 
+  it('never sticks on "running" after an abort or timeout it did not cause; the error card retries', async () => {
+    mockedPost
+      .mockRejectedValueOnce(new DOMException('The user aborted a request.', 'AbortError'))
+      .mockRejectedValueOnce(new DOMException('signal timed out', 'TimeoutError'))
+      .mockResolvedValueOnce(fixtures.complete())
+    renderPlanner()
+    fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
+
+    expect(await screen.findByRole('heading', { name: 'The plan was interrupted' })).toHaveFocus()
+    expect(screen.getByText('The connection was cut off before the plan was ready. Please try again.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Plan my Saturday' })).toBeEnabled() // not busy any more
+    expect(screen.getByTestId('run-status')).toHaveTextContent('Planning stopped: The plan was interrupted.')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByText('The planner took too long to answer. Please try again.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })).toHaveFocus()
+    expect(screen.queryByRole('heading', { name: 'The plan was interrupted' })).not.toBeInTheDocument()
+    expect(mockedPost).toHaveBeenCalledTimes(3)
+  })
+
+  it('returns to idle without an error card when the user presses Stop', async () => {
+    mockedPost.mockImplementationOnce(
+      (_req, _onEvent, signal) =>
+        new Promise((_res, rej) => {
+          signal?.addEventListener('abort', () => rej(new DOMException('The operation was aborted.', 'AbortError')))
+        }),
+    )
+    renderPlanner()
+    fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Plan my Saturday' })).toBeEnabled())
+    expect(screen.queryByRole('heading', { name: 'The plan was interrupted' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+  })
+
   it('shows validation errors (HTTP 400) as a friendly card', async () => {
     mockedPost.mockRejectedValueOnce(new ApiError(400, 'budget: Input should be greater than or equal to 0'))
     renderPlanner()

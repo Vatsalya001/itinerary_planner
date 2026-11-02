@@ -62,13 +62,24 @@ export function groupDigits(digits: string, indian: boolean): string {
   return `${groups.join(',')},${last3}`
 }
 
+/** Digit grouping for a currency: Indian (en-IN, 1,00,000) for INR, western (en-US/en-GB, 100,000) otherwise. */
+function indianGrouping(currency: string | null | undefined): boolean {
+  return (currency || '').trim().toUpperCase() === 'INR'
+}
+
+/** A whole amount without a symbol, grouped for the currency: 1000000 -> "10,00,000" (INR), "1,000,000" (others). */
+export function fmtAmount(amount: number, currency: string | null | undefined): string {
+  if (!Number.isFinite(amount)) return '—'
+  const rounded = Math.round(amount)
+  return `${rounded < 0 ? '-' : ''}${groupDigits(String(Math.abs(rounded)), indianGrouping(currency))}`
+}
+
 /** Whole currency units -> "₹2,000", "₹1,00,000", "£25", "AED 200". */
 export function fmtMoney(amount: number, currency: string): string {
   if (!Number.isFinite(amount)) return '—'
   const rounded = Math.round(amount)
   const code = (currency || '').toUpperCase()
-  const digits = groupDigits(String(Math.abs(rounded)), code === 'INR')
-  return `${rounded < 0 ? '-' : ''}${currencySymbol(code || '?')}${digits}`
+  return `${rounded < 0 ? '-' : ''}${currencySymbol(code || '?')}${fmtAmount(Math.abs(rounded), code)}`
 }
 
 /** Cost range -> "Free", "₹300", "₹200–₹400". */

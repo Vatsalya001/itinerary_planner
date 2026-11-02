@@ -2,6 +2,7 @@ import type { CheckItem } from '../types'
 import { humanize } from '../lib/format'
 import { Icon, type IconName } from './Icon'
 
+/** The names `summarize_checks` emits (backend/app/domain/validator.py); anything else is humanized. */
 const CHECK_NAMES: Record<string, string> = {
   budget: 'Budget',
   time: 'Time',
@@ -11,8 +12,6 @@ const CHECK_NAMES: Record<string, string> = {
   crowds: 'Crowds (heuristic)',
   weather: 'Weather',
   sources: 'Sources',
-  pacing: 'Pacing',
-  daylight: 'Daylight',
 }
 
 const STATUS: Record<CheckItem['status'], { label: string; icon: IconName; cls: string }> = {

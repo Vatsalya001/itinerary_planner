@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { ApiError, getEvalsSummary } from '../api/client'
-import { isAbortError } from '../api/errors'
 import { ErrorCard } from '../components/ErrorCard'
 import { Badge } from '../components/ui'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
@@ -154,10 +153,13 @@ export default function EvalsLeaderboard() {
 
   useEffect(() => {
     const ac = new AbortController()
+    // Only our own abort (unmount) is ignored; any other abort or timeout shows the error card.
     getEvalsSummary(ac.signal)
-      .then((summary) => setState({ kind: 'ok', summary }))
+      .then((summary) => {
+        if (!ac.signal.aborted) setState({ kind: 'ok', summary })
+      })
       .catch((error: unknown) => {
-        if (!isAbortError(error)) setState({ kind: 'error', error })
+        if (!ac.signal.aborted) setState({ kind: 'error', error })
       })
     return () => ac.abort()
   }, [])

@@ -9,6 +9,7 @@ import {
   modeLabel,
   weatherLine,
 } from './format'
+import { legAfter } from './plan'
 import { safeHttpsUrl } from './urls'
 
 export interface ShareTextOptions {
@@ -30,8 +31,8 @@ export function planToText(plan: CanonicalPlan, options: ShareTextOptions = {}):
     lines.push(`   ${fmtMoneyRange(c.cost.min, c.cost.max, c.cost.currency)} per person, ${costBasisLabel(c.cost.basis)}`)
     if (stop.why) lines.push(`   Why: ${stop.why}`)
     if (stop.plan_b) lines.push(`   Plan B if it rains: ${stop.plan_b.name}`)
-    const leg = plan.legs[i]
-    if (i < plan.stops.length - 1 && leg) {
+    const leg = legAfter(plan, i) // by from_id/to_id, exactly like the timeline in PlanView
+    if (leg) {
       const fare = leg.fare.max > 0 ? `, ${fmtMoneyRange(leg.fare.min, leg.fare.max, leg.fare.currency)} estimate` : ''
       lines.push(`   then ${modeLabel(leg.mode).toLowerCase()} about ${leg.minutes} min${fare}`)
     }

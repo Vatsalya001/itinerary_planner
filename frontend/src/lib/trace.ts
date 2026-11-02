@@ -47,6 +47,11 @@ export const initialTrace: TraceState = {
   lastAgentTurn: null,
 }
 
+/**
+ * Graph nodes that emit node_started/node_completed (backend/app/graph/build.py; "tools" is hidden). The weather
+ * lookup and the candidate search are not nodes: they arrive as tool events (get_weather, search_places,
+ * search_events) and use TOOL_LABELS.
+ */
 const NODE_LABELS: Record<string, string> = {
   guard_input: 'Checked the request is complete and in range',
   parse_preferences: 'Read what you asked for',
@@ -54,8 +59,6 @@ const NODE_LABELS: Record<string, string> = {
   ask_clarification: 'Asked you a quick question',
   resolve_location: 'Found the city',
   build_context: 'Set up the day: weather, time window and pacing',
-  get_weather: "Checked Saturday's weather",
-  gather_candidates: 'Gathered places and events',
   plan_agent: 'Agent chose the next step',
   validate_plan: 'Checked budget, time, opening hours, diet and more',
   fallback_planner: 'Built a backup plan without the AI model',
@@ -70,8 +73,6 @@ const NODE_RUNNING_LABELS: Record<string, string> = {
   ask_clarification: 'Preparing a quick question',
   resolve_location: 'Finding the city',
   build_context: 'Setting up the day: weather, time window and pacing',
-  get_weather: "Checking Saturday's weather",
-  gather_candidates: 'Gathering places and events',
   plan_agent: 'Agent is choosing the next step',
   validate_plan: 'Checking budget, time, opening hours, diet and more',
   fallback_planner: 'Building a backup plan without the AI model',
@@ -79,6 +80,11 @@ const NODE_RUNNING_LABELS: Record<string, string> = {
   finalize: 'Saving the plan',
 }
 
+/**
+ * Tools that emit tool_called/tool_completed/tool_failed: the model's tools (search_places, search_events,
+ * estimate_travel, check_plan, submit_plan) and the code-run lookups in app/pipeline.py (resolve_location,
+ * get_weather, search_places, search_events).
+ */
 const TOOL_LABELS: Record<string, string> = {
   get_weather: "Checked Saturday's weather",
   resolve_location: 'Looked up the city',

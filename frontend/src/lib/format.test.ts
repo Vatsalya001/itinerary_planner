@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   categoryLabel,
   costBasisLabel,
+  fmtAmount,
   fmtClock,
   fmtDate,
   fmtDuration,
@@ -63,6 +64,19 @@ describe('fmtMoney', () => {
   it('groups digits', () => {
     expect(groupDigits('1234567', true)).toBe('12,34,567')
     expect(groupDigits('1234567', false)).toBe('1,234,567')
+  })
+
+  it('formats bare amounts with the grouping of the currency (en-IN for INR, western otherwise)', () => {
+    expect(fmtAmount(1000000, 'INR')).toBe('10,00,000')
+    expect(fmtAmount(1000000, 'inr')).toBe('10,00,000')
+    expect(fmtAmount(1000000, 'USD')).toBe('1,000,000')
+    expect(fmtAmount(1000000, 'GBP')).toBe('1,000,000')
+    expect(fmtAmount(1000000, '')).toBe('1,000,000')
+    expect(fmtAmount(1000000, null)).toBe('1,000,000')
+    expect(fmtAmount(-1500.4, 'INR')).toBe('-1,500')
+    expect(fmtAmount(Number.NaN, 'INR')).toBe('—')
+    // the same grouping as fmtMoney, minus the symbol
+    for (const c of ['INR', 'USD', 'EUR', 'JPY']) expect(fmtMoney(12345678, c).endsWith(fmtAmount(12345678, c))).toBe(true)
   })
 
   it('formats ranges', () => {

@@ -15,7 +15,8 @@ import {
 import { classifyDegradation, omissionLabel } from './labels'
 import { applyPatch, legAfter } from './plan'
 import { planToText, whatsappUrl } from './share'
-import { initialTrace, reduceTrace } from './trace'
+import { humanize } from './format'
+import { initialTrace, nodeLabel, reduceTrace, toolFailedLabel, toolLabel } from './trace'
 import { mapsUrlFor, safeHttpsUrl } from './urls'
 
 const plan = (complete as unknown as PlanResult).plan as CanonicalPlan
@@ -68,7 +69,7 @@ describe('trace reducer', () => {
   })
 
   it('labels the real backend nodes in plain language', () => {
-    const s = ['build_context', 'resolve_location', 'gather_candidates', 'fallback_planner', 'explain_infeasible']
+    const s = ['build_context', 'resolve_location', 'fallback_planner', 'explain_infeasible']
       .flatMap((node, i) => [
         ev({ type: 'node_started', seq: i * 2 + 1, node }),
         ev({ type: 'node_completed', seq: i * 2 + 2, node, duration_ms: 5 }),
@@ -77,10 +78,42 @@ describe('trace reducer', () => {
     expect(s.steps.map((x) => x.label)).toEqual([
       'Set up the day: weather, time window and pacing',
       'Found the city',
-      'Gathered places and events',
       'Built a backup plan without the AI model',
       'Worked out what blocked a plan',
     ])
+  })
+
+  it('has a plain-language label for every graph node and every emitted tool, and none for non-nodes', () => {
+    // backend/app/graph/build.py add_node(...) names; "tools" is hidden because its tool events say more.
+    const graphNodes = [
+      'guard_input',
+      'parse_preferences',
+      'resolve_location',
+      'check_clarity',
+      'ask_clarification',
+      'build_context',
+      'plan_agent',
+      'validate_plan',
+      'fallback_planner',
+      'explain_infeasible',
+      'finalize',
+    ]
+    for (const node of graphNodes) {
+      expect(nodeLabel(node), node).not.toBe(humanize(node))
+      expect(nodeLabel(node, true), node).not.toBe(humanize(node))
+    }
+    // Model tools (app/graph/tools.py TOOL_NAMES) and code-run lookups (app/pipeline.py).
+    const tools = ['search_places', 'search_events', 'estimate_travel', 'check_plan', 'submit_plan', 'resolve_location', 'get_weather']
+    for (const tool of tools) {
+      expect(toolLabel(tool), tool).not.toBe(humanize(tool))
+      expect(toolLabel(tool, true), tool).not.toBe(humanize(tool))
+      expect(toolFailedLabel(tool), tool).not.toBe(`${humanize(tool)} failed`)
+    }
+    // get_weather and gather_candidates only ever appear as tool or `node` fields of tool/degraded events, never as
+    // node_started/node_completed, so they have no node label (a stray one would still read sensibly).
+    expect(nodeLabel('get_weather')).toBe('Get weather')
+    expect(nodeLabel('gather_candidates')).toBe('Gather candidates')
+    expect(toolLabel('get_weather')).toBe("Checked Saturday's weather")
   })
 
   it('never repeats an agent turn number', () => {
@@ -118,11 +151,20 @@ describe('trace reducer', () => {
     expect(classifyDegradation('The primary AI model (a) failed; switched to b')).toBe('model')
   })
 
-  it('ignores duplicate deliveries and heartbeats', () => {
+  it('ignores duplicate deliveries', () => {
     const again = reduceTrace(state, events[3])
     expect(again).toBe(state)
-    const hb = reduceTrace(state, { type: 'heartbeat', run_id: 'r', seq: 0, ts: '2026-11-05T04:31:00Z' })
-    expect(hb.steps).toBe(state.steps)
+    expect(events.every((e) => e.type !== 'heartbeat')).toBe(true) // the server now sends ": keep-alive" comments
+  })
+
+  it('tolerates legacy heartbeat events from older servers (no step, no dedup entry)', () => {
+    const legacy: TraceEvent = { type: 'heartbeat', run_id: 'r', seq: 0, ts: '2026-11-05T04:31:00Z' }
+    const once = reduceTrace(state, legacy)
+    const twice = reduceTrace(once, legacy)
+    expect(once.steps).toBe(state.steps)
+    expect(twice.steps).toBe(state.steps)
+    expect(twice.seen).toBe(state.seen)
+    expect(twice.lastEventAt).toBe('2026-11-05T04:31:00Z')
   })
 })
 
@@ -157,6 +199,20 @@ describe('request building', () => {
     expect(validateForm({ ...defaultFormState(), budget: '-5' }).budget).toBeTruthy()
     expect(validateForm({ ...defaultFormState(), groupSize: '0' }).groupSize).toBeTruthy()
     expect(validateForm({ ...defaultFormState(), freeText: '', city: '' }).form).toBeTruthy()
+  })
+
+  it('groups the budget limit for the chosen currency, like fmtMoney', () => {
+    const over = (currency: string) => validateForm({ ...defaultFormState(), currency, budget: '2000000' }).budget
+    expect(over('INR')).toBe('Enter a budget between ₹0 and ₹10,00,000.')
+    expect(over('USD')).toBe('Enter a budget between $0 and $1,000,000.')
+    expect(over('GBP')).toBe('Enter a budget between £0 and £1,000,000.')
+    expect(over('EUR')).toBe('Enter a budget between €0 and €1,000,000.')
+    expect(over('AED')).toBe('Enter a budget between AED 0 and AED 1,000,000.')
+    // "From city": the currency is not known yet, so no symbol and no Indian grouping.
+    expect(over('')).toBe('Enter a budget between 0 and 1,000,000.')
+    expect(validateForm({ ...defaultFormState(), currency: 'USD', budget: '-1' }).budget).toBe(
+      'Enter a budget between $0 and $1,000,000.',
+    )
   })
 
   it('unions relaxed_constraints across relaxations; other keys replace (D-P2-02)', () => {
@@ -249,5 +305,33 @@ describe('share text', () => {
     expect(legAfter(plan, 0)?.mode).toBe('walk')
     expect(legAfter(plan, 1)?.mode).toBe('auto')
     expect(legAfter(plan, 2)).toBeNull()
+  })
+
+  it('never pairs a leg by position: out-of-order and missing legs', () => {
+    const reversed: CanonicalPlan = { ...plan, legs: [...plan.legs].reverse() }
+    expect(legAfter(reversed, 0)?.mode).toBe('walk')
+    expect(legAfter(reversed, 1)?.mode).toBe('auto')
+    // Only the park -> gig leg is present: there is no leg after the café, even though legs[0] exists.
+    const missing: CanonicalPlan = { ...plan, legs: [plan.legs[1]] }
+    expect(legAfter(missing, 0)).toBeNull()
+    expect(legAfter(missing, 1)?.mode).toBe('auto')
+  })
+
+  it('copies the same leg pairing as the timeline (by from_id/to_id)', () => {
+    const lines = (p: CanonicalPlan) => planToText(p).split('\n')
+    const legLineAfter = (text: string[], stopPrefix: string) => {
+      const at = text.findIndex((l) => l.startsWith(stopPrefix))
+      const next = text.slice(at + 1).find((l) => /^\d+\. /.test(l) || l.startsWith('   then '))
+      return next?.startsWith('   then ') ? next.trim() : null
+    }
+    const reversed = lines({ ...plan, legs: [...plan.legs].reverse() })
+    expect(legLineAfter(reversed, '1. ')).toBe('then walk about 12 min')
+    expect(legLineAfter(reversed, '2. ')).toBe('then auto-rickshaw about 16 min, ₹60–₹90 estimate')
+    expect(legLineAfter(reversed, '3. ')).toBeNull()
+
+    const missing = lines({ ...plan, legs: [plan.legs[1]] })
+    expect(legLineAfter(missing, '1. ')).toBeNull()
+    expect(legLineAfter(missing, '2. ')).toBe('then auto-rickshaw about 16 min, ₹60–₹90 estimate')
+    expect(lines(plan)).toEqual(lines({ ...plan, legs: [...plan.legs].reverse() }))
   })
 })

@@ -26,13 +26,21 @@ export class StreamError extends Error {
   }
 }
 
+/**
+ * True for an AbortError or TimeoutError (DOMException or look-alike). This only says what the error is, not who
+ * caused it: callers that abort their own requests must check their own AbortSignal, never this, before
+ * deciding to ignore an error (an abort they did not start must still be reported).
+ */
 export function isAbortError(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'name' in err &&
-    ((err as { name: unknown }).name === 'AbortError' || (err as { name: unknown }).name === 'TimeoutError')
-  )
+  return isTimeoutError(err) || errorName(err) === 'AbortError'
+}
+
+export function isTimeoutError(err: unknown): boolean {
+  return errorName(err) === 'TimeoutError'
+}
+
+function errorName(err: unknown): unknown {
+  return typeof err === 'object' && err !== null && 'name' in err ? (err as { name: unknown }).name : undefined
 }
 
 const DEFAULT_MESSAGES: Record<number, string> = {

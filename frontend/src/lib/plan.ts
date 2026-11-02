@@ -1,12 +1,15 @@
 import type { CanonicalPlan, Leg, PlanRequest, ProviderName } from '../types'
 import { PLAN_REQUEST_KEYS } from '../types'
 
-/** The leg from stop `index` to stop `index + 1`, matched by IDs with a positional fallback. */
+/**
+ * The leg from stop `index` to stop `index + 1`, matched by `from_id`/`to_id` only. There is no positional
+ * fallback: a leg that does not join these two stops is never shown (or copied) between them.
+ */
 export function legAfter(plan: CanonicalPlan, index: number): Leg | null {
   const from = plan.stops[index]?.candidate.id
   const to = plan.stops[index + 1]?.candidate.id
   if (!from || !to) return null
-  return plan.legs.find((l) => l.from_id === from && l.to_id === to) ?? plan.legs[index] ?? null
+  return plan.legs.find((l) => l.from_id === from && l.to_id === to) ?? null
 }
 
 /** Providers used anywhere in the plan (stops and Plan Bs), for attribution. */
