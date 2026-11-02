@@ -56,7 +56,8 @@ describe('Planner', () => {
     renderPlanner()
     fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
 
-    expect(await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })).toHaveFocus()
+    const planHeading = await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })
+    await waitFor(() => expect(planHeading).toHaveFocus())
     expect(mockedPost).toHaveBeenCalledWith({ free_text: DEFAULT_FREE_TEXT }, expect.any(Function), expect.any(AbortSignal))
 
     // trace is collapsible after the run; its steps are real events
@@ -213,7 +214,8 @@ describe('Planner', () => {
     renderPlanner()
     fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
 
-    expect(await screen.findByRole('heading', { name: 'The plan was interrupted' })).toHaveFocus()
+    const errorHeading = await screen.findByRole('heading', { name: 'The plan was interrupted' })
+    await waitFor(() => expect(errorHeading).toHaveFocus())
     expect(screen.getByText('The connection was cut off before the plan was ready. Please try again.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Plan my Saturday' })).toBeEnabled() // not busy any more
     expect(screen.getByTestId('run-status')).toHaveTextContent('Planning stopped: The plan was interrupted.')
@@ -222,7 +224,8 @@ describe('Planner', () => {
     expect(await screen.findByText('The planner took too long to answer. Please try again.')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-    expect(await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })).toHaveFocus()
+    const retriedHeading = await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })
+    await waitFor(() => expect(retriedHeading).toHaveFocus())
     expect(screen.queryByRole('heading', { name: 'The plan was interrupted' })).not.toBeInTheDocument()
     expect(mockedPost).toHaveBeenCalledTimes(3)
   })
@@ -246,7 +249,8 @@ describe('Planner', () => {
     mockedPost.mockRejectedValueOnce(new ApiError(400, 'budget: Input should be greater than or equal to 0'))
     renderPlanner()
     fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
-    expect(await screen.findByRole('heading', { name: "I can't plan that" })).toHaveFocus()
+    const errorCardHeading = await screen.findByRole('heading', { name: "I can't plan that" })
+    await waitFor(() => expect(errorCardHeading).toHaveFocus())
     expect(screen.getByText('budget: Input should be greater than or equal to 0')).toBeInTheDocument()
   })
 

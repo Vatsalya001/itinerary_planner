@@ -113,4 +113,39 @@ describe('HowItWorks', () => {
     expect(screen.getByText('validate_plan')).toBeInTheDocument()
     expect(screen.getByText('search_places')).toBeInTheDocument()
   })
+
+  it('describes the graph as the code implements it (docs/LLD.md section 7.3)', () => {
+    render(
+      <MemoryRouter>
+        <HowItWorks />
+      </MemoryRouter>,
+    )
+    const graph = screen.getByRole('region', { name: 'The graph' })
+    const nodes = Array.from(graph.querySelectorAll('ol code')).map((c) => c.textContent)
+    // graph/build.py order; no nodes that do not exist (get_weather/compute_window were plan-only)
+    expect(nodes).toEqual([
+      'guard_input',
+      'parse_preferences',
+      'resolve_location',
+      'check_clarity',
+      'ask_clarification',
+      'build_context',
+      'plan_agent',
+      'tools',
+      'validate_plan',
+      'fallback_planner',
+      'explain_infeasible',
+      'finalize',
+    ])
+    // guard_input normalises and flags; rejection happens at the API (400/413/429)
+    expect(screen.getByText(/It never rejects a request/)).toHaveTextContent(/HTTP 400, 413 or 429/)
+    expect(screen.queryByText(/rejecting anything/)).not.toBeInTheDocument()
+    // parsing is rules + LLM, grounded in the user's words
+    expect(screen.getByText('rules + LLM')).toBeInTheDocument()
+    expect(screen.getByText(/grounded in your words/)).toBeInTheDocument()
+    // finalize builds and emits; the API persists and the runner deletes the checkpoint
+    expect(screen.getByText(/emits the run metrics and the result/)).toHaveTextContent(
+      /the API saves shareable plans and the run log, and the runner deletes the finished run’s checkpoint/,
+    )
+  })
 })
