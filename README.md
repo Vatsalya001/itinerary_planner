@@ -20,7 +20,7 @@ fails.
 | Bonus: clarifying questions | Up to two blocking questions with quick replies through a LangGraph `interrupt`, resumed on answer | `backend/app/graph/nodes/clarify.py`, `frontend/src/components/ClarificationCard.tsx` |
 | Weather awareness | Rain moves plans indoors and outdoor stops get an indoor Plan B; walks end before sunset | `backend/app/domain/fallback.py`, `validator.py`, `sun.py` |
 | Agent with tools and a visible trace | Five read-only tools, a live SSE trace with each tool call's reason, durations and validation outcomes | `backend/app/graph/tools.py`, `backend/app/graph/runner.py`, `frontend/src/components/TracePanel.tsx` |
-| Graceful failure | Model fallback chain, a deterministic planner, a salvaged checked draft, and an honest "no feasible plan" with one-tap relaxations | `backend/app/graph/nodes/fallback.py`, `backend/app/domain/infeasible.py`, `frontend/src/components/InfeasibleCard.tsx` |
+| Graceful failure | Model fallback chain with a client-side rate limiter per model (`backend/app/llm/ratelimit.py`), a deterministic planner, a salvaged checked draft, and an honest "no feasible plan" with one-tap relaxations | `backend/app/graph/nodes/fallback.py`, `backend/app/domain/infeasible.py`, `frontend/src/components/InfeasibleCard.tsx` |
 | Sharing and export | Share links (30 days), Google Maps route, copy as text, WhatsApp, calendar (.ics), feedback | `backend/app/store/redact.py`, `frontend/src/lib/ics.ts`, `share.ts`, `PlanActions.tsx` |
 | Multi-model evaluation | Eval harness with independent checks, a generated report and an `/evals` leaderboard | `backend/evals/`, `docs/EVAL_REPORT.md`, `frontend/src/pages/EvalsLeaderboard.tsx` |
 | Production operations | Rate limits and a daily cap, security headers, JSON logs, Sentry and LangSmith gating, Docker, Render blueprint, CI | `backend/app/api/`, `backend/app/observability.py`, `Dockerfile`, `render.yaml`, `.github/workflows/ci.yml` |
@@ -101,8 +101,14 @@ graph TD
     finalize --> END([End])
 ```
 
-* The agent (`plan_agent`) has five read-only tools: `search_places`, `search_events`, `estimate_travel`,
-  `check_plan` and `submit_plan`, with per-run caps, a 10-turn limit and a 60-second run deadline.
+* The agent (`plan_agent`) has five read-only tools: `search_places` (1-4 queries per call, events optional),
+  `search_events`, `estimate_travel`, `check_plan` and `submit_plan`, with per-run caps (3 searches, 8 queries), a
+  10-turn limit (4 on Cerebras) and a 60-second run deadline. A plan aims for two or three model calls: one batched
+  search, then `submit_plan`, which validates and returns the schedule and exact fixes if it fails; `check_plan` and
+  `estimate_travel` are optional, and structured requests skip the LLM parse.
+* Each hosted model has a client-side sliding-window rate limiter (Cerebras 5 requests per 60 s, Groq 30 per 60 s,
+  per process); a call that cannot get a slot in time goes to the fallback model, and a run that ends on a rate limit
+  says so ("The AI provider's rate limit was reached").
 * `validate_plan` recomputes the schedule, costs and every check from the run's ledger of returned candidates; failed
   submissions come back to the model as tool errors (up to two repairs).
 * `fallback_planner` is a deterministic beam-search planner over the same candidates and checks; it is also the
@@ -127,7 +133,7 @@ Details: [docs/HLD.md](docs/HLD.md) (design) and [docs/LLD.md](docs/LLD.md) (mod
 | `cd frontend && npx playwright install chromium && npm run e2e` | Browser tests against a locally started backend on the frozen world |
 | `make eval-offline` | Offline eval suite (scripted fake model and injected faults; what CI runs). Writes to the git-ignored `backend/evals/results/tmp/`; use `OUT=evals/results` to record an official session |
 | `make eval MODELS=baseline:deterministic,ollama:granite4:tiny-h REPEATS=1` | Model evals on the frozen world; add `ARGS="--max-cost-usd 5"` (or `--max-minutes`) to cap a run and `--resume` to finish it. With `JUDGE_MODEL` set, an LLM judge also scores the plans (`--judge-model none` turns it off) |
-| `make eval-all` | Baseline, the local models, and Cerebras/Groq when their keys are set |
+| `make eval-all` | Baseline, the local models, and Cerebras/Groq when their keys are set. On free tiers add `ARGS="--pace-s 60"` (for example; seconds between runs) to stay under the request limits |
 | `make eval-report` | Regenerate `docs/EVAL_REPORT.md` and `backend/evals/results/summary.json` |
 
 ## Eval results
@@ -188,8 +194,11 @@ All settings are environment variables (or `backend/.env`); the full list with d
   tariffs come from reports of notified fares); "likely busy" is a heuristic.
 * Small local models often fall back to the rule-based planner; no judge model has scored plan quality in the
   committed results.
-* Gemini and Grok are placeholders until model IDs are pinned.
-* Resume locks and caches are per process; the deployment is one instance.
+* The production models run on free tiers: Cerebras allows 5 requests per rolling minute (one plan can use all
+  five), 30K tokens per minute and 1M per day; Groq allows 8K tokens per minute and 200K per day. Beyond that, plans
+  come from the rule-based planner, with the reason shown.
+* Gemini is pinned but unused (overloaded on 2026-11-03); xAI is a placeholder.
+* Resume locks, model rate limiters and caches are per process; the deployment is one instance.
 * More: [docs/HLD.md §15](docs/HLD.md#15-known-limitations-and-risks).
 
 ## Documentation
