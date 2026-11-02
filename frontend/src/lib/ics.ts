@@ -159,16 +159,28 @@ export function icsFilename(plan: CanonicalPlan): string {
   return `saturday-${slug}-${plan.date}.ics`
 }
 
-/** Trigger a browser download of the plan as an .ics file. */
-export function downloadIcs(plan: CanonicalPlan, options: IcsOptions = {}): void {
-  const blob = new Blob([buildIcs(plan, options)], { type: 'text/calendar;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = icsFilename(plan)
-  a.rel = 'noopener'
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+/**
+ * Trigger a browser download of the plan as an .ics file. Returns false (never throws) when the file could not be
+ * built or handed to the browser, so the caller can say so instead of claiming success.
+ */
+export function downloadIcs(plan: CanonicalPlan, options: IcsOptions = {}): boolean {
+  let url: string | null = null
+  try {
+    const blob = new Blob([buildIcs(plan, options)], { type: 'text/calendar;charset=utf-8' })
+    url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = icsFilename(plan)
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    return true
+  } catch (err) {
+    console.error('calendar download failed', err)
+    return false
+  } finally {
+    const created = url
+    if (created) setTimeout(() => URL.revokeObjectURL(created), 1000)
+  }
 }

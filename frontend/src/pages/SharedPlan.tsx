@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ApiError, getSharedPlan } from '../api/client'
-import { isAbortError } from '../api/errors'
 import { ErrorCard } from '../components/ErrorCard'
 import { PlanView } from '../components/PlanView'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
@@ -28,13 +27,21 @@ export default function SharedPlan() {
 
   useEffect(() => {
     const ac = new AbortController()
+    // Only our own abort (unmount, new id, retry) is ignored; any other abort or timeout shows the error card.
     getSharedPlan(id, ac.signal)
-      .then((result) => setState({ kind: 'ok', result }))
+      .then((result) => {
+        if (!ac.signal.aborted) setState({ kind: 'ok', result })
+      })
       .catch((error: unknown) => {
-        if (!isAbortError(error)) setState({ kind: 'error', error })
+        if (!ac.signal.aborted) setState({ kind: 'error', error })
       })
     return () => ac.abort()
   }, [id, attempt])
+
+  // Move focus to the outcome heading once the plan (or an error) has loaded, like the planner does after a run.
+  useEffect(() => {
+    if (state.kind !== 'loading') heading.current?.focus()
+  }, [state])
 
   if (state.kind === 'loading') {
     return (
@@ -52,9 +59,10 @@ export default function SharedPlan() {
           <ErrorCard
             title="This plan isn't available"
             message="The link may be mistyped, or the plan has expired. Shared plans are kept for 30 days."
+            headingRef={heading}
           />
         ) : (
-          <ErrorCard {...describeError(state.error)} onRetry={() => setAttempt((a) => a + 1)} />
+          <ErrorCard {...describeError(state.error)} onRetry={() => setAttempt((a) => a + 1)} headingRef={heading} />
         )}
         <Link to="/" className={btnPrimary}>
           Plan your own Saturday
@@ -72,6 +80,7 @@ export default function SharedPlan() {
         <ErrorCard
           title="This plan has no timeline"
           message={result.message || 'This link does not point to a finished plan.'}
+          headingRef={heading}
         />
       )}
       <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 text-stone-800">

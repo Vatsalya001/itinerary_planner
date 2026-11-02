@@ -1,4 +1,5 @@
 import type { PlanRequest } from '../types'
+import { fmtAmount, fmtMoney } from './format'
 import { unionStrings } from './plan'
 
 /** Constraint toggles; each maps to text the backend's constraint vocabulary understands. */
@@ -123,6 +124,16 @@ export function defaultFormState(): FormState {
   }
 }
 
+/**
+ * The budget range error, grouped like fmtMoney for the chosen currency: "₹0 and ₹10,00,000" for INR,
+ * "$0 and $1,000,000" for USD. With "From city" the currency is unknown, so plain western grouping is used.
+ */
+export function budgetRangeMessage(currency: string): string {
+  const code = currency.trim()
+  const bound = (n: number) => (code ? fmtMoney(n, code) : fmtAmount(n, null))
+  return `Enter a budget between ${bound(0)} and ${bound(LIMITS.budgetMax)}.`
+}
+
 export function splitList(text: string): string[] {
   return text
     .split(/[,\n;]/)
@@ -146,7 +157,7 @@ export function validateForm(form: FormState): Partial<Record<FieldKey | 'freeTe
   if (form.freeText.length > LIMITS.freeText) errors.freeText = `Please keep this under ${LIMITS.freeText} characters.`
   if (form.budget.trim() !== '') {
     const b = Number(form.budget)
-    if (!Number.isFinite(b) || b < 0 || b > LIMITS.budgetMax) errors.budget = 'Enter a budget between 0 and 10,00,000.'
+    if (!Number.isFinite(b) || b < 0 || b > LIMITS.budgetMax) errors.budget = budgetRangeMessage(form.currency)
   }
   const g = Number(form.groupSize)
   if (!Number.isInteger(g) || g < LIMITS.groupMin || g > LIMITS.groupMax) errors.groupSize = 'Group size is 1 to 20.'

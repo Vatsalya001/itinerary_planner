@@ -23,7 +23,17 @@ async function collect(chunks: Uint8Array[]): Promise<SseMessage[]> {
   return out
 }
 
-/** A realistic stream: comments, heartbeats, an event: field, multi-line data, multi-byte UTF-8 and the result. */
+/** The JSON of `ev` split after its first member into two `data:` lines (still valid JSON once joined with \n). */
+function multiLineData(ev: TraceEvent): [string, string] {
+  const json = JSON.stringify(ev)
+  const cut = json.indexOf(',') + 1
+  return [`data: ${json.slice(0, cut)}`, `data: ${json.slice(cut)}`]
+}
+
+/**
+ * A realistic stream: comments (including the server's ": keep-alive"), an event: field, multi-line data,
+ * multi-byte UTF-8 and the result.
+ */
 function sampleStream(eol = '\n'): string {
   const ev = traceEvents as unknown as TraceEvent[]
   const lines = [
@@ -34,10 +44,11 @@ function sampleStream(eol = '\n'): string {
     'event: trace',
     `data: ${JSON.stringify(ev[2])}`, // summary contains "₹2,000"
     '',
-    ': heartbeat',
+    ': keep-alive',
     '',
-    'data: {"type":"heartbeat","run_id":"r_test_0001",',
-    'data: "seq":0,"ts":"2026-11-05T04:30:01Z"}',
+    ...multiLineData(ev[3]),
+    '',
+    ': keep-alive',
     '',
     `data: ${JSON.stringify(ev[ev.length - 1])}`,
     '',
@@ -48,14 +59,19 @@ function sampleStream(eol = '\n'): string {
 
 describe('SseParser', () => {
   it('parses the sample stream into messages', async () => {
+    const ev = traceEvents as unknown as TraceEvent[]
     const msgs = await collect([encoder.encode(sampleStream())])
     expect(msgs).toHaveLength(4)
     expect(msgs[1].event).toBe('trace')
     expect(msgs[0].event).toBe('message')
     expect(JSON.parse(msgs[1].data).summary).toBe('Bangalore, ₹2,000, 4 h, low energy')
     // multi-line data is joined with \n and is still valid JSON
-    expect(msgs[2].data).toBe('{"type":"heartbeat","run_id":"r_test_0001",\n"seq":0,"ts":"2026-11-05T04:30:01Z"}')
+    expect(msgs[2].data).toBe(multiLineData(ev[3]).map((l) => l.slice('data: '.length)).join('\n'))
+    expect(msgs[2].data).toContain('\n')
+    expect(JSON.parse(msgs[2].data)).toEqual(ev[3])
     expect(JSON.parse(msgs[3].data).type).toBe('result')
+    // keep-alives are comments: they never become messages or trace events
+    expect(msgs.map((m) => parseTraceEvent(m.data)?.type)).toEqual(['run_started', 'node_completed', 'tool_called', 'result'])
   })
 
   for (const [name, eol] of [
@@ -161,7 +177,7 @@ function fullStream(): string {
   const events = traceEvents as unknown as TraceEvent[]
   return (
     ': hello\n\n' +
-    events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(': heartbeat\n\n') +
+    events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(': keep-alive\n\n') +
     'data: {malformed\n\n'
   )
 }

@@ -66,10 +66,13 @@ export function PlanActions({
         <button
           type="button"
           className={btnSecondary}
-          onClick={() => {
-            downloadIcs(plan, { shareUrl, uidSeed: shareId })
-            flash('Calendar file downloaded.')
-          }}
+          onClick={() =>
+            flash(
+              downloadIcs(plan, { shareUrl, uidSeed: shareId })
+                ? 'Calendar file downloaded.'
+                : "Couldn't create the calendar file. Please try again.",
+            )
+          }
         >
           <Icon name="calendar" />
           Add to calendar

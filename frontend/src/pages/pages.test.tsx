@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import evals from '../test/fixtures/evals_summary.json'
@@ -26,19 +26,35 @@ describe('SharedPlan', () => {
     )
   }
 
-  it('loads and renders a shared plan', async () => {
+  it('loads and renders a shared plan, then focuses its heading', async () => {
     const fetchMock = vi.fn(async () => jsonResponse(fixtures.complete()))
     vi.stubGlobal('fetch', fetchMock)
     renderAt('/p/sh_test123')
-    expect(await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })).toBeInTheDocument()
+    const heading = await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })
+    await waitFor(() => expect(heading).toHaveFocus())
     expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('/api/plans/sh_test123')
     expect(screen.getAllByRole('article')).toHaveLength(3)
   })
 
-  it('explains an unknown or expired link', async () => {
+  it('explains an unknown or expired link and focuses the explanation', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: 'Plan not found' }, 404)))
     renderAt('/p/nope')
-    expect(await screen.findByRole('heading', { name: "This plan isn't available" })).toBeInTheDocument()
+    const heading = await screen.findByRole('heading', { name: "This plan isn't available" })
+    await waitFor(() => expect(heading).toHaveFocus())
+  })
+
+  it('shows a retryable error (not an endless "Loading") when the request is aborted by something else', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException('The user aborted a request.', 'AbortError'))
+      .mockResolvedValueOnce(jsonResponse(fixtures.complete()))
+    vi.stubGlobal('fetch', fetchMock)
+    renderAt('/p/sh_test123')
+    expect(await screen.findByRole('heading', { name: 'The plan was interrupted' })).toBeInTheDocument()
+    expect(screen.queryByText('Loading the plan…')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -62,6 +78,17 @@ describe('EvalsLeaderboard', () => {
     expect(screen.getByRole('region', { name: 'Baseline (no LLM)' })).toBeInTheDocument()
     expect(screen.getByText('Commit abc1234def56')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'By category' })).toBeInTheDocument()
+  })
+
+  it('reports an abort it did not cause instead of loading forever', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new DOMException('signal timed out', 'TimeoutError'))))
+    render(
+      <MemoryRouter>
+        <EvalsLeaderboard />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('The planner took too long to answer. Please try again.')).toBeInTheDocument()
+    expect(screen.queryByText('Loading results…')).not.toBeInTheDocument()
   })
 
   it('handles an empty or unavailable report', async () => {

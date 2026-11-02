@@ -190,13 +190,23 @@ test.describe('share link', () => {
 
     await page.goto(`/p/${shareId}`)
     await expect(planHeading(page)).toBeVisible()
+    await expect(planHeading(page)).toBeFocused() // focus lands on the loaded plan, like the planner result
     await expect(page.locator('section[aria-labelledby="plan-title"] article h4')).toHaveText(names)
     await expect(page.getByText('Want one for yourself?')).toBeVisible()
     await page.getByRole('button', { name: 'Yes' }).click()
     await expect(page.getByText('Thanks for the feedback.')).toBeVisible()
 
+    // The calendar confirmation appears only after the browser really received the file.
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Add to calendar' }).click(),
+    ])
+    expect(download.suggestedFilename()).toMatch(/^saturday-[a-z0-9-]+-\d{4}-\d{2}-\d{2}\.ics$/)
+    await expect(page.getByText('Calendar file downloaded.')).toBeVisible()
+
     await page.goto('/p/doesnotexist123')
     await expect(page.getByRole('heading', { name: "This plan isn't available" })).toBeVisible()
+    await expect(page.getByRole('heading', { name: "This plan isn't available" })).toBeFocused()
   })
 })
 

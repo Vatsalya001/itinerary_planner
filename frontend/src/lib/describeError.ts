@@ -1,4 +1,4 @@
-import { ApiError, StreamError } from '../api/errors'
+import { ApiError, StreamError, isAbortError, isTimeoutError } from '../api/errors'
 
 export interface ErrorInfo {
   title: string
@@ -28,6 +28,23 @@ export function describeError(error: unknown): ErrorInfo {
   }
   if (error instanceof StreamError) {
     return { title: 'The plan was interrupted', message: error.message, retryAfter: null, runId: error.runId }
+  }
+  // An abort or timeout the app did not ask for (callers swallow only their own aborts).
+  if (isTimeoutError(error)) {
+    return {
+      title: 'The plan was interrupted',
+      message: 'The planner took too long to answer. Please try again.',
+      retryAfter: null,
+      runId: null,
+    }
+  }
+  if (isAbortError(error)) {
+    return {
+      title: 'The plan was interrupted',
+      message: 'The connection was cut off before the plan was ready. Please try again.',
+      retryAfter: null,
+      runId: null,
+    }
   }
   if (error instanceof TypeError) {
     return {
