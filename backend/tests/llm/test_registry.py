@@ -246,3 +246,12 @@ async def test_cerebras_structured_parse_has_no_serializer_warnings(monkeypatch:
         out = await runnable.ainvoke(parse_messages(PlanRequest(free_text="Pune, vegan"), NOW))
     assert isinstance(out["parsed"], LLMParse) and out["parsed"].hard_constraints[0].value == "vegan"
     assert not [w for w in caught if "PydanticSerializationUnexpectedValue" in str(w.message)]
+
+
+def test_per_model_agent_turn_cap() -> None:
+    from app.llm.registry import agent_turn_cap
+
+    assert agent_turn_cap(fixture_settings(), "cerebras:gpt-oss-120b") == 4
+    assert agent_turn_cap(fixture_settings(max_agent_turns=3), "cerebras:gpt-oss-120b") == 3
+    assert agent_turn_cap(fixture_settings(), "groq:openai/gpt-oss-120b") == 10
+    assert agent_turn_cap(fixture_settings(), "fake:agent") == 10

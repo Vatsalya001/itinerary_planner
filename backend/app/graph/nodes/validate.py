@@ -27,6 +27,7 @@ from app.graph.tools import (
     dumps,
     fix_line,
     normalize_plan_payload,
+    schedule_view,
     violation_dicts,
     with_turns_left,
 )
@@ -44,14 +45,16 @@ async def validate_submission(state: PlannerState, runtime: Runtime[RunContext])
     max_attempts = settings.max_submit_attempts
     kinds: Counter[str] = Counter(state.get("protocol_error_kinds") or {})
 
+    ledger = get_ledger(state)
+    ctx = get_ctx(state)
     with tracer.node("validate_plan") as info:
         draft, schema_errors = draft_from_payload(normalize_plan_payload(pending.get("args")))
         if draft is None:
             kinds["schema_invalid"] += 1
             report = ValidationReport(ok=False, violations=schema_errors)
         else:
-            report = validate_plan(draft, get_ledger(state), get_ctx(state), get_prefs(state),
-                                   get_constraints(state, "original"), rc.deps.travel)
+            report = validate_plan(draft, ledger, ctx, get_prefs(state), get_constraints(state, "original"),
+                                   rc.deps.travel)
         codes = sorted({v.code for v in report.errors})
         if "UNKNOWN_ID" in codes:
             kinds["unknown_id"] += 1
@@ -79,9 +82,13 @@ async def validate_submission(state: PlannerState, runtime: Runtime[RunContext])
     can_repair = attempts < max_attempts and rc.remaining() >= DEADLINE_RESERVE_S
     tracer.emit("tool_failed", node="validate_plan", tool=SUBMIT_PLAN, summary="rejected: " + ", ".join(codes),
                 data={"code": "VALIDATION_FAILED", "codes": codes, "attempt": attempts, "recovered": can_repair})
-    body: dict[str, Any] = {"ok": False, "attempt": attempts, "attempts_left": max_attempts - attempts if can_repair
-                            else 0, "fix": fix_line(report.errors, draft), "errors": violation_dicts(report.errors),
-                            "warnings": violation_dicts(report.warnings)}
+    body: dict[str, Any] = {
+        "ok": False, "attempt": attempts, "attempts_left": max_attempts - attempts if can_repair else 0,
+        "fix": fix_line(report.errors, draft, ledger=ledger, constraints=get_constraints(state, "enforced"),
+                        ctx=ctx, plan=report.plan),
+        "errors": violation_dicts(report.errors), "warnings": violation_dicts(report.warnings),
+        **schedule_view(report.plan),  # the computed times, so a repair doesn't need a check_plan call
+    }
     if can_repair:
         body["instruction"] = REPAIR_INSTRUCTION
         update["route"] = "plan_agent"
@@ -91,7 +98,7 @@ async def validate_submission(state: PlannerState, runtime: Runtime[RunContext])
         # reported by fallback_planner (which may still use a draft that passed check_plan when time ran out)
         update["agent_stop"] = AGENT_REPAIRS_EXHAUSTED.format(n=attempts) if attempts >= max_attempts else AGENT_NO_TIME
         update["route"] = "fallback_planner"
-    turns_left = settings.max_agent_turns - int(state.get("agent_turns") or 0)
+    turns_left = int(state.get("turn_cap") or settings.max_agent_turns) - int(state.get("agent_turns") or 0)
     update["messages"] = [ToolMessage(content=with_turns_left(dumps(body), turns_left), tool_call_id=call_id,
                                       name=SUBMIT_PLAN, status="error")]
     return update

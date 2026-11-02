@@ -23,6 +23,7 @@ from app.domain.schemas import Constraint, Energy, ParseOutcome, PlanRequest, Pr
 from app.graph.nodes.common import DEADLINE_RESERVE_S, MIN_LLM_CALL_S, PARSER_DEGRADED, degrade, tracer_of
 from app.graph.prompts import LLMParse, parse_hhmm, parse_messages
 from app.graph.state import PlannerState, RunContext, dump, get_request
+from app.llm.ratelimit import call_budget
 from app.llm.registry import (
     ModelRefusalError,
     RegistryError,
@@ -31,7 +32,7 @@ from app.llm.registry import (
     model_chain,
     parse_timeout_s,
 )
-from app.llm.usage import UsageTracker, empty_usage
+from app.llm.usage import UsageTracker, add_usage, empty_usage
 
 log = logging.getLogger("app.graph")
 
@@ -126,17 +127,19 @@ async def llm_parse(request: PlanRequest, rc: RunContext, model_id: str
     if timeout < MIN_LLM_CALL_S:
         return None, empty_usage(), None, "no_time"
     tracker = UsageTracker()
+    waits: list[float] = []
     try:
         chain = model_chain(settings, model_id)
         runnable = build_structured_runnable(chain, LLMParse, settings,
                                              primary_timeout_s=timeout * 0.6 if len(chain) > 1 else None)
-        out = await asyncio.wait_for(
-            runnable.ainvoke(parse_messages(request, rc.deps.now()), config={"callbacks": [tracker]}), timeout)
+        with call_budget(timeout, waits):
+            out = await asyncio.wait_for(
+                runnable.ainvoke(parse_messages(request, rc.deps.now()), config={"callbacks": [tracker]}), timeout)
         parsed = out["parsed"]
         if not isinstance(parsed, LLMParse):
             parsed = LLMParse.model_validate(parsed)
         outcome = ground_to_request(llm_parse_to_outcome(parsed), request)
-        return outcome, tracker.usage, str(out.get("model_id") or model_id), None
+        return outcome, _with_waits(tracker.usage, waits), str(out.get("model_id") or model_id), None
     except TimeoutError:
         kind = "timeout"
     except ModelRefusalError:
@@ -146,7 +149,11 @@ async def llm_parse(request: PlanRequest, rc: RunContext, model_id: str
     except Exception as exc:  # provider SDK errors vary; any failure means "use the rules parse"
         kind = type(exc).__name__
         log.warning("LLM parse failed", extra={"error_type": kind, "model": model_id})
-    return None, tracker.usage, None, kind
+    return None, _with_waits(tracker.usage, waits), None, kind
+
+
+def _with_waits(usage: dict[str, Any], waits: list[float]) -> dict[str, Any]:
+    return add_usage(usage, {"rate_limit_wait_ms": round(sum(waits) * 1000)})
 
 
 async def parse_preferences(state: PlannerState, runtime: Runtime[RunContext]) -> dict[str, Any]:

@@ -76,6 +76,7 @@ class PlannerState(TypedDict, total=False):
     submit_attempts: int
     first_submit_valid: bool | None
     agent_turns: int
+    turn_cap: int  # agent turns allowed this run (settings cap, tightened per model; set on the first turn)
     nudges: int
     protocol_errors: int
     protocol_error_kinds: dict[str, int]  # unknown_tool, malformed_args, schema_invalid, unknown_id, cap_reached, ...

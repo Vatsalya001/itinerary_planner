@@ -34,25 +34,27 @@ from app.graph.nodes.common import (
 from app.graph.prompts import AGENT_SYSTEM_PROMPT, NUDGE_TEXT, agent_payload, agent_payload_message
 from app.graph.state import PlannerState, RunContext, get_constraints, get_ctx, get_prefs
 from app.graph.tools import MAX_QUERIES_PER_RUN, SUBMIT_PLAN, TOOL_CAPS, tool_schemas
+from app.llm.ratelimit import call_budget
 from app.llm.registry import (
     METADATA_KEY,
     ModelRefusalError,
     RegistryError,
+    agent_turn_cap,
     build_agent_runnable,
     model_chain,
     turn_timeout_s,
 )
-from app.llm.usage import UsageTracker, empty_usage
+from app.llm.usage import UsageTracker, add_usage, empty_usage
 
 log = logging.getLogger("app.graph")
 
 PRIMARY_SHARE = 0.6  # share of a turn's budget the primary gets when a fallback model is configured
 
 
-def _limits(state: PlannerState, rc: RunContext) -> dict[str, int]:
+def _limits(rc: RunContext, turn_cap: int) -> dict[str, int]:
     settings = rc.deps.settings
     return {**TOOL_CAPS, "search_places_queries": MAX_QUERIES_PER_RUN, SUBMIT_PLAN: settings.max_submit_attempts,
-            "max_turns": settings.max_agent_turns}
+            "max_turns": turn_cap}
 
 
 def _summary(turn: int, ai: AIMessage) -> str:
@@ -73,9 +75,10 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
     chain = full_chain[full_chain.index(used):] if used in full_chain else full_chain
     history: list[AnyMessage] = list(state.get("messages") or [])
     new: list[AnyMessage] = []
+    turn_cap = int(state.get("turn_cap") or agent_turn_cap(settings, full_chain[0]))
     if not history:
         payload = agent_payload(get_prefs(state), get_ctx(state), get_constraints(state, "enforced"),
-                                _limits(state, rc), events_available=rc.deps.events is not None)
+                                _limits(rc, turn_cap), events_available=rc.deps.events is not None)
         new.append(agent_payload_message(payload))
     turns = state.get("agent_turns", 0)
     usage: dict[str, Any] = empty_usage()
@@ -85,22 +88,24 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
 
     with tracer.node("plan_agent") as info:
         timeout = min(turn_timeout_s(chain[0]), rc.remaining() - DEADLINE_RESERVE_S)
-        if turns >= settings.max_agent_turns:
+        if turns >= turn_cap:
             failure = AGENT_TURN_CAP
         elif timeout < MIN_LLM_CALL_S:
             failure = AGENT_NO_TIME
         else:
             turns += 1
             tracker = UsageTracker()
+            waits: list[float] = []
             try:
                 runnable = build_agent_runnable(
                     chain, tool_schemas(), settings,
                     primary_timeout_s=timeout * PRIMARY_SHARE if len(chain) > 1 else None,
                     primary_id=full_chain[0])
-                result = await asyncio.wait_for(
-                    runnable.ainvoke([SystemMessage(content=AGENT_SYSTEM_PROMPT), *history, *new],
-                                     config={"callbacks": [tracker]}),
-                    timeout)
+                with call_budget(timeout, waits):
+                    result = await asyncio.wait_for(
+                        runnable.ainvoke([SystemMessage(content=AGENT_SYSTEM_PROMPT), *history, *new],
+                                         config={"callbacks": [tracker]}),
+                        timeout)
                 if not isinstance(result, AIMessage):
                     raise TypeError(f"expected AIMessage, got {type(result).__name__}")
                 ai = result
@@ -113,7 +118,7 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
             except Exception as exc:  # provider SDK errors vary; all of them mean "use the fallback planner"
                 log.warning("agent turn failed", extra={"error_type": type(exc).__name__, "model": chain[0]})
                 failure = AGENT_RATE_LIMITED if is_rate_limit_error(exc) else AGENT_UNAVAILABLE
-            usage = tracker.usage
+            usage = add_usage(tracker.usage, {"rate_limit_wait_ms": round(sum(waits) * 1000)})
         if ai is not None:
             info["summary"] = _summary(turns, ai)
             info["data"] = {"turn": turns, "model": ai.response_metadata.get(METADATA_KEY),
@@ -125,7 +130,7 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
             info["summary"] = f"turn {turns}: stopped ({failure})"
             info["data"] = {"turn": turns, "model": chain[0], "stop": failure}
 
-    update: dict[str, Any] = {"agent_turns": turns, "usage": usage}
+    update: dict[str, Any] = {"agent_turns": turns, "usage": usage, "turn_cap": turn_cap}
     if ai is None:
         # The degradation is decided by fallback_planner, which may still use a draft that passed check_plan.
         update["messages"] = new

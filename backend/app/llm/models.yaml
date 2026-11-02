@@ -6,6 +6,7 @@
 # timeouts: agent_turn_s caps one agent model call; parse_s caps the structured-output parse call
 # params.structured_output: json_schema (default; always used for Anthropic) | function_calling
 # params.num_predict (Ollama): output-token cap per call; without it small models can generate for minutes
+# params.rate_limit: {requests, window_s} client-side sliding window per model, shared by all runs in a process
 # pending:  true until a real model ID is pinned; requesting it raises PendingModelError
 production:
   primary: cerebras:gpt-oss-120b
@@ -47,9 +48,11 @@ candidates:
       Production primary (Cerebras). Free Trial (card on file, $5 credit for 30 days, no charge until credits
       are bought): 5 RPM, 30K uncached / 90K total TPM, 1M tokens per hour and per day. Built with ChatCerebras
       directly (init_chat_model has no cerebras provider). Pricing is the free-trial credit, recorded as 0 here.
+    max_agent_turns: 4  # with the parse call, a plan stays within the 5-requests-per-minute window
     params:
       temperature: 0
       max_tokens: 8192
+      rate_limit: {requests: 5, window_s: 60}  # trial: 5 requests per ROLLING minute (6th gets 429)
       max_retries: 0  # a 429 (5 RPM on the trial) goes straight to the Groq fallback instead of retrying
       request_timeout_s: 60
       reasoning_effort: {parse: low, agent: medium, judge: medium}
@@ -63,6 +66,7 @@ candidates:
     params:
       temperature: 0
       max_tokens: 8192
+      rate_limit: {requests: 30, window_s: 60}  # free tier request limit (token limits are not modelled)
       max_retries: 1
       request_timeout_s: 60
       reasoning_effort: {parse: low, agent: medium, judge: medium}

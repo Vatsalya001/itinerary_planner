@@ -501,3 +501,34 @@ async def test_rate_limit_on_the_primary_mid_run_falls_through_and_sticks(monkey
     switch = [e for e in events if e.type == "degraded" and "switched to fake:secondary" in (e.summary or "")]
     assert len(switch) == 1
     assert finalize_data(events)["agent_turns"] == 2
+
+
+async def test_rate_limit_wait_is_reported_in_finalize(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.llm.ratelimit import SlidingWindowRateLimiter
+
+    limiter = SlidingWindowRateLimiter(1, 0.25, name="fake:agent")
+    original = registry_module.get_chat_model
+
+    def fake_get(model_id: str, purpose: str, settings: Any, *, role: str = "primary") -> Any:
+        model = original(model_id, purpose, settings, role=role)  # type: ignore[arg-type]
+        return model.model_copy(update={"rate_limiter": limiter}) if purpose == "agent" else model
+
+    monkeypatch.setattr(registry_module, "get_chat_model", fake_get)
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    data = finalize_data(events)
+    assert result.status == "complete" and data["agent_turns"] == 2
+    assert 150 <= data["rate_limit_wait_ms"] <= 600  # the second turn waited for the window
+    assert "rate_limit_wait_ms" not in data["usage"]
+    assert_trace_integrity(events)
+
+
+async def test_per_model_turn_cap_reaches_the_model_and_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.graph.nodes.agent as agent_module
+
+    monkeypatch.setattr(agent_module, "agent_turn_cap", lambda settings, model_id: 2)
+    search = AIMessage(content="", tool_calls=[_call("search_places", {"queries": ["quiet cafe"], "reason": "a"}, "s")])
+    _use_model(monkeypatch, [search, search, search])
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert result.status == "fallback" and finalize_data(events)["agent_turns"] == 2
+    assert any("ran out of turns" in d for d in result.degradations)
+    assert_trace_integrity(events)

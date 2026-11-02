@@ -57,13 +57,18 @@ def run_metrics(state: PlannerState, model: str | None, rc: RunContext) -> dict[
       estimate_travel, check_plan or submit_plan stops), ``cap_reached`` (a call beyond the tool's per-run cap)
       and ``duplicate_submit`` (a second submit_plan in one turn). Validator findings other than UNKNOWN_ID
       (budget, hours, pacing...) are plan quality, not protocol errors.
+    * ``rate_limit_wait_ms``: time this call spent waiting for the client-side sliding-window rate limiter
+      (app.llm.ratelimit) before model requests.
     * ``submit_attempts``, ``repairs`` (= attempts - 1), ``first_submit_valid`` (None without a submission),
       ``nudges``, ``agent_turns``; ``model`` is the model that answered last, ``requested_model`` the one asked for.
     """
     attempts = int(state.get("submit_attempts") or 0)
     kinds = {k: int(v) for k, v in (state.get("protocol_error_kinds") or {}).items() if v}
+    usage = usage_delta(state.get("usage"), rc.usage_base)
+    wait_ms = int(usage.pop("rate_limit_wait_ms", 0) or 0)
     return {
-        "usage": usage_delta(state.get("usage"), rc.usage_base),
+        "usage": usage,
+        "rate_limit_wait_ms": wait_ms,
         "submit_attempts": attempts,
         "tool_calls": dict(state.get("tool_calls") or {}),
         "model": model,

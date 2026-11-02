@@ -66,6 +66,9 @@ def test_search_places_args_validation() -> None:
     batched = SearchPlacesArgs.model_validate({"queries": json.dumps([{"intent": "a"}, {"intent": "b"}])})
     assert [x["intent"] for x in batched.queries] == ["a", "b"]
     assert SearchPlacesArgs.model_validate({"queries": {"intent": "one"}}).queries == [{"intent": "one"}]
+    # plain strings are intent shorthand (gemma4 sends them)
+    strings = SearchPlacesArgs.model_validate({"queries": ["vegetarian cafe", {"intent": "park", "category": "park"}]})
+    assert strings.queries == [{"intent": "vegetarian cafe"}, {"intent": "park", "category": "park"}]
     with pytest.raises(ValidationError):
         PlaceQueryArgs.model_validate({"intent": "x", "category": "spaceport"})
     with pytest.raises(ValidationError):
@@ -299,3 +302,82 @@ def test_rate_limit_errors_are_told_apart_from_outages() -> None:
     assert is_rate_limit_error(RuntimeError("429 rate limit reached for model"))
     assert not is_rate_limit_error(ServiceUnavailable("high demand"))
     assert not is_rate_limit_error(TimeoutError())
+
+
+async def test_search_places_can_return_events_in_the_same_call() -> None:
+    from app.graph.tools import run_search_places
+    from app.providers.fixture import FixtureGeocoder
+
+    location = (await FixtureGeocoder().resolve("Bangalore"))[0]
+    env = ToolEnv(deps=make_deps(), ctx=make_ctx(location=location), prefs=make_prefs(), enforced=[],
+                  original=[], ledger={})
+    args = SearchPlacesArgs.model_validate({"queries": ["quiet cafe"], "include_events": "true", "reason": "x"})
+    outcome = await run_search_places(args, env)
+    body = json.loads(outcome.content)
+    assert body["events"] and body["events"][0]["kind"] == "event"
+    assert any(c.kind == "event" for c in outcome.candidates) and outcome.data and outcome.data["events"] == 1
+    failing = ToolEnv(deps=make_deps(fault="events_search_error"), ctx=make_ctx(location=location),
+                      prefs=make_prefs(), enforced=[], original=[], ledger={})
+    outcome = await run_search_places(args, failing)
+    assert "events_error" in json.loads(outcome.content) and outcome.degradations and failing.events_failed
+    assert outcome.status == "success"  # the place results still count
+
+
+def test_walking_stops_are_flagged_and_stops_sent_as_json_strings_are_decoded() -> None:
+    assert compact_candidate(make_candidate("fx:park", "park")).get("walking") is True
+    assert "walking" not in compact_candidate(make_candidate("fx:cafe", "cafe"))
+    stop = {"candidate_id": "fx:a", "duration_min": 45, "why": "Calm."}
+    assert normalize_plan_payload({"stops": [json.dumps(stop)]})["stops"] == [stop]
+    assert normalize_plan_payload({"plan": {"stops": [stop], "summary_note": "x"}})["stops"] == [stop]
+
+
+def test_prompt_and_submit_description_state_the_common_rejections() -> None:
+    submit = next(t for t in tool_schemas() if t["function"]["name"] == "submit_plan")["function"]["description"]
+    for phrase in ("walking:true", "plan_b_candidate_id", "hours_today", "10%"):
+        assert phrase in submit
+    for phrase in ("Rules the validator enforces", "max_walking_minutes_total", "include_events: true"):
+        assert phrase in AGENT_SYSTEM_PROMPT
+
+
+def test_constraint_fix_names_replacement_candidates() -> None:
+    from app.domain.schemas import DraftStop, Evidence, PlanDraft, Violation
+    from app.graph.tools import fix_line
+    from tests.factories import make_constraints
+
+    cafe = make_candidate("fx:cafe", "cafe")
+    stairs = make_candidate("fx:stairs", "cafe", wheelchair=Evidence.UNKNOWN)
+    ramp = make_candidate("fx:ramp_cafe", "cafe")
+    park = make_candidate("fx:park", "park")
+    ledger = {c.id: c for c in (cafe, stairs, park, ramp)}
+    draft = PlanDraft(stops=[DraftStop(candidate_id="fx:cafe", duration_min=45, why="Calm."),
+                             DraftStop(candidate_id="fx:stairs", duration_min=45, why="Cosy.")])
+    v = Violation(code="ACCESSIBILITY_UNVERIFIED", severity="error", message="no evidence", stop_index=1)
+    line = fix_line([v], draft, ledger=ledger, constraints=make_constraints(["access:wheelchair"]), ctx=make_ctx())
+    assert line == ("Fix: stop 2: use stops with confirmed wheelchair access, e.g. replace it with fx:ramp_cafe "
+                    "(ACCESSIBILITY_UNVERIFIED).")
+    assert "replace" not in fix_line([v], draft)  # without the ledger there is nothing concrete to suggest
+
+
+def test_rejections_carry_the_schedule_and_quantitative_fixes() -> None:
+    from app.domain.schemas import Hours
+    from app.graph.tools import fix_line, schedule_view
+    from tests.factories import make_draft
+
+    deps = make_deps()
+    park = make_candidate("fx:park", "park", hours=Hours(status="known", periods=[(360, 1080)]))
+    cafe = make_candidate("fx:cafe", "cafe")
+    env = ToolEnv(deps=deps, ctx=make_ctx(available=120), prefs=make_prefs(available=120), enforced=[],
+                  original=[], ledger={c.id: c for c in (park, cafe)})
+    draft = make_draft(("fx:cafe", 90), ("fx:park", 60))
+    from app.domain.validator import validate_plan
+
+    report = validate_plan(draft, env.ledger, env.ctx, env.prefs, [], deps.travel)
+    line = fix_line(report.errors, draft, ctx=env.ctx, plan=report.plan)
+    assert "the plan runs 45 min over the window: cut visit time by at least 45 min" in line
+    assert "walking is 15 min over the limit" in line
+    late = make_draft(("fx:cafe", 90), ("fx:park", 90))
+    late_report = validate_plan(late, env.ledger, make_ctx(available=300), make_prefs(available=300), [], deps.travel)
+    assert "after sunset at 17:50" in fix_line(late_report.errors, late, ctx=env.ctx, plan=late_report.plan)
+    view = schedule_view(report.plan)
+    assert view["schedule"][0]["start"] == "15:00" and view["totals"]["available_minutes"] == 120
+    assert schedule_view(None) == {}

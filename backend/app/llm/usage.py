@@ -16,12 +16,14 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 from app.llm.pricing import pricing_for
+from app.llm.ratelimit import RateLimitWaitError
 
-USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cost_usd", "llm_calls")
+USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cost_usd", "llm_calls", "rate_limit_wait_ms")
 
 
 def empty_usage() -> dict[str, Any]:
-    return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cost_usd": 0.0, "llm_calls": 0}
+    return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cost_usd": 0.0, "llm_calls": 0,
+            "rate_limit_wait_ms": 0}
 
 
 def add_usage(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any]:
@@ -79,4 +81,6 @@ class UsageTracker(BaseCallbackHandler):
     def on_llm_error(self, error: BaseException, *, run_id: UUID, parent_run_id: UUID | None = None,
                      **kwargs: Any) -> Any:
         self._run_models.pop(run_id, None)
+        if isinstance(error, RateLimitWaitError):
+            return  # refused by our own limiter before any request was sent
         self.usage = add_usage(self.usage, {"llm_calls": 1})

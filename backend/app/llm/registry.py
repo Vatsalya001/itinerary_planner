@@ -35,6 +35,7 @@ from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 
 from app.config import Settings
 from app.llm.pricing import Pricing
+from app.llm.ratelimit import SlidingWindowRateLimiter, call_budget, limiter_for
 
 log = logging.getLogger("app.llm")
 
@@ -86,6 +87,7 @@ class ModelSpec:
     note: str = ""
     agent_turn_s: float = 45.0
     parse_s: float = 15.0
+    max_agent_turns: int | None = None  # per-model cap (request-limited free tiers); settings cap still applies
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,7 @@ def load_registry(path: str | None = None) -> Registry:
             id=model_id, provider=provider, model=model, kind=kind, params=dict(entry.get("params") or {}),
             pricing=Pricing.from_dict(entry.get("pricing_per_mtok")), pending=bool(entry.get("pending", False)),
             note=str(entry.get("note", "")), agent_turn_s=t.get("agent_turn_s", 45.0), parse_s=t.get("parse_s", 15.0),
+            max_agent_turns=int(entry["max_agent_turns"]) if entry.get("max_agent_turns") else None,
         )
     production = raw.get("production") or {}
     return Registry(specs=specs, production_primary=str(production.get("primary", "")),
@@ -262,7 +265,16 @@ def provider_kwargs(spec: ModelSpec, purpose: Purpose, settings: Settings) -> di
         if p.get("max_tokens"):
             kwargs["max_tokens"] = int(p["max_tokens"])
         return kwargs
-    return {k: v for k, v in p.items() if k not in {"effort", "cache_system_prompt", "structured_output"}}
+    return {k: v for k, v in p.items()
+            if k not in {"effort", "cache_system_prompt", "structured_output", "rate_limit"}}
+
+
+def model_rate_limiter(spec: ModelSpec) -> SlidingWindowRateLimiter | None:
+    """The process-wide sliding-window limiter for ``params.rate_limit: {requests, window_s}``, if configured."""
+    cfg = spec.params.get("rate_limit")
+    if not isinstance(cfg, Mapping) or not cfg.get("requests"):
+        return None
+    return limiter_for(spec.id, int(cfg["requests"]), float(cfg.get("window_s", 60)))
 
 
 _MODEL_CACHE: dict[tuple[Any, ...], BaseChatModel] = {}
@@ -286,11 +298,16 @@ def get_chat_model(model_id: str, purpose: Purpose, settings: Settings, *, role:
     elif spec.provider == "cerebras":  # not an init_chat_model provider; build the integration class directly
         from langchain_cerebras import ChatCerebras
 
-        model = ChatCerebras(model=spec.model, **provider_kwargs(spec, purpose, settings))
+        model = ChatCerebras(model=spec.model, rate_limiter=model_rate_limiter(spec),
+                             **provider_kwargs(spec, purpose, settings))
     else:
         from langchain.chat_models import init_chat_model
 
-        model = init_chat_model(spec.model, model_provider=spec.provider, **provider_kwargs(spec, purpose, settings))
+        kwargs = provider_kwargs(spec, purpose, settings)
+        limiter = model_rate_limiter(spec)
+        if limiter is not None:
+            kwargs["rate_limiter"] = limiter  # gates every call through this model: parse, agent and judge
+        model = init_chat_model(spec.model, model_provider=spec.provider, **kwargs)
     if len(_MODEL_CACHE) > 64:
         _MODEL_CACHE.clear()
     _MODEL_CACHE[key] = model
@@ -425,7 +442,8 @@ def with_timeout(chain: Runnable[Any, Any], seconds: float) -> Runnable[Any, Any
     next model in the chain still gets a turn."""
 
     async def run(value: Any, config: RunnableConfig) -> Any:
-        return await asyncio.wait_for(chain.ainvoke(value, config=config), seconds)
+        with call_budget(seconds):  # a rate-limit wait longer than this share fails fast to the next model
+            return await asyncio.wait_for(chain.ainvoke(value, config=config), seconds)
 
     return RunnableLambda(run)
 
@@ -471,6 +489,13 @@ def build_structured_runnable(model_ids: Sequence[str], schema: type[Any], setti
         return chains[0]
     first = with_timeout(chains[0], primary_timeout_s) if primary_timeout_s else chains[0]
     return first.with_fallbacks(chains[1:])
+
+
+def agent_turn_cap(settings: Settings, model_id: str) -> int:
+    """Agent turns allowed for a run on ``model_id``: settings.max_agent_turns, tightened per model."""
+    spec = find_spec(model_id)
+    cap = spec.max_agent_turns if spec is not None else None
+    return min(settings.max_agent_turns, cap) if cap else settings.max_agent_turns
 
 
 def turn_timeout_s(model_id: str) -> float:

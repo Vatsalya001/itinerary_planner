@@ -200,7 +200,7 @@ async def run_tools(state: PlannerState, runtime: Runtime[RunContext]) -> dict[s
         info["data"] = {"ledger_size": len(env.ledger), "places_mode": env.places_mode}
 
     executed[QUERIES_KEY] = env.queries_used
-    turns_left = rc.deps.settings.max_agent_turns - int(state.get("agent_turns") or 0)
+    turns_left = int(state.get("turn_cap") or rc.deps.settings.max_agent_turns) - int(state.get("agent_turns") or 0)
     messages = [m.model_copy(update={"content": with_turns_left(str(m.content), turns_left)}) for m in messages]
     has_places = any(c.kind == "place" for c in env.ledger.values())
     agent_stop: str | None = None

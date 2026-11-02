@@ -18,10 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from app.deps import Deps
 from app.domain.categories import currency_symbol, is_category, load_categories
-from app.domain.evidence import event_window, likely_busy
+from app.domain.evidence import candidate_allowed, category_info, event_window, is_walking_stop, likely_busy
 from app.domain.parser_rules import default_queries
 from app.domain.schemas import (
     Candidate,
+    CanonicalPlan,
     Constraint,
     CostRange,
     PlaceQuery,
@@ -115,7 +116,8 @@ def tool_schemas() -> list[dict[str, Any]]:
             "parameters": {"type": "object", "properties": {
                 "queries": {
                     "type": "array", "minItems": 1, "maxItems": MAX_QUERIES_PER_CALL,
-                    "description": "The searches to run, all in this one call",
+                    "description": ('The searches to run, all in this one call, e.g. [{"intent": "quiet vegetarian '
+                                    'cafe", "category": "cafe"}, {"intent": "park for a walk", "category": "park"}]'),
                     "items": {"type": "object", "properties": {
                         "intent": {"type": "string",
                                    "description": "What to look for, e.g. 'quiet vegetarian cafe'"},
@@ -129,6 +131,9 @@ def tool_schemas() -> list[dict[str, Any]]:
                                     "description": "Optional local time HH:MM the place must be open"},
                     }, "required": ["intent"]},
                 },
+                "include_events": {"type": "boolean", "description": (
+                    "Also return events on the plan's date matching the interests, in this same call "
+                    "(saves a separate search_events call)")},
                 "reason": _REASON,
             }, "required": ["queries", "reason"]},
         }},
@@ -163,8 +168,12 @@ def tool_schemas() -> list[dict[str, Any]]:
         {"type": "function", "function": {
             "name": SUBMIT_PLAN,
             "description": (
-                "Submit the final plan. It is validated by code; if it fails you get the violation codes back "
-                "and may fix and resubmit a limited number of times."),
+                "Submit the final plan; code validates it and returns the violations with a one-line fix if it "
+                "fails (limited resubmissions). Most common rejections: time at stops marked walking:true plus "
+                "walking legs above max_walking_minutes_total; a plan_b_candidate_id that is one of the stops, "
+                "not indoor, or given when rain is not likely; visits outside hours_today or arriving after an "
+                "event starts; the window filled with visit time and no room for moves and buffers; upper prices "
+                "plus fares plus 10% above the budget; numbers in why/tradeoff/summary_note."),
             "parameters": _plan_schema("The final plan"),
         }},
     ]
@@ -241,6 +250,14 @@ class SearchPlacesArgs(_Args):
     batch). The old single-query shape (``intent`` etc. at the top level) is still accepted for small models."""
 
     queries: list[Any] = Field(min_length=1)
+    include_events: bool = False
+
+    @field_validator("include_events", mode="before")
+    @classmethod
+    def _flag(cls, v: Any) -> Any:
+        if v is None or (isinstance(v, str) and v.strip().lower() in _NULLISH):
+            return False
+        return v
 
     @model_validator(mode="before")
     @classmethod
@@ -253,6 +270,10 @@ class SearchPlacesArgs(_Args):
             queries = [queries]
         if not queries and out.get("intent"):
             queries = [{k: out[k] for k in QUERY_KEYS if k in out}]
+        if isinstance(queries, str):
+            queries = [queries]
+        if isinstance(queries, list):  # a plain string is shorthand for {"intent": ...} (small models send these)
+            queries = [{"intent": q} if isinstance(q, str) else q for q in queries]
         out["queries"] = queries if isinstance(queries, list) else []
         return out
 
@@ -301,8 +322,13 @@ def normalize_plan_payload(args: Any) -> Any:
     not coerced beyond JSON-decoding stringified arrays, so malformed input still fails SCHEMA_INVALID."""
     if not isinstance(args, Mapping):
         return args
+    for wrapper in ("plan", "draft"):  # {"plan": {"stops": [...]}} -> {"stops": [...]}
+        inner = _maybe_json(args.get(wrapper))
+        if "stops" not in args and isinstance(inner, Mapping) and "stops" in inner:
+            args = {**inner, "reason": args.get("reason")}
     stops = _maybe_json(args.get("stops"))
     if isinstance(stops, list):
+        stops = [_maybe_json(s) for s in stops]  # stop objects sent as JSON strings
         stops = [{k: _nullish(s[k]) for k in _STOP_KEYS if k in s} if isinstance(s, Mapping) else s for s in stops]
         stops = [{k: v for k, v in s.items() if v is not None} if isinstance(s, dict) else s for s in stops]
     omitted = _maybe_json(args.get("omitted")) or []
@@ -398,6 +424,8 @@ def compact_candidate(c: Candidate, centre: tuple[float, float] | None = None) -
     out["indoor"] = "unknown" if c.indoor is None else c.indoor
     out["seated"] = c.seated
     out["effort"] = c.effort
+    if is_walking_stop(c):
+        out["walking"] = True  # the whole visit counts toward the walking limit
     if c.serves_alcohol:
         out["serves_alcohol"] = True
     if c.popularity == "high" and c.busy_windows:
@@ -606,8 +634,9 @@ async def run_search_places(args: SearchPlacesArgs, env: ToolEnv) -> ToolOutcome
                            status="error", summary=PLACES_UNAVAILABLE, provider_failed=True,
                            degradations=[PLACES_UNAVAILABLE], data={"code": "PLACES_UNAVAILABLE"})
     if ran == 0:
-        return error_outcome("No query ran. Send queries: [{intent, category?, ...}] with candidate IDs from this "
-                             "run only. " + " ".join(str(r.get("error", "")) for r in results)[:300],
+        return error_outcome('No query ran. Send queries like [{"intent": "quiet vegetarian cafe", "category": '
+                             '"cafe"}], using candidate IDs from this run only. '
+                             + " ".join(str(r.get("error", "")) for r in results)[:300],
                              protocol=True, code=(protocol_kind or "schema_invalid").upper())
     body: dict[str, Any] = {"results": results}
     if env.places_mode == "snapshot":
@@ -628,6 +657,18 @@ async def run_search_places(args: SearchPlacesArgs, env: ToolEnv) -> ToolOutcome
     if busy:
         bits.append(f"{busy} likely busy")
     data: dict[str, Any] = {"count": len(candidates), "queries": ran}
+    if args.include_events:
+        events = await run_search_events(SearchEventsArgs(), env)
+        event_body = json.loads(events.content)
+        if events.status == "error":
+            body["events_error"] = event_body.get("error")
+            degradations += events.degradations
+        else:
+            body["events"] = event_body.get("events", [])
+            body["events_date"] = event_body.get("date")
+        candidates += events.candidates
+        bits.append(events.summary)
+        data["events"] = len(events.candidates)
     if recovered:
         data["recovered"] = True
     return ToolOutcome(content=dumps(body), candidates=candidates, summary=", ".join(bits), recovered=recovered,
@@ -705,7 +746,8 @@ _FIXES: dict[str, str] = {
     "TRANSFER_UNKNOWN": "use a different candidate",
     "PLAN_B_INVALID": "use an indoor returned candidate as plan_b_candidate_id, or leave it out",
     "PROSE_NUMERIC_CLAIM": "remove prices, durations, clock times and distances from the text",
-    "SCHEMA_INVALID": "give every stop candidate_id, duration_min and why",
+    "SCHEMA_INVALID": ('send "stops" as a list of objects like {"candidate_id": "<id from results>", '
+                       '"duration_min": 60, "why": "<one sentence>"}'),
 }
 
 
@@ -734,8 +776,74 @@ def _prose_fix(v: Violation, draft: PlanDraft | None) -> str:
     return _FIXES["PROSE_NUMERIC_CLAIM"]
 
 
-def fix_line(errors: list[Violation], draft: PlanDraft | None = None) -> str:
-    """All fixes for a failed check or submission, in one line: "Fix: stop 2: ...; plan: ..."."""
+# Codes where swapping the stop for another returned candidate is the fix; the line then names some.
+_SWAPPABLE = {"DIET_UNVERIFIED", "DIET_CONFLICT", "ACCESSIBILITY_UNVERIFIED", "ALCOHOL_CONFLICT", "SETTING_CONFLICT",
+              "MUST_AVOID_VIOLATED"}
+
+
+def _alternatives(v: Violation, draft: PlanDraft | None, ledger: Mapping[str, Candidate],
+                  constraints: list[Constraint], ctx: WorldContext | None, limit: int = 2) -> list[str]:
+    """Returned candidates of the same kind and category group that pass every time-independent hard
+    constraint and aren't already stops (small models otherwise resubmit the same failing stop)."""
+    if draft is None or ctx is None or v.stop_index is None or v.stop_index >= len(draft.stops):
+        return []
+    current = ledger.get(draft.stops[v.stop_index].candidate_id)
+    if current is None:
+        return []
+    used = {s.candidate_id for s in draft.stops}
+    info = category_info(current)
+    out: list[str] = []
+    for c in ledger.values():
+        if c.id in used or c.kind != current.kind:
+            continue
+        other = category_info(c)
+        if info is not None and (other is None or other.group != info.group):
+            continue
+        if candidate_allowed(c, constraints, ctx)[0]:
+            out.append(c.id)
+            if len(out) == limit:
+                break
+    return out
+
+
+def _scheduled_fix(v: Violation, plan: CanonicalPlan | None, ctx: WorldContext | None) -> str | None:
+    """Quantitative fixes from the computed schedule: how many minutes to cut, and when things are open or dark
+    (small models fix "over by 1 minute" only when told the number)."""
+    if plan is None:
+        return None
+    t = plan.totals
+    stop = plan.stops[v.stop_index] if v.stop_index is not None and v.stop_index < len(plan.stops) else None
+    if v.code == "TIME_EXCEEDED":
+        over = t.elapsed_min - t.available_minutes
+        if over > 0:
+            return f"the plan runs {over} min over the window: cut visit time by at least {over} min, or drop a stop"
+        return "the plan ends after the window ends: cut visit time or drop a stop"
+    if v.code == "PACING_EXCEEDED" and "walking" in v.message and ctx is not None:
+        over = t.walking_min - ctx.pacing.max_walk_minutes
+        return (f"walking is {over} min over the limit: shorten or drop the walking:true stop, or choose stops "
+                "closer together")
+    if v.code == "PACING_EXCEEDED" and "legs" in v.message:
+        return "too many long moves: put nearby stops next to each other, or swap one for a closer place"
+    if v.code == "PACING_EXCEEDED" and "stops" in v.message:
+        return "drop a stop"
+    if stop is not None and v.code == "HOURS_CONFLICT" and stop.candidate.kind != "event":
+        return (f"it is scheduled {hhmm(stop.start_min)}-{hhmm(stop.end_min)} but open {hours_text(stop.candidate)}: "
+                "move it to a time it is open, shorten it, or swap it")
+    if stop is not None and v.code == "DAYLIGHT_CONFLICT" and plan.weather.sunset_min is not None:
+        return (f"it ends {hhmm(stop.end_min)}, after sunset at {hhmm(plan.weather.sunset_min)}: put it first, "
+                "shorten it, or drop it")
+    if stop is not None and v.code == "CROWD_LIKELY":
+        return (f"it is likely busy around {hhmm(stop.start_min)}: visit it at another time or pick a quieter "
+                "place")
+    return None
+
+
+def fix_line(errors: list[Violation], draft: PlanDraft | None = None, *,
+             ledger: Mapping[str, Candidate] | None = None, constraints: list[Constraint] | None = None,
+             ctx: WorldContext | None = None, plan: CanonicalPlan | None = None) -> str:
+    """All fixes for a failed check or submission, in one line: "Fix: stop 2: ...; plan: ...". With the ledger,
+    constraints and context, constraint failures name concrete replacement candidates; with the computed
+    plan, time, walking, hours and daylight fixes say by how much."""
     parts: list[str] = []
     for v in errors:
         if v.code == "PROSE_NUMERIC_CLAIM":
@@ -743,12 +851,33 @@ def fix_line(errors: list[Violation], draft: PlanDraft | None = None) -> str:
         elif v.code == "HOURS_CONFLICT" and "event" in v.message:
             fix = "arrive before the event starts: move it earlier, or shorten or drop the stop before it"
         else:
-            fix = _FIXES.get(v.code, v.message)
+            fix = _scheduled_fix(v, plan, ctx) or _FIXES.get(v.code, v.message)
+        if v.code in _SWAPPABLE and ledger is not None:
+            alternatives = _alternatives(v, draft, ledger, constraints or [], ctx)
+            if alternatives:
+                fix += ", e.g. replace it with " + " or ".join(alternatives)
         where = f"stop {v.stop_index + 1}" if v.stop_index is not None else "plan"
         item = f"{where}: {fix} ({v.code})"
         if item not in parts:
             parts.append(item)
     return "Fix: " + "; ".join(parts) + "." if parts else ""
+
+
+def schedule_view(plan: CanonicalPlan | None) -> dict[str, Any]:
+    """The computed schedule, legs and totals (check_plan results and rejected submissions)."""
+    if plan is None:
+        return {}
+    t = plan.totals
+    return {
+        "schedule": [{"id": s.candidate.id, "name": s.candidate.name[:NAME_MAX], "start": hhmm(s.start_min),
+                      "end": hhmm(s.end_min), "duration_min": s.duration_min} for s in plan.stops],
+        "legs": [{"from": leg.from_id, "to": leg.to_id, "mode": leg.mode, "minutes_max": leg.minutes_max}
+                 for leg in plan.legs],
+        "totals": {"currency": t.currency, "worst_case_cost": t.worst_case, "budget": t.budget,
+                   "budget_left": t.budget_left, "elapsed_min": t.elapsed_min,
+                   "available_minutes": t.available_minutes, "minutes_left": t.minutes_left,
+                   "walking_min": t.walking_min},
+    }
 
 
 def run_check_plan(args: Any, env: ToolEnv) -> ToolOutcome:
@@ -760,18 +889,10 @@ def run_check_plan(args: Any, env: ToolEnv) -> ToolOutcome:
     report = validate_plan(draft, env.ledger, env.ctx, env.prefs, env.original, env.deps.travel)
     # the next step comes first, so small models read it before the details
     body: dict[str, Any] = {"ok": report.ok,
-                            "next_step": SUBMIT_NOW if report.ok else fix_line(report.errors, draft)}
-    if report.plan is not None:
-        plan = report.plan
-        t = plan.totals
-        body["schedule"] = [{"id": s.candidate.id, "name": s.candidate.name[:NAME_MAX], "start": hhmm(s.start_min),
-                             "end": hhmm(s.end_min), "duration_min": s.duration_min} for s in plan.stops]
-        body["legs"] = [{"from": leg.from_id, "to": leg.to_id, "mode": leg.mode, "minutes_max": leg.minutes_max}
-                        for leg in plan.legs]
-        body["totals"] = {"currency": t.currency, "worst_case_cost": t.worst_case, "budget": t.budget,
-                          "budget_left": t.budget_left, "elapsed_min": t.elapsed_min,
-                          "available_minutes": t.available_minutes, "minutes_left": t.minutes_left,
-                          "walking_min": t.walking_min}
+                            "next_step": SUBMIT_NOW if report.ok else fix_line(
+                                report.errors, draft, ledger=env.ledger, constraints=env.enforced, ctx=env.ctx,
+                                plan=report.plan)}
+    body.update(schedule_view(report.plan))
     body["errors"] = violation_dicts(report.errors)
     body["warnings"] = violation_dicts(report.warnings)
     codes = sorted({v.code for v in report.errors})
