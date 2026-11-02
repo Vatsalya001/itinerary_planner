@@ -147,9 +147,9 @@ the current numbers and the list of models that have not been run yet.
    string (`postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require`; the pooled host works).
 2. In Render: New -> Blueprint -> select this repository. `render.yaml` defines one Docker web service in Singapore
    on an always-on plan, with health check `/api/health` and deploys only after the GitHub checks pass.
-3. Fill the `sync: false` values: `DATABASE_URL` (Neon), `ANTHROPIC_API_KEY`, and optionally `GOOGLE_MAPS_API_KEY`,
-   `TAVILY_API_KEY`, `FALLBACK_MODEL`, `JUDGE_MODEL`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `SENTRY_DSN` and `LANGSMITH_API_KEY`
-   (with `TRACING_ENABLED=true`, which `render.yaml` sets to `false`).
+3. Fill the `sync: false` values: `DATABASE_URL` (Neon), `CEREBRAS_API_KEY`, `GROQ_API_KEY`, and optionally
+   `GOOGLE_MAPS_API_KEY`, `TAVILY_API_KEY`, `JUDGE_MODEL`, `SENTRY_DSN` and `LANGSMITH_API_KEY` (with
+   `TRACING_ENABLED=true`, which `render.yaml` sets to `false`).
 4. On startup the app creates its tables and the LangGraph checkpoint tables. `/api/health` answers 503 when the
    database is unreachable, so Render's health check catches a broken `DATABASE_URL`; its `places` field shows a
    rejected Maps key (`auth_error`). The image includes `backend/evals/results/summary.json` for `/evals`;
