@@ -3,7 +3,7 @@
 An AI agent that turns a city, budget, available time, mood, interests, and constraints into a practical Saturday itinerary. FastAPI and LangGraph run the agent; React presents the plan and streams its actual execution trace.
 
 **Source:** https://github.com/Vatsalya001/itinerary_planner  
-**Public app:** deployment must be completed and its anonymous-access URL verified before submitting. A local URL or GitHub URL is not the required hosted UI.
+**Public app:** deployment is deferred at the owner’s request; this is a verified development build. The assignment’s hosted-URL requirement remains pending.
 
 ## What the app does
 
@@ -119,7 +119,7 @@ See [submission checklist](docs/SUBMISSION.md) for deployment settings and anony
 - The beam search is bounded and heuristic. An inability to find a plan is not a proof that no real-world itinerary exists.
 - Model limiters and resume locks are per process. Keep the demo at one instance; additional instances require shared coordination.
 - Persisting the planner across navigation uses browser memory only. Reloading the page clears the unsaved form and active plan; share links persist subject to the configured store and TTL.
-- Live Google Places, Tavily, Postgres, Docker and a public deployment were not verified in the completion pass. Offline HTTP adapters, SQLite, the browser flow, and a small live model sample were checked.
+- Live Google Places, Tavily, Postgres and Docker were not exercised locally. The [GitHub CI workflow](https://github.com/Vatsalya001/itinerary_planner/actions/workflows/ci.yml) additionally checks Postgres and builds/smoke-tests Docker. Offline HTTP adapters, SQLite, browser flows and a small live model sample were checked locally. Public deployment is deferred.
 
 ## How AI tools were used
 

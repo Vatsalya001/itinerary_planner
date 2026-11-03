@@ -17,7 +17,7 @@ import { ErrorCard } from '../../components/ErrorCard'
 import EvalsLeaderboard from '../../pages/EvalsLeaderboard'
 import Planner from '../../pages/Planner'
 import type { PlanResult, TraceEvent } from '../../types'
-import realSummary from '../../../../backend/evals/results/summary.json'
+import realSummary from '../fixtures/evals_summary.json'
 import { fixtures } from '../utils'
 
 vi.mock('../../api/sse', async (importOriginal) => {
