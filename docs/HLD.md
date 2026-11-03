@@ -32,7 +32,7 @@ flowchart LR
     user([User]) --> spa["Browser SPA<br/>React 19 + Vite"]
     spa -->|"POST /api/plan (SSE or JSON)<br/>resume, share, feedback, evals"| api["FastAPI app<br/>app.main"]
     api --> runner["LangGraph runner<br/>app.graph.runner"]
-    runner --> llm["LLM providers<br/>Cerebras, then Groq (production)<br/>Ollama / scripted fake (dev, tests)"]
+    runner --> llm["LLM providers<br/>Groq GPT-OSS 120B (production)<br/>Ollama / scripted fake (dev, tests)"]
     runner --> data["Data providers"]
     data --> gp["Google Places API (New)"]
     data --> snap["OSM snapshot (Bangalore)"]
@@ -224,13 +224,13 @@ graph TD
 
 All models are listed in `backend/app/llm/models.yaml` and built with `init_chat_model`, with `ChatCerebras` directly
 for Cerebras (no `init_chat_model` provider), or as the scripted fake. The run's model is `PRIMARY_MODEL` (default `ollama:qwen3.5:9b` in `config.py`; `render.yaml` sets
-`cerebras:gpt-oss-120b` with `FALLBACK_MODEL=groq:openai/gpt-oss-120b`). An optional `FALLBACK_MODEL` is chained with `with_fallbacks`; the primary then gets
+`groq:openai/gpt-oss-120b` with an empty `FALLBACK_MODEL`). An optional `FALLBACK_MODEL` is chained with `with_fallbacks`; the primary then gets
 60% of each call's time budget. After the chain, the deterministic planner is the last resort.
 
 | Registry ID | Kind | Key settings | Status |
 |---|---|---|---|
-| `cerebras:gpt-oss-120b` | api | temperature 0, `max_tokens` 8192, `reasoning_effort` parse low / agent medium / judge medium, `max_retries` 0 (a 429 goes straight to Groq), `request_timeout_s` 60, client-side limit 5 requests per 60 s, at most 4 agent turns; built with `ChatCerebras` | **Production primary.** Free Trial: card on file, $5 credit for 30 days, 5 RPM, 30K uncached TPM, 1M tokens/day |
-| `groq:openai/gpt-oss-120b` | api | temperature 0, `max_tokens` 8192, `reasoning_effort` parse low / agent medium / judge medium, `reasoning_format` hidden, `max_retries` 1, `request_timeout_s` 60, client-side limit 30 requests per 60 s; $0.15 / $0.60 per Mtok | **Production fallback.** Free tier: 30 RPM, 8K TPM, 200K tokens/day (measured: the third ~2.5K-token call within a minute gets HTTP 429) |
+| `cerebras:gpt-oss-120b` | api | temperature 0, `max_tokens` 8192, `reasoning_effort` parse low / agent medium / judge medium, `max_retries` 0 (a 429 goes straight to Groq), `request_timeout_s` 60, client-side limit 5 requests per 60 s, at most 4 agent turns; built with `ChatCerebras` | **Optional provider.** Free Trial: card on file, $5 credit for 30 days, 5 RPM, 30K uncached TPM, 1M tokens/day |
+| `groq:openai/gpt-oss-120b` | api | temperature 0, `max_tokens` 8192, `reasoning_effort` parse low / agent medium / judge medium, `reasoning_format` hidden, `max_retries` 1, `request_timeout_s` 60, client-side limit 30 requests per 60 s; $0.15 / $0.60 per Mtok | **Production primary; paid Developer billing required.** Free tier: 30 RPM, 8K TPM, 200K tokens/day (measured: the third ~2.5K-token call within a minute gets HTTP 429) |
 | `google_genai:gemini-3.6-flash`, `google_genai:gemini-3.8-flash` | api | default temperature, `max_tokens` 8192, `max_retries` 3 (3.6) / 1 (3.8), `request_timeout_s` 60; $0.75 / $3.75 per Mtok (paid, through 2026-12-31) | Pinned but not used: on 2026-11-03 both returned 503/504 "high demand" ("overloaded") during smoke tests |
 | `anthropic:claude-opus-5-5` | api | `max_tokens` 16000, `output_config.effort` parse low / agent medium / judge medium, no sampling params, `json_schema` structured output, cached system prompt, refusal fallbacks; $4 / $20 per Mtok | Optional, not configured |
 | `xai:<pending>` | api | `pending: true` | Placeholder; raises `PendingModelError` |
@@ -319,7 +319,7 @@ flowchart LR
     gh["GitHub main"] --> ci["GitHub Actions CI<br/>backend, postgres, frontend, docker smoke"]
     ci -->|checks pass| render["Render web service<br/>Docker, Singapore, starter plan"]
     render --> neon[("Neon Postgres<br/>store + checkpoints")]
-    render --> apis["Cerebras, Groq, Google Places,<br/>Open-Meteo, Tavily"]
+    render --> apis["Groq, Google Places,<br/>Open-Meteo, Tavily"]
     render --> sentry["Sentry / LangSmith (optional)"]
 ```
 

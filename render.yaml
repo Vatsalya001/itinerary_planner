@@ -41,10 +41,10 @@ services:
 
       # --- Models (registry IDs from backend/app/llm/models.yaml) ------------------------------------------
       - key: PRIMARY_MODEL
-        value: cerebras:gpt-oss-120b
-      # Second model when the primary errors or is rate-limited; the deterministic planner is the last resort.
-      - key: FALLBACK_MODEL
         value: groq:openai/gpt-oss-120b
+      # No second hosted model: the validated deterministic planner handles failures.
+      - key: FALLBACK_MODEL
+        value: ""
       # Judge model is used by evals only; leave empty in production.
       - key: JUDGE_MODEL
         sync: false
@@ -52,8 +52,6 @@ services:
       - key: OLLAMA_BASE_URL
         value: http://127.0.0.1:11434
       # Provider keys are read from the environment by the LangChain integrations.
-      - key: CEREBRAS_API_KEY
-        sync: false
       - key: GROQ_API_KEY
         sync: false
 

@@ -53,12 +53,12 @@ Open `http://127.0.0.1:5173`. To serve the built UI and API together, run `make 
 Example model configuration:
 
 ```dotenv
-PRIMARY_MODEL=cerebras:gpt-oss-120b
-CEREBRAS_API_KEY=your_key_here
-# Optional second provider:
-FALLBACK_MODEL=groq:openai/gpt-oss-120b
+PRIMARY_MODEL=groq:openai/gpt-oss-120b
 GROQ_API_KEY=your_key_here
+FALLBACK_MODEL=
 ```
+
+Enable paid Groq Developer billing and confirm your account limits before deployment. The app retains a conservative 30-model-calls/minute ceiling; provider token quotas still apply. With no secondary model, failures use the validated deterministic planner.
 
 Keep real secrets in `backend/.env` or the host's environment settings. Never commit them. Model availability and provider quotas depend on your account; a rate-limited model produces a labelled fallback.
 
@@ -83,7 +83,7 @@ make typecheck
 make eval-offline
 make eval MODELS=baseline:deterministic REPEATS=1
 # With a real provider configured; expect API usage:
-make eval MODELS=cerebras:gpt-oss-120b REPEATS=1 ARGS="--max-cost-usd 1"
+make eval MODELS=groq:openai/gpt-oss-120b REPEATS=1 ARGS="--max-cost-usd 1"
 cd frontend && npm run e2e
 ```
 

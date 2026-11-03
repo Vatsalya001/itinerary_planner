@@ -1157,7 +1157,7 @@ Run metrics (`finalize.run_metrics`, the `data` of the `finalize` `node_complete
 
 | Key | Meaning |
 |---|---|
-| `production.primary` / `production.fallback` | `cerebras:gpt-oss-120b` / `groq:openai/gpt-oss-120b`. Read by the eval runner's `live` suite default (`load_registry().production_primary`); the app uses `PRIMARY_MODEL`/`FALLBACK_MODEL` |
+| `production.primary` / `production.fallback` | `groq:openai/gpt-oss-120b` / null. Read by the eval runner's `live` suite default (`load_registry().production_primary`); the app uses `PRIMARY_MODEL`/`FALLBACK_MODEL` |
 | `timeouts.<kind>` | `agent_turn_s` and `parse_s` per kind: api 45/15, local 150/25, fake 45/15, baseline 0/0 |
 | `candidates[]` | `id` (`provider:model`), `kind` (`api`, `local`, `fake`, `baseline`), `note`, `params` (provider settings plus `rate_limit: {requests, window_s}` for the client-side limiter, §6.5), `pricing_per_mtok` (`input`, `output`, `cache_read`, `cache_write` USD per million tokens), `max_agent_turns` (optional per-model turn cap), `pending` |
 
@@ -1668,8 +1668,8 @@ directory; unknown variables are ignored. `get_settings()` is cached. `export_pr
 | `GEOCODER` | `open_meteo` | `open_meteo`, `fixture` |
 | `GOOGLE_MAPS_API_KEY` | None (secret) | Enables Google Places under `auto` |
 | `TAVILY_API_KEY` | None (secret) | Enables Tavily under `auto` |
-| `CEREBRAS_API_KEY` | None (secret) | Cerebras key for the production primary (exported to the environment) |
-| `GROQ_API_KEY` | None (secret) | Groq key for the production fallback (exported to the environment) |
+| `CEREBRAS_API_KEY` | None (secret) | Optional Cerebras key (exported to the environment) |
+| `GROQ_API_KEY` | None (secret) | Groq key for the production primary (exported to the environment) |
 | `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY` | None (secret) | Optional provider keys, unused by this deployment (exported to the environment) |
 | `LANGSMITH_API_KEY` | None (secret) | LangSmith tracing |
 | `FIXTURE_WEATHER` | `clear` | `clear`, `rain_85pct`, `unavailable` (fixture weather only) |
@@ -2100,7 +2100,7 @@ sqlite:////app/var/app.db}`, volume `app-data:/app/var`, `stop_grace_period: 75s
 
 One `web` service `saturday-planner`: `runtime: docker`, `region: singapore`, `plan: starter`, `branch: main`,
 `healthCheckPath: /api/health`, `autoDeployTrigger: checksPass`, `maxShutdownDelaySeconds: 75`. Env:
-`APP_ENV=prod`, `TRUST_PROXY_HEADERS=true`, `FRONTEND_DIST`, `PRIMARY_MODEL=cerebras:gpt-oss-120b`, `FALLBACK_MODEL=groq:openai/gpt-oss-120b`,
+`APP_ENV=prod`, `TRUST_PROXY_HEADERS=true`, `FRONTEND_DIST`, `PRIMARY_MODEL=groq:openai/gpt-oss-120b`, `FALLBACK_MODEL=`,
 `OLLAMA_BASE_URL`, `PLACES_PROVIDER=auto`, `EVENTS_PROVIDER=auto`, `WEATHER_PROVIDER=open_meteo`,
 `GEOCODER=open_meteo`, limits (`RUN_DEADLINE_S` 60, `MAX_AGENT_TURNS` 10, `MAX_SUBMIT_ATTEMPTS` 3, `DAILY_PLAN_CAP`
 200, `RATE_LIMIT_PER_10MIN` 15, `RATE_LIMIT_PER_DAY` 60, `MAX_BODY_BYTES` 16384, `SHARE_TTL_DAYS` 30),

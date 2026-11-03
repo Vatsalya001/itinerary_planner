@@ -16,8 +16,9 @@ Create a Docker web service from the source repository. Review the hosting plan 
 
 ```dotenv
 APP_ENV=prod
-PRIMARY_MODEL=cerebras:gpt-oss-120b
-CEREBRAS_API_KEY=<set privately in Render>
+PRIMARY_MODEL=groq:openai/gpt-oss-120b
+GROQ_API_KEY=<set privately in Render>
+FALLBACK_MODEL=
 DATABASE_URL=sqlite:////tmp/saturday/app.db
 FRONTEND_DIST=/app/frontend/dist
 GEOCODER=open_meteo
@@ -29,6 +30,8 @@ RUN_DEADLINE_S=60
 DAILY_PLAN_CAP=200
 TRACING_ENABLED=false
 ```
+
+Enable Groq Developer billing and check the actual account token limits before sending real traffic. No live Groq acceptance test has been performed for this configuration change.
 
 Optional: add another registered model with its provider key; add Google Places and event provider keys for wider data coverage. For the snapshot demo, tell reviewers that Bangalore is the supported city. Never label this snapshot as a live Places lookup.
 

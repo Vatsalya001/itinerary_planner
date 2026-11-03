@@ -125,8 +125,8 @@ def test_ci_model_evals_job_gets_the_production_model_keys() -> None:
         env |= set(step.get("env") or {})
     render = yaml.safe_load((REPO_ROOT / "render.yaml").read_text(encoding="utf-8"))
     service_env = {v["key"]: v.get("value") for v in render["services"][0]["envVars"]}
-    production = {service_env["PRIMARY_MODEL"], service_env["FALLBACK_MODEL"]}
-    assert production == {"cerebras:gpt-oss-120b", "groq:openai/gpt-oss-120b"}
+    production = {value for value in (service_env["PRIMARY_MODEL"], service_env["FALLBACK_MODEL"]) if value}
+    assert production == {"groq:openai/gpt-oss-120b"}
     # The job exists to evaluate models with repository secrets (HLD 13); the deployed models need these keys.
     assert {"CEREBRAS_API_KEY", "GROQ_API_KEY"} <= env, sorted(env)
 
