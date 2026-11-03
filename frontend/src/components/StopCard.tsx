@@ -2,6 +2,7 @@ import type { Candidate, Leg, ScheduledStop } from '../types'
 import {
   categoryLabel,
   costBasisLabel,
+  fmtCandidateCost,
   fmtClock,
   fmtDuration,
   fmtMoneyRange,
@@ -73,7 +74,7 @@ function CostLine({ candidate }: { candidate: Candidate }) {
         <span className="sr-only">Cost:</span>
       ) : (
         <>
-          <span className="font-semibold">{fmtMoneyRange(cost.min, cost.max, cost.currency)}</span>
+          <span className="font-semibold">{fmtCandidateCost(candidate)}</span>
           {cost.max > 0 ? <span className="text-stone-600">per person</span> : null}
         </>
       )}
@@ -101,7 +102,7 @@ function MapsLink({ candidate, city, label = 'Open in Google Maps' }: { candidat
   )
 }
 
-export function StopCard({ stop, index, city }: { stop: ScheduledStop; index: number; city: string }) {
+export function StopCard({ stop, index, city, accessRequired = false }: { stop: ScheduledStop; index: number; city: string; accessRequired?: boolean }) {
   const c = stop.candidate
   const headingId = `stop-${index}-${c.id.replace(/[^A-Za-z0-9_-]/g, '-')}`
   return (
@@ -126,6 +127,18 @@ export function StopCard({ stop, index, city }: { stop: ScheduledStop; index: nu
           </div>
 
           <CostLine candidate={c} />
+          {c.tags.includes('admission:general_free') ? (
+            <p className="text-sm text-stone-700">General admission is free; paid exhibitions are optional.{' '}
+              <ExternalLink href="https://www.nationalgallery.org.uk/visiting/access" className={linkClass}>Official admission and access policy</ExternalLink>
+            </p>
+          ) : null}
+          {accessRequired ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-stone-800">
+              <p>{c.wheelchair === 'confirmed' ? 'Source reports a wheelchair-accessible entrance.' : 'Entrance accessibility needs verification.'}</p>
+              <p>Internal facilities, toilets and routes between stops are unverified.</p>
+              <MapsLink candidate={c} city={city} label="Check entrance evidence and contact venue" />
+            </div>
+          ) : null}
 
           {stop.why ? <p className="text-sm text-stone-800">{stop.why}</p> : null}
           {stop.tradeoff ? (
@@ -154,11 +167,7 @@ export function StopCard({ stop, index, city }: { stop: ScheduledStop; index: nu
               </p>
               <p className="mt-1">
                 <span className="font-medium">{stop.plan_b.name}</span>
-                <span className="text-sky-900">{` · ${categoryLabel(stop.plan_b.category)} · ${fmtMoneyRange(
-                  stop.plan_b.cost.min,
-                  stop.plan_b.cost.max,
-                  stop.plan_b.cost.currency,
-                )} (${costBasisLabel(stop.plan_b.cost.basis)})`}</span>
+                <span className="text-sky-900">{` · ${categoryLabel(stop.plan_b.category)} · ${fmtCandidateCost(stop.plan_b)} (${costBasisLabel(stop.plan_b.cost.basis)})`}</span>
               </p>
               <div className="mt-1 flex flex-wrap items-center gap-2">
                 <SourceBadge candidate={stop.plan_b} />
@@ -181,7 +190,7 @@ export function StopCard({ stop, index, city }: { stop: ScheduledStop; index: nu
 
 const MODE_ICONS: Record<string, IconName> = { walk: 'walk', auto: 'auto', cab: 'cab', metro: 'metro' }
 
-export function LegRow({ leg }: { leg: Leg }) {
+export function LegRow({ leg, routeUrl, accessRequired = false }: { leg: Leg; routeUrl?: string | null; accessRequired?: boolean }) {
   const fare =
     leg.fare.max > 0 ? `${fmtMoneyRange(leg.fare.min, leg.fare.max, leg.fare.currency)} fare` : 'no fare'
   const minutes = leg.minutes_max > leg.minutes ? `${leg.minutes}–${leg.minutes_max} min` : `${leg.minutes} min`
@@ -191,10 +200,12 @@ export function LegRow({ leg }: { leg: Leg }) {
         <Icon name={MODE_ICONS[leg.mode] ?? 'route'} className="h-4 w-4" />
       </span>
       <span>
-        <span className="font-medium text-stone-900">{modeLabel(leg.mode)}</span>
+        <span className="font-medium text-stone-900">{accessRequired && leg.mode === 'walk' ? 'Outdoor transfer' : modeLabel(leg.mode)}</span>
         {` · ${minutes} · ${leg.distance_km.toFixed(1)} km · ${fare}`}
       </span>
       <Badge>estimate</Badge>
+      {accessRequired ? <span className="text-xs text-amber-900">Route and vehicle accessibility unverified; timing is not a wheelchair-route estimate.</span> : null}
+      {routeUrl ? <ExternalLink href={routeUrl} className={linkClass}>Check transfer route</ExternalLink> : null}
     </div>
   )
 }

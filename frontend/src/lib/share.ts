@@ -2,6 +2,7 @@ import type { CanonicalPlan } from '../types'
 import {
   categoryLabel,
   costBasisLabel,
+  fmtCandidateCost,
   fmtClockRange,
   fmtDate,
   fmtMoney,
@@ -10,7 +11,7 @@ import {
   weatherLine,
 } from './format'
 import { legAfter } from './plan'
-import { safeHttpsUrl } from './urls'
+import { routeUrlFor, safeHttpsUrl } from './urls'
 
 export interface ShareTextOptions {
   shareUrl?: string | null
@@ -28,8 +29,10 @@ export function planToText(plan: CanonicalPlan, options: ShareTextOptions = {}):
   plan.stops.forEach((stop, i) => {
     const c = stop.candidate
     lines.push(`${i + 1}. ${fmtClockRange(stop.start_min, stop.end_min)}  ${c.name} (${categoryLabel(c.category)})`)
-    lines.push(`   ${fmtMoneyRange(c.cost.min, c.cost.max, c.cost.currency)} per person, ${costBasisLabel(c.cost.basis)}`)
+    lines.push(`   ${fmtCandidateCost(c)} per person, ${costBasisLabel(c.cost.basis)}`)
     if (stop.why) lines.push(`   Why: ${stop.why}`)
+    if (stop.tradeoff) lines.push(`   Note: ${stop.tradeoff}`)
+    for (const warning of stop.warnings) lines.push(`   Verify: ${warning}`)
     if (stop.plan_b) lines.push(`   Plan B if it rains: ${stop.plan_b.name}`)
     const leg = legAfter(plan, i) // by from_id/to_id, exactly like the timeline in PlanView
     if (leg) {
@@ -41,7 +44,7 @@ export function planToText(plan: CanonicalPlan, options: ShareTextOptions = {}):
   lines.push('')
   const budget = t.budget !== null && t.budget !== undefined ? ` of ${fmtMoney(t.budget, t.currency)} budget` : ''
   lines.push(`Worst case per person: ${fmtMoney(t.worst_case, t.currency)}${budget} (includes 10% contingency)`)
-  const route = safeHttpsUrl(plan.maps_route_url)
+  const route = routeUrlFor(plan)
   if (route) lines.push(`Route: ${route}`)
   const share = safeHttpsUrl(options.shareUrl) ?? (typeof options.shareUrl === 'string' && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/p\//.test(options.shareUrl) ? options.shareUrl : null)
   if (share) lines.push(`Plan: ${share}`)

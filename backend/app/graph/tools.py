@@ -23,6 +23,7 @@ from app.domain.categories import currency_symbol, is_category, load_categories
 from app.domain.evidence import candidate_allowed, category_info, event_window, is_walking_stop, likely_busy
 from app.domain.options import validated_option
 from app.domain.parser_rules import default_queries
+from app.domain.realworld import admission_problem
 from app.domain.schemas import (
     Candidate,
     CanonicalPlan,
@@ -367,6 +368,8 @@ _BASIS = {"listed_price_range": "listed price range", "price_level_estimate": "p
 
 
 def price_text(cost: CostRange) -> str:
+    if cost.max == 0 and cost.basis == "category_estimate":
+        return "price unknown; not included in the estimated total"
     if cost.max == 0:
         return "free"
     sym = currency_symbol(cost.currency).strip()
@@ -562,7 +565,8 @@ async def _search_one(q: PlaceQueryArgs, env: ToolEnv, limit: int
                 env.places_mode = "snapshot"
             else:
                 env.places_mode = "unavailable"
-    found = [c for c in found if c.kind == "place" or c.event_date == ctx.date][:limit]
+    found = [c for c in found if (c.kind == "place" or c.event_date == ctx.date)
+             and admission_problem(c, ctx) is None][:limit]
     centre = (lat, lng) if lat is not None and lng is not None else (ctx.location.lat, ctx.location.lng)
     return found, centre, None
 

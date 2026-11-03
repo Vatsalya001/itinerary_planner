@@ -2,6 +2,7 @@ import type { Ref } from 'react'
 import type { PlanResult } from '../types'
 import { classifyDegradation, omissionLabel } from '../lib/labels'
 import { legAfter, providersIn } from '../lib/plan'
+import { routeUrlFor } from '../lib/urls'
 import { ChecksPanel } from './ChecksPanel'
 import { DegradationNotices } from './DegradationNotices'
 import { ExternalLink } from './ExternalLink'
@@ -35,6 +36,7 @@ export function PlanView({
     )
   }
 
+  const accessRequired = result.preferences?.hard_constraints.some((c) => c.kind === 'access' && c.value === 'wheelchair') ?? false
   const isFallback = result.status === 'fallback'
   const plannerReasons = result.degradations.filter((d) => classifyDegradation(d) === 'planner')
   const providers = providersIn(plan)
@@ -91,8 +93,8 @@ export function PlanView({
             const leg = i < plan.stops.length - 1 ? legAfter(plan, i) : null
             return (
               <li key={`${stop.candidate.id}-${i}`}>
-                <StopCard stop={stop} index={i} city={plan.city} />
-                {leg ? <LegRow leg={leg} /> : i < plan.stops.length - 1 ? <div className="h-3" /> : null}
+                <StopCard stop={stop} index={i} city={plan.city} accessRequired={accessRequired} />
+                {leg ? <LegRow leg={leg} routeUrl={routeUrlFor(plan, leg)} accessRequired={accessRequired} /> : i < plan.stops.length - 1 ? <div className="h-3" /> : null}
               </li>
             )
           })}

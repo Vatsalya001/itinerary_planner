@@ -49,8 +49,8 @@ def _point(c: Candidate) -> str:
     return f"{c.lat:.6f},{c.lng:.6f}"
 
 
-def directions_url(stops: Sequence[Candidate]) -> str | None:
-    """Google Maps directions URL (Maps URLs API, no key): origin, destination, waypoints, driving."""
+def directions_url(stops: Sequence[Candidate], legs: Sequence[Leg] | None = None) -> str | None:
+    """Directions for a uniform transport mode; mixed-mode plans use per-leg links in the UI."""
     if not stops:
         return None
     params: dict[str, str] = {"api": "1"}
@@ -61,7 +61,11 @@ def directions_url(stops: Sequence[Candidate]) -> str | None:
         params["destination"] = _point(stops[-1])
         if len(stops) > 2:
             params["waypoints"] = "|".join(_point(c) for c in stops[1:-1])
-    params["travelmode"] = "driving"
+    modes = {leg.mode for leg in legs} if legs else set()
+    if len(modes) > 1:
+        return None
+    mode = next(iter(modes), "cab")
+    params["travelmode"] = "walking" if mode == "walk" else "transit" if mode == "metro" else "driving"
     return MAPS_DIR_URL + "?" + urlencode(params)
 
 
@@ -146,6 +150,9 @@ def build_schedule(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: World
         stops.append(ScheduledStop(
             candidate=cand, start_min=start, end_min=end, duration_min=stop.duration_min,
             why=stop.why, tradeoff=stop.tradeoff, plan_b=plan_b,
+            warnings=["Only entrance accessibility is reported by the source. Confirm internal facilities, toilets "
+                      "and step-free routes; transfer times are not wheelchair-route estimates."]
+            if any(con.kind == "access" and con.value == "wheelchair" for con in prefs.hard_constraints) else [],
         ))
         prev_end = end
 
@@ -173,6 +180,6 @@ def build_schedule(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: World
         date=ctx.date, city=ctx.location.name, timezone=ctx.location.timezone,
         start_min=ctx.start_min, end_min=prev_end, stops=stops, legs=legs, totals=totals,
         summary_note=draft.summary_note, omitted=named_omissions(draft.omitted, ledger), weather=ctx.weather,
-        maps_route_url=directions_url(candidates),
+        maps_route_url=directions_url(candidates, legs),
     )
     return plan, violations

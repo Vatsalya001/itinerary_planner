@@ -1,5 +1,5 @@
 import type { CanonicalPlan } from '../types'
-import { categoryLabel, costBasisLabel, fmtMoneyRange, parseIsoDate, sourceLabel } from './format'
+import { categoryLabel, costBasisLabel, fmtCandidateCost, parseIsoDate, sourceLabel } from './format'
 import { mapsUrlFor, safeHttpsUrl } from './urls'
 
 export interface IcsOptions {
@@ -129,8 +129,9 @@ export function buildIcs(plan: CanonicalPlan, options: IcsOptions = {}): string 
     const description: string[] = []
     if (stop.why) description.push(stop.why)
     if (stop.tradeoff) description.push(`Trade-off: ${stop.tradeoff}`)
+    for (const warning of stop.warnings) description.push(`Verify: ${warning}`)
     description.push(
-      `Cost per person: ${fmtMoneyRange(c.cost.min, c.cost.max, c.cost.currency)} (${costBasisLabel(c.cost.basis)})`,
+      `Cost per person: ${fmtCandidateCost(c)} (${costBasisLabel(c.cost.basis)})`,
     )
     if (stop.plan_b) description.push(`Plan B if it rains: ${stop.plan_b.name}`)
     description.push(`Source: ${sourceLabel(c.source.provider)}`)

@@ -1,6 +1,6 @@
 """Authoritative plan validation (see IMPLEMENTATION_PLAN.md section 7). OWNER: domain agent.
 
-Severity: everything is an error except the seven ``WARNING_CODES``: HOURS_UNVERIFIED, WEATHER_RISK,
+Severity: everything is an error except the explicit ``WARNING_CODES`` below. Historical warnings include HOURS_UNVERIFIED, WEATHER_RISK,
 CONSTRAINT_DROPPED, ALCOHOL_SERVED, PACING_RELAXED, LOCATION_APPROXIMATE and IDLE_WAIT (HOURS_UNVERIFIED is
 raised as an error for concert halls, theatres and cinemas, below). ``ValidationReport.ok`` is True when there are
 no errors.
@@ -62,6 +62,7 @@ from app.domain.evidence import (
     opening_status,
     satisfies_include,
 )
+from app.domain.realworld import admission_estimate_unverified, admission_problem, prefers_short_travel
 from app.domain.schedule import build_schedule, plan_currency
 from app.domain.schemas import (
     Candidate,
@@ -82,6 +83,10 @@ from app.providers.base import TravelEstimator
 
 # code -> one-line meaning. Codes in WARNING_CODES default to warnings; a check may override the severity.
 CODES: dict[str, str] = {
+    "ADMISSION_UNVERIFIED": "Admission eligibility is not verified",
+    "PRICE_UNVERIFIED": "Admission price is a generic estimate",
+    "LONG_TRANSFER": "Short-travel preference is only partly met",
+    "ACCESS_SCOPE_UNVERIFIED": "Facilities and route accessibility are unverified",
     "SCHEMA_INVALID": "Draft failed schema validation",
     "UNKNOWN_ID": "Candidate ID not in this run's ledger",
     "CITY_MISMATCH": "Candidate more than 40 km from the resolved city centre",
@@ -117,7 +122,8 @@ CODES: dict[str, str] = {
 }
 
 WARNING_CODES = {"HOURS_UNVERIFIED", "WEATHER_RISK", "CONSTRAINT_DROPPED", "ALCOHOL_SERVED", "PACING_RELAXED",
-                 "LOCATION_APPROXIMATE", "IDLE_WAIT", "UNDERFILLED"}
+                 "LOCATION_APPROXIMATE", "IDLE_WAIT", "UNDERFILLED", "PRICE_UNVERIFIED", "LONG_TRANSFER",
+                 "ACCESS_SCOPE_UNVERIFIED"}
 IDLE_WAIT_MIN = 20
 UNDERFILL_RATIO = 0.6
 UNDERFILL_MIN_WINDOW = 90
@@ -378,6 +384,11 @@ def draft_from_payload(payload: Any) -> tuple[PlanDraft | None, list[Violation]]
 def _static_stop_checks(i: int, stop: DraftStop, c: Candidate, ledger: Mapping[str, Candidate],
                         ctx: WorldContext, constraints: list[Constraint], currency: str) -> list[Violation]:
     out: list[Violation] = []
+    if problem := admission_problem(c, ctx):
+        out.append(_err("ADMISSION_UNVERIFIED", problem, i, c.id))
+    if admission_estimate_unverified(c):
+        out.append(_err("PRICE_UNVERIFIED", f"Admission price at {c.name} is a generic estimate, not a verified ticket; "
+                        "the budget bound is provisional", i, c.id, severity="warning"))
     if category_info(c) is None:
         out.append(_err("SCHEMA_INVALID", f"{c.name} has an unknown category '{c.category[:40]}'", i, c.id))
     dist = distance_from_city_km(c, ctx)
@@ -412,6 +423,9 @@ def _static_stop_checks(i: int, stop: DraftStop, c: Candidate, ledger: Mapping[s
                             i, c.id))
         for problem in plan_b_problems(pb, c, constraints, ctx):
             out.append(_err("PLAN_B_INVALID", problem, i, c.id))
+        if pb is not None and admission_estimate_unverified(pb):
+            out.append(_err("PRICE_UNVERIFIED", f"Plan B admission price at {pb.name} is unverified; "
+                            "the budget bound is provisional", i, pb.id, severity="warning"))
         if pb is not None and pb.cost.currency != currency:
             out.append(_err("CURRENCY_MISMATCH",
                             f"Plan B {pb.name} is priced in {pb.cost.currency}, not the budget's {currency}", i, c.id))
@@ -421,6 +435,15 @@ def _static_stop_checks(i: int, stop: DraftStop, c: Candidate, ledger: Mapping[s
 def _scheduled_checks(plan: CanonicalPlan, draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: WorldContext,
                       prefs: Preferences, constraints: list[Constraint], late_events: set[int]) -> list[Violation]:
     out: list[Violation] = []
+    if prefers_short_travel(prefs):
+        for leg in plan.legs:
+            if leg.minutes_max > 20:
+                out.append(_err("LONG_TRANSFER", f"A transfer may take {leg.minutes_max} min; the short-travel "
+                                "preference is only partly met", severity="warning"))
+    if any(c.kind == "access" and c.value == "wheelchair" for c in constraints):
+        out.append(_err("ACCESS_SCOPE_UNVERIFIED", "Only venue entrance accessibility is supported by the sources. "
+                        "Internal facilities, toilets and step-free routes between stops are unverified; "
+                        "confirm them before travelling", severity="warning"))
     pacing = ctx.pacing
     totals = plan.totals
     sym = currency_symbol(totals.currency)
@@ -619,6 +642,10 @@ def summarize_checks(report: ValidationReport, ctx: WorldContext, prefs: Prefere
         elif t.budget is None:
             items.append(CheckItem(name="budget", status="unverified",
                                    detail=f"No budget given; worst case {sym}{t.worst_case} incl. contingency"))
+        elif "PRICE_UNVERIFIED" in codes:
+            items.append(CheckItem(name="budget", status="unverified",
+                                   detail=f"Estimated upper total {sym}{t.worst_case}; admission prices are "
+                                          "unverified, so staying within budget is not guaranteed"))
         else:
             items.append(CheckItem(name="budget", status="pass",
                                    detail=f"Worst case {sym}{t.worst_case} incl. {sym}{t.contingency} contingency; "
@@ -650,7 +677,7 @@ def summarize_checks(report: ValidationReport, ctx: WorldContext, prefs: Prefere
         items.append(CheckItem(name="opening_hours", status="unverified",
                                detail=f"Hours not verified for {n} stop{'s' if n != 1 else ''}; check before you go"))
     else:
-        items.append(CheckItem(name="opening_hours", status="pass", detail="Every stop is open at its scheduled time"))
+        items.append(CheckItem(name="opening_hours", status="pass", detail="Listed hours cover each visit; confirm current hours and admission before leaving"))
     # diet
     diets = [c for c in constraints if c.kind == "diet"]
     if "DIET_CONFLICT" in codes:
@@ -675,7 +702,9 @@ def summarize_checks(report: ValidationReport, ctx: WorldContext, prefs: Prefere
     elif plan is None:
         items.append(CheckItem(name="accessibility", status="unverified", detail="The plan could not be built"))
     else:
-        items.append(CheckItem(name="accessibility", status="pass", detail="Wheelchair access confirmed at every stop"))
+        items.append(CheckItem(name="accessibility", status="unverified",
+                               detail="Sources report accessible entrances at every stop; internal facilities, "
+                                      "toilets and routes between stops remain unverified"))
     # crowds
     if "CROWD_LIKELY" in codes:
         items.append(CheckItem(name="crowds", status="fail", detail=codes["CROWD_LIKELY"][0].message))

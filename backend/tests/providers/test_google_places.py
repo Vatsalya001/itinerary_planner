@@ -169,7 +169,7 @@ async def test_always_open_park(blr_ctx: WorldContext) -> None:
               regularOpeningHours={"periods": [{"open": _p(0, 0)}]})
     [c], _ = await run_search([p], blr_ctx, PlaceQuery(intent="park"))
     assert c.hours.periods == [ALWAYS_OPEN]
-    assert (c.cost.min, c.cost.max, c.cost.basis) == (0, 0, "free")
+    assert (c.cost.min, c.cost.max, c.cost.basis) == (0, 0, "category_estimate")  # no venue-specific price evidence
     assert c.popularity == "low" and c.busy_windows == []
     assert c.indoor is False
 

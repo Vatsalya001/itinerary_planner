@@ -25,7 +25,7 @@ describe('PlanView', () => {
     expect(screen.getByText('of ₹2,000')).toBeInTheDocument()
     expect(screen.getByText('₹857 spare')).toBeInTheDocument()
     expect(screen.getByRole('meter')).toHaveAttribute('aria-valuetext', '₹1,143 of ₹2,000')
-    expect(screen.getByText('Within budget')).toBeInTheDocument()
+    expect(screen.getByText('Within estimated budget')).toBeInTheDocument()
 
     // timeline cards
     const cards = screen.getAllByRole('article')
@@ -74,10 +74,12 @@ describe('PlanView', () => {
     const mapsLinks = screen.getAllByRole('link', { name: /Open in Google Maps/ })
     expect(mapsLinks).toHaveLength(3)
     for (const a of mapsLinks) expect(a.getAttribute('href')).toMatch(/^https:\/\/www\.google\.com\/maps\//)
-    expect(screen.getByRole('link', { name: /Open full route in Google Maps/ })).toHaveAttribute(
-      'href',
-      result.plan!.maps_route_url!,
-    )
+    // The fixture combines walk + auto: a single driving route would contradict the timeline.
+    expect(screen.queryByRole('link', { name: /Open full route in Google Maps/ })).not.toBeInTheDocument()
+    const transferLinks = screen.getAllByRole('link', { name: /Check transfer route/ })
+    expect(transferLinks).toHaveLength(2)
+    expect(new URL(transferLinks[0].getAttribute('href')!).searchParams.get('travelmode')).toBe('walking')
+    expect(new URL(transferLinks[1].getAttribute('href')!).searchParams.get('travelmode')).toBe('driving')
 
     // trade-offs, checks, assumptions and warnings
     // omissions say what was left out: server name, else the idea, else a neutral label, never a raw ID

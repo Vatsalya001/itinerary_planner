@@ -20,6 +20,7 @@ from typing import Literal, NamedTuple
 
 from app.domain.categories import CategoryInfo, load_categories
 from app.domain.pacing import MEAL_WINDOWS
+from app.domain.realworld import admission_problem
 from app.domain.schemas import Candidate, Constraint, Evidence, MealWindow, WorldContext
 from app.domain.timeutil import overlaps
 
@@ -416,6 +417,8 @@ def candidate_allowed(c: Candidate, constraints: list[Constraint], ctx: WorldCon
     exclude.
     """
     reasons: list[str] = []
+    if problem := admission_problem(c, ctx):
+        reasons.append(problem)
     for con in constraints:
         if con.kind in _TIME_INDEPENDENT_KINDS:
             chk = check_constraint(c, con, ctx.start_min, ctx.end_min, ctx)

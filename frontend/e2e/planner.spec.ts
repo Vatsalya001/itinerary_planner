@@ -56,7 +56,7 @@ test.describe('planner, brief example', () => {
     await expect(page.getByText('estimate', { exact: true }).first()).toBeVisible()
 
     // Summary: worst case against the budget and the time window.
-    await expect(page.getByText('Worst-case cost per person')).toBeVisible()
+    await expect(page.getByText('Worst-case estimate per person')).toBeVisible()
     await expect(page.getByText(/of ₹2,000/)).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Checks' })).toBeVisible()
 

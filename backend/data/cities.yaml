@@ -44,7 +44,10 @@ mumbai:
   aliases: [bombay, greater mumbai, mumbai suburban]
   speeds_kmh: {walk: 4.5, auto: 17, cab: 18}
   pickup_min: {auto: 4, cab: 6}
-  motor_mode: auto
+  # Autos cannot operate in the island city. Conservatively use cabs city-wide until
+  # route-zone validation is supported; suburban auto trips remain an optional real-world alternative.
+  # Policy reference: https://mumbaifirst.org/wp-content/uploads/2020/11/comprehensive-transport-strategy-dcm-for-mumbai.pdf
+  motor_mode: cab
   fares:
     auto:
       currency: INR

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { CanonicalPlan } from '../types'
 import { downloadIcs } from '../lib/ics'
 import { copyText, planToText, whatsappUrl } from '../lib/share'
-import { safeHttpsUrl } from '../lib/urls'
+import { routeUrlFor } from '../lib/urls'
 import { ExternalLink } from './ExternalLink'
 import { Icon } from './Icon'
 import { btnPrimary, btnSecondary } from './ui'
@@ -28,7 +28,7 @@ export function PlanActions({
     timer.current = window.setTimeout(() => setStatus(''), 4000)
   }
 
-  const routeUrl = safeHttpsUrl(plan.maps_route_url)
+  const routeUrl = routeUrlFor(plan)
   const text = planToText(plan, { shareUrl })
 
   return (

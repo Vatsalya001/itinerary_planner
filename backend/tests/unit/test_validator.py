@@ -474,6 +474,16 @@ def test_unknown_category_is_schema_invalid():
 def _scenarios() -> dict[str, Callable[[], set[str]]]:
     park = make_candidate("fx:p", "park")
     return {
+        "ADMISSION_UNVERIFIED": lambda: codes(run(make_draft(("fx:child", 40)), [
+            make_candidate("fx:child", "museum", tags=["audience:children"])])),
+        "PRICE_UNVERIFIED": lambda: codes(run(make_draft(("gp:synthetic", 40)), [
+            make_candidate("gp:synthetic", "museum", source=Source(provider="google_places",
+                           url="https://example.org/synthetic", attribution="Google Maps"))])),
+        "LONG_TRANSFER": lambda: codes(run(make_draft(("fx:a", 40), ("fx:b", 40)), [
+            make_candidate("fx:a"), make_candidate("fx:b", offset_km=(5, 0))],
+            prefs=make_prefs(soft_preferences=["keep travel short"]))),
+        "ACCESS_SCOPE_UNVERIFIED": lambda: codes(run(make_draft(("fx:cafe", 40)), [CAFE],
+            prefs=make_prefs(constraints=["wheelchair accessible"]))),
         "SCHEMA_INVALID": lambda: {v.code for v in draft_from_payload({})[1]},
         "UNKNOWN_ID": lambda: codes(run(make_draft(("gp:x", 40)), [CAFE])),
         "CITY_MISMATCH": lambda: codes(run(make_draft(("fx:m", 40)), [

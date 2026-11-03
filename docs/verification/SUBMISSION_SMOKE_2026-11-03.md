@@ -1,5 +1,7 @@
 # Public submission smoke — 3 November 2026
 
+**Historical evidence:** later review found MuSo solo-adult admission and Mumbai transport defects despite successful AI completion/internal validation. See [the practical guardrails release](PRACTICAL_GUARDRAILS_2026-11-03.md) for corrections and current verification. Do not treat the green checks below as an independent practical-validity audit.
+
 ## Scope and environment
 
 The public app at https://itinerary-planner-r54t.onrender.com/ was tested through the browser in a separate in-app browser session without an application login. This was not a Chrome incognito test. Health reported release `501a4914b9b266189547f913fbd002f661b2e3ff`, `env=prod`, model `groq:openai/gpt-oss-120b`, Google Places, Tavily configured, database `ok` and, after the lookup, places `ok`. No keys, private logs or Google place payloads are included here.

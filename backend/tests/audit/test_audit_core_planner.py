@@ -57,8 +57,9 @@ BEAM_CASES = [
     ({"city": "Bangalore", "budget": 615, "available_time": 120, "start_time": "15:00",
       "mood": "energetic, want to pack a lot in", "interests": ["nature", "food", "dessert"],
       "constraints": ["vegan", "include live music"]}, "clear"),
-    # three must-includes in Mumbai, rain: CSMVS 45 + Oval Maidan 30 + NCPA 60 fits 182 min
-    ({"city": "Mumbai", "budget": 10000, "available_time": 182, "start_time": "11:30", "mood": "feeling okay",
+    # Three must-includes in Mumbai, rain. Cab pickup/transfer bounds replace the old auto estimates;
+    # allow 190 min so this remains a feasible beam-search completeness regression, not a transport test.
+    ({"city": "Mumbai", "budget": 10000, "available_time": 190, "start_time": "11:30", "mood": "feeling okay",
       "interests": ["museums"], "constraints": ["include live music", "must include an outdoor walk",
                                                  "must include a museum"]}, "rain_85pct"),
     # sit-down meal + museum in 110 min

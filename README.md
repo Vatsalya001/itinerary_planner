@@ -5,7 +5,7 @@ An AI agent that turns a city, budget, available time, mood, interests, and cons
 **Source:** https://github.com/Vatsalya001/itinerary_planner  
 **Public app:** https://itinerary-planner-r54t.onrender.com/
 
-**Submission verification:** [live smoke test and known limits](docs/verification/SUBMISSION_SMOKE_2026-11-03.md).
+**Submission verification:** [practical guardrails and current checks](docs/verification/PRACTICAL_GUARDRAILS_2026-11-03.md) · [historical live smoke evidence](docs/verification/SUBMISSION_SMOKE_2026-11-03.md).
 
 ## What the app does
 
@@ -95,17 +95,17 @@ Latest verified release results (see the [performance release evidence](docs/ver
 
 | Check | Result |
 |---|---|
-| Backend tests | 1,847 passed; 11 live/Ollama cases deselected; no expected failures |
-| Frontend tests | 137 passed; no expected failures |
+| Backend tests | 1,863 passed; 11 live/Ollama cases deselected; no expected failures |
+| Frontend tests | 142 passed; no expected failures |
 | Ruff, mypy, frontend typecheck/lint/build | Passed |
 | Chromium browser end to end | 21 passed; no expected failures |
 | Offline fault and workflow evals | 32/32 |
 | Deterministic model-suite evals | 26/26 |
 | Historical live Cerebras smoke, frozen world | 2/3; assignment example completed in agent mode; free-text case hit rate limit and returned a validated fallback |
 
-After switching the deployed environment to Cerebras, the live Mumbai smoke completed in agent mode: two stops, INR 1,205 worst-case of INR 2,000, 215 of 240 minutes, stored latency 15,025 ms, and no degradation. The anonymous share page worked. An earlier Groq run hit HTTP 429 and verified labelled fallback. These are individual smoke observations, not a success-rate or latency benchmark. The historical Cerebras sample is small and partial; it measures model orchestration on fixed data, not real venue accuracy. No judge score or large-sample reliability claim is made. Failed and rate-limited runs remain in the report.
+An earlier Cerebras Mumbai run completed in agent mode and sharing worked, but subsequent review found admission and transport issues in that itinerary. Those checks proved orchestration, not full practical validity; the [practical guardrails release](docs/verification/PRACTICAL_GUARDRAILS_2026-11-03.md) addresses the recorded gaps. An earlier Groq run hit HTTP 429 and verified labelled fallback. These are individual smoke observations, not a success-rate or latency benchmark. The historical Cerebras sample is small and partial; it measures model orchestration on fixed data, not real venue accuracy. No judge score or large-sample reliability claim is made. Failed and rate-limited runs remain in the report.
 
-[Fresh generated eval report](docs/verification/RELEASE_EVAL_REPORT.md) · [Completion checks and changes](docs/verification/RELEASE_CHECKS.md). Older model results remain in [the historical report](docs/EVAL_REPORT.md); they describe an earlier working tree.
+[Earlier generated eval report](docs/verification/RELEASE_EVAL_REPORT.md) · [Completion checks and changes](docs/verification/RELEASE_CHECKS.md). Older model results remain in [the historical report](docs/EVAL_REPORT.md); they describe an earlier working tree.
 
 ## Deploy and submit
 
@@ -113,7 +113,7 @@ The existing `Dockerfile` builds the UI and serves it from FastAPI. `render.yaml
 
 A simpler review demo can use one Render Docker service, `DATABASE_URL=sqlite:////tmp/saturday/app.db`, `FRONTEND_DIST=/app/frontend/dist`, a hosted model and its key, and the Bangalore snapshot. SQLite on an ephemeral filesystem resets on a redeploy; this is suitable for a disposable demo, not durable production sharing. `/api/health` must return HTTP 200.
 
-See [submission checklist](docs/SUBMISSION.md) for deployment settings and anonymous smoke checks. The public UI and a saved Mumbai plan were checked without login. A fresh Mumbai run completed with Cerebras in AI agent mode and its share page was checked without login. Keep account credits/quota available for evaluators.
+See [submission checklist](docs/SUBMISSION.md) for deployment settings and anonymous smoke checks. The public UI and a saved Mumbai plan were checked without login. Use a fresh plan to apply the current admission/transport rules; old shared plans remain historical snapshots. Keep account credits/quota available for evaluators.
 
 ## Limitations
 
@@ -129,3 +129,7 @@ See [submission checklist](docs/SUBMISSION.md) for deployment settings and anony
 ## How AI tools were used
 
 Claude Code was used for the original implementation and audit scaffolding. Codex reviewed the code, fixed the recorded regressions and additional validation gaps, and ran deterministic tests, browser checks, and a small live-provider evaluation. The repository includes the resulting checks and the live rate-limit failure rather than reporting only successful examples.
+
+## Practical guardrail scope
+
+Entrance accessibility is distinct from internal facilities and routes; the latter remain explicitly unverified. Museum admission estimates make budget checks provisional. Known child-accompaniment restrictions are enforced conservatively because ages are not represented. National Gallery general admission is distinguished from paid exhibitions. Mumbai motor travel uses cab estimates, and a short-travel preference can still require an explained compromise. See the current guardrails report for evidence and limitations; no zero-bug or comprehensive venue-verification claim is made.

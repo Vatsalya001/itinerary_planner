@@ -25,12 +25,12 @@ function BudgetMeter({ worst, budget, currency }: { worst: number; budget: numbe
       ? { fill: 'bg-red-600', track: 'bg-red-100', text: 'Over budget', icon: 'alert' as const }
       : ratio >= 0.85
         ? { fill: 'bg-amber-500', track: 'bg-amber-100', text: 'Close to budget', icon: 'alert' as const }
-        : { fill: 'bg-emerald-600', track: 'bg-emerald-100', text: 'Within budget', icon: 'check' as const }
+        : { fill: 'bg-emerald-600', track: 'bg-emerald-100', text: 'Within estimated budget', icon: 'check' as const }
   return (
     <div className="mt-2">
       <div
         role="meter"
-        aria-label="Worst-case cost as a share of your budget"
+        aria-label="Worst-case estimate as a share of your budget"
         aria-valuemin={0}
         aria-valuemax={budget}
         aria-valuenow={Math.min(worst, budget)}
@@ -68,7 +68,7 @@ export function SummaryBar({ plan }: { plan: CanonicalPlan }) {
       <div className="rounded-xl border border-stone-200 bg-white p-3">
         <dt className="flex items-center gap-1.5 text-xs font-medium text-stone-600">
           <Icon name="wallet" className="h-3.5 w-3.5" />
-          Worst-case cost per person
+          Worst-case estimate per person
         </dt>
         <dd className="mt-1 text-base font-semibold text-stone-900">
           {fmtMoney(t.worst_case, t.currency)}

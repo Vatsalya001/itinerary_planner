@@ -156,3 +156,12 @@ re-select the same OSM IDs, check that each still exists with the same tags, and
     respected. It is cached per site for 24 hours, and a failed fetch counts as "disallow" for 1 hour.
   - **Parsing:** only schema.org Event JSON-LD is parsed, in code. Descriptions are never kept. Each event links
     back to its page.
+
+
+## `venue_policies.json`: narrow official admission policy overlay
+
+Checked 3 November 2026 against the official MuSo booking policy and National Gallery access/admission page (URLs and dates in the data file). The entries contain our paraphrased policy facts, not Google Places records. MuSo requires a child accompanied by a grown-up; because the current input does not establish party ages, the planner excludes it rather than assuming eligibility. Clearly child-focused museums (name or curated audience tag) are also excluded until age eligibility can be established. This limits family recommendations but prevents unsupported admission claims. National Gallery general admission is free; optional paid exhibitions are excluded from that base visit. Policies need maintenance and do not establish eligibility for every other venue.
+
+Mumbai motor trips conservatively use the configured cab estimate throughout the city, including suburbs, because autos have island-city restrictions. This avoids an invented route-zone boundary. See the city configuration's transport-policy reference. It does not assert that autos are banned throughout Mumbai. The independent test/eval arithmetic reads this same declared mode; its calculations remain separately implemented.
+
+A zero-valued Google category default is now labelled unknown, not verified free admission; it is not included in the provisional total. Venue-specific official free-general-admission policy is distinguished from that missing-price case.

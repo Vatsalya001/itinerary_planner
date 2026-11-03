@@ -1,4 +1,4 @@
-import type { CostBasis, ProviderName, TravelMode } from '../types'
+import type { Candidate, CostBasis, ProviderName, TravelMode } from '../types'
 
 const MINUTES_PER_DAY = 1440
 
@@ -227,4 +227,12 @@ export function weatherLine(w: WeatherLike): string {
     temp_max_c: /°/.test(w.summary ?? '') ? null : w.temp_max_c })
   const parts = [w.summary, extra].filter((x): x is string => Boolean(x))
   return parts.length ? parts.join(' · ') : 'Weather checked'
+}
+
+/** A generic zero default means missing venue pricing, not verified free admission. */
+export function fmtCandidateCost(candidate: Candidate): string {
+  const cost = candidate.cost
+  return cost.max === 0 && cost.basis === 'category_estimate'
+    ? 'Price unknown (not included in total)'
+    : fmtMoneyRange(cost.min, cost.max, cost.currency)
 }

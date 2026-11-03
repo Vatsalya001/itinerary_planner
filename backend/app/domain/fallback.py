@@ -50,6 +50,7 @@ from app.domain.evidence import (
     satisfies_include,
 )
 from app.domain.fill import fill_window
+from app.domain.realworld import admission_estimate_unverified, prefers_short_travel
 from app.domain.schedule import plan_currency
 from app.domain.schemas import (
     Candidate,
@@ -551,7 +552,8 @@ class Planner:
         return (n.end - self.ctx.start_min - n.idle) / max(1, self.limit)
 
     def _quality(self, n: _Node) -> float:
-        s = n.base + 6.0 * len(n.covered) + 6.0 * len(n.includes) - 0.08 * n.leg_minutes - 0.03 * n.idle
+        travel_penalty = 0.4 if prefers_short_travel(self.prefs) else 0.08
+        s = n.base + 6.0 * len(n.covered) + 6.0 * len(n.includes) - travel_penalty * n.leg_minutes - 0.03 * n.idle
         for name in n.meal_credit:
             s += 1.5 if name == "snack" else self.main_meal_weight.get(name, 3.0)
         s -= 2.0 * n.early_meals  # an early lunch/dinner is fine, an on-time one is better
@@ -749,7 +751,7 @@ class Planner:
             if con.kind == "diet" and is_food_stop(c):
                 parts.append(f"{DIET_LABEL.get(con.value, con.value)} menu confirmed")
             elif con.kind == "access":
-                parts.append("step-free access confirmed")
+                parts.append("the source reports a wheelchair-accessible entrance")
         if calm_at(c, start, end):
             parts.append("usually calm at this time")
         if self.ctx.weather.is_rainy and c.indoor is True:
@@ -770,6 +772,10 @@ class Planner:
 
     def _tradeoff(self, c: Candidate, leg: Leg | None, has_plan_b: bool, priciest: bool) -> str | None:
         opts: list[str] = []
+        if admission_estimate_unverified(c):
+            opts.append("Admission price is unverified; confirm the ticket before leaving.")
+        if "admission:general_free" in c.tags:
+            opts.append("General admission is free; optional paid exhibitions are not included.")
         if self.inputs.quiet and {"music", "live music", "nightlife"} & candidate_tags(c):
             opts.append("Live music is never silent, but this is one of the calmer rooms, so it stays fairly quiet."
                         if c.popularity == "low" else
@@ -804,7 +810,7 @@ class Planner:
         if diets and any(is_food_stop(c) for c in stops):
             text += f" Every food stop has confirmed {_join(diets)} options."
         if any(c.kind == "access" for c in self.constraints):
-            text += " Every stop has confirmed wheelchair access."
+            text += " Sources report accessible entrances; internal facilities and transfer routes need verification."
         if self.crowd_avoid:
             text += " Known busy times were avoided (a heuristic, not live data)."
         if self.min_seated < self.pacing.min_seated_stops and node.seated < self.pacing.min_seated_stops:

@@ -1,0 +1,21 @@
+[
+  {
+    "country": "IN",
+    "cities": ["mumbai", "bombay", "greater mumbai"],
+    "names": ["museum of solutions", "muso"],
+    "prefix": true,
+    "requires_child": true,
+    "source_url": "https://www.museumofsolutions.in/products/all-day-pass",
+    "checked_on": "2026-11-03",
+    "note": "Official booking policy requires a grown-up to accompany children and does not allow grown-ups alone. Party ages are not represented by the planner; exclude rather than assume eligibility."
+  },
+  {
+    "country": "GB",
+    "cities": ["london", "city of london", "greater london"],
+    "names": ["the national gallery", "national gallery"],
+    "general_admission_free": true,
+    "source_url": "https://www.nationalgallery.org.uk/visiting/access",
+    "checked_on": "2026-11-03",
+    "note": "General admission is free; some exhibitions charge separately. Sainsbury Wing is the step-free main entrance."
+  }
+]

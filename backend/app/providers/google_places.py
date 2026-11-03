@@ -21,6 +21,7 @@ from typing import Any, Literal
 import httpx
 
 from app.domain.categories import category, load_categories
+from app.domain.realworld import policy_for
 from app.domain.schemas import (
     Candidate,
     CostRange,
@@ -263,7 +264,9 @@ def _cost(place: dict[str, Any], key: str, currency: str) -> CostRange:
     band = price_level_band(place.get("priceLevel"), currency)
     if band is not None and band.currency == currency:
         return band
-    return category_default_cost(key, currency)
+    estimated = category_default_cost(key, currency)
+    # A zero category default is not evidence of free admission at this particular venue.
+    return estimated.model_copy(update={"basis": "category_estimate"})
 
 
 def _diet(place: dict[str, Any], types: list[str]) -> dict[str, Evidence]:
@@ -377,7 +380,7 @@ def place_to_candidate(
         tags.append("outdoor seating")
     maps_uri = place.get("googleMapsUri")
     rating = place.get("rating")
-    return Candidate(
+    candidate = Candidate(
         id=f"gp:{pid}",
         kind="place",
         name=name,
@@ -405,6 +408,15 @@ def place_to_candidate(
         source=Source(provider="google_places", url=maps_uri if is_https_url(maps_uri) else None,
                       retrieved_at=now or datetime.now(UTC), attribution="Google Maps"),
     )
+
+
+    policy = policy_for(candidate, ctx)
+    if policy and policy.get("general_admission_free") and key in {"museum", "art_gallery"}:
+        candidate = candidate.model_copy(update={
+            "cost": CostRange(min=0, max=0, currency=currency, basis="free"),
+            "tags": [*candidate.tags, "admission:general_free"],
+        })
+    return candidate
 
 
 def text_query(intent: str, location: Location, neighbourhood: str | None = None) -> str:
