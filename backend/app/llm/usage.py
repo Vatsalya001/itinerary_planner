@@ -8,6 +8,7 @@ them with the registry pricing of the model that answered. The model is identifi
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from uuid import UUID
 
@@ -64,12 +65,13 @@ class UsageTracker(BaseCallbackHandler):
                             run_id: UUID, parent_run_id: UUID | None = None, tags: list[str] | None = None,
                             metadata: dict[str, Any] | None = None, **kwargs: Any) -> Any:
         self._run_models[run_id] = (metadata or {}).get("registry_model_id")
+        self.usage = add_usage(self.usage, {"llm_calls": 1})
 
     def on_llm_end(self, response: LLMResult, *, run_id: UUID, parent_run_id: UUID | None = None,
                    **kwargs: Any) -> Any:
         model_id = self._run_models.pop(run_id, None)
         delta = empty_usage()
-        delta["llm_calls"] = 1
+        delta["llm_calls"] = 0
         for generations in response.generations:
             for gen in generations:
                 if isinstance(gen, ChatGeneration) and isinstance(gen.message, AIMessage):
@@ -82,5 +84,8 @@ class UsageTracker(BaseCallbackHandler):
                      **kwargs: Any) -> Any:
         self._run_models.pop(run_id, None)
         if isinstance(error, RateLimitWaitError):
-            return  # refused by our own limiter before any request was sent
-        self.usage = add_usage(self.usage, {"llm_calls": 1})
+            self.usage["llm_calls"] = max(0, self.usage["llm_calls"] - 1)
+
+    def on_chain_error(self, error: BaseException, **kwargs: Any) -> None:
+        if isinstance(error, TimeoutError | asyncio.CancelledError):
+            self._run_models.clear()

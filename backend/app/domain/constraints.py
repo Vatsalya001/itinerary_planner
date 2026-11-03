@@ -28,7 +28,7 @@ VOCABULARY: dict[str, set[str]] = {
 _RULES: list[tuple[str, str, str]] = [
     (r"\bvegan\b|plant[- ]based", "diet", "vegan"),
     (r"\bjain\b", "diet", "jain"),
-    (r"(?<!non[- ])(?<!non)\b(pure[- ]?)?veg(etarian|gie|)\b|no (meat|non[- ]?veg)", "diet", "vegetarian"),
+    (r"(?<!non[- ])(?<!non)\b(pure[- ]?)?veg(etarian|gie|)\b|no (meat|non[- ]?veg)|(?:don[’']?t|do not|never|cannot|can’?t) eat (?:meat|non[- ]?veg|chicken|fish)", "diet", "vegetarian"),
     (r"(no|avoid|without|skip|don'?t want|not)\b.{0,20}\b(alcohol|drinks|bars?|pubs?|booze|breweries)"
      r"|teetotal|sober|alcohol[- ]free", "alcohol", "avoid"),
     (r"wheel ?chair|step[- ]free|mobility (aid|issues?|impair\w*|scooter)|(fully|physically|disab\w*)[- ]accessible"
@@ -54,7 +54,10 @@ def map_constraint_text(text: str) -> list[Constraint]:
     "vegetarian" -> [diet:vegetarian]; "avoid crowded places" -> [crowd:avoid];
     "vegetarian, wheelchair accessible" -> both. Returns [] when nothing maps.
     """
-    lowered = text.lower()
+    lowered = text.lower().replace("’", "'")
+    lowered = re.sub(r"no (?:problem|issues?) with", "comfortable with", lowered)
+    if re.search(r"veg and non[- ]?veg (?:are )?both fine", lowered):
+        lowered = re.sub(r"veg and non[- ]?veg", "all food", lowered)
     found: list[Constraint] = []
     for pattern, kind, value in _RULES:
         if kind == "diet" and diet_negated(lowered, value):
@@ -87,7 +90,9 @@ def diet_negated(text: str, diet: str) -> bool:
     "no non-veg" (= vegetarian) is not a negation. "non-veg is fine" never matches the vegetarian rule.
     """
     word = _DIET_WORDS[diet]
-    lowered = text.lower()
+    lowered = text.lower().replace("’", "'")
+    if diet == "vegetarian" and re.search(r"\b(?:don'?t|do not|never|cannot|can't) eat (?:meat|non[- ]?veg|chicken|fish)\b", lowered):
+        return False
     if re.search(rf"\b(not|never|isn'?t|am not|i'?m not)\s+(a\s+|really\s+|strictly\s+|fully\s+)?{word}\b", lowered):
         return True
     return diet == "vegetarian" and bool(

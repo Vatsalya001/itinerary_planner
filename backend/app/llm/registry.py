@@ -462,11 +462,26 @@ def build_agent_runnable(model_ids: Sequence[str], tools: Sequence[dict[str, Any
     if not model_ids:
         raise RegistryError("empty model chain")
     roles = _roles(model_ids, primary_id)
-    chains = [_agent_chain(mid, purpose, settings, role, tools) for mid, role in zip(model_ids, roles, strict=True)]
+    chains = []
+    for mid, role in zip(model_ids, roles, strict=True):
+        try:
+            chains.append(_agent_chain(mid, purpose, settings, role, tools))
+        except RegistryError:
+            if role == "primary":
+                raise
+    if not chains:
+        raise RegistryError("no configured model available")
     if len(chains) == 1:
         return chains[0]
     first = with_timeout(chains[0], primary_timeout_s) if primary_timeout_s else chains[0]
-    return first.with_fallbacks(chains[1:])
+    async def invoke(value: Any, config: RunnableConfig) -> Any:
+        for chain in [first, *chains[1:]]:
+            try:
+                return await chain.ainvoke(value, config=config)
+            except Exception as exc:
+                last = exc
+        raise last
+    return RunnableLambda(invoke)
 
 
 def build_structured_runnable(model_ids: Sequence[str], schema: type[Any], settings: Settings,
@@ -488,7 +503,14 @@ def build_structured_runnable(model_ids: Sequence[str], schema: type[Any], setti
     if len(chains) == 1:
         return chains[0]
     first = with_timeout(chains[0], primary_timeout_s) if primary_timeout_s else chains[0]
-    return first.with_fallbacks(chains[1:])
+    async def invoke(value: Any, config: RunnableConfig) -> Any:
+        for chain in [first, *chains[1:]]:
+            try:
+                return await chain.ainvoke(value, config=config)
+            except Exception as exc:
+                last = exc
+        raise last
+    return RunnableLambda(invoke)
 
 
 def agent_turn_cap(settings: Settings, model_id: str) -> int:

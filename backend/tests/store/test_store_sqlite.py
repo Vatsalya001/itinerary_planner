@@ -309,7 +309,7 @@ def test_factory() -> None:
     mem = create_store("sqlite:///:memory:")
     assert isinstance(mem, SQLiteStore) and mem.is_memory
     file_store = create_store("sqlite:///./data/app.db")
-    assert isinstance(file_store, SQLiteStore) and file_store.path == "./data/app.db"
+    assert isinstance(file_store, SQLiteStore) and file_store.path == "data/app.db"
     pg = create_store("postgresql://user:pw@localhost:5432/app")
     assert isinstance(pg, PostgresStore)
     assert isinstance(create_store("postgres://user:pw@localhost/app"), PostgresStore)
@@ -323,7 +323,7 @@ def test_checkpoint_path() -> None:
     assert checkpoint_path_for("sqlite:///./data/app.db") == "data/app.checkpoints.db"
     assert checkpoint_path_for("sqlite:////tmp/a.db") == "/tmp/a.checkpoints.db"
     assert checkpoint_path_for("sqlite:////tmp/b.db") == "/tmp/b.checkpoints.db"  # never shared
-    assert checkpoint_path_for("sqlite:////tmp/plain") == "/tmp/plain.checkpoints.db"
+    assert checkpoint_path_for("sqlite:////tmp/plain") == "/tmp/plain.file.checkpoints.db"
 
 
 async def test_open_checkpointer_memory_and_sqlite(tmp_path: Path) -> None:

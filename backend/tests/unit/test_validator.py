@@ -42,9 +42,16 @@ travel = HeuristicTravel()
 
 
 def run(draft: PlanDraft, candidates: Sequence[Candidate], *, ctx: WorldContext | None = None,
-        prefs: Preferences | None = None, original: Sequence[str | Constraint] = ()) -> ValidationReport:
-    return validate_plan(draft, make_ledger(*candidates), ctx or make_ctx(), prefs or make_prefs(),
-                         make_constraints(original), travel)
+        prefs: Preferences | None = None, original: Sequence[str | Constraint] = (),
+        window: int | None = None) -> ValidationReport:
+    """``window`` shortens the available time (for exact-violation tests whose short plans would otherwise also
+    get the UNDERFILLED warning in the default four-hour window)."""
+    ctx = ctx or make_ctx()
+    prefs = prefs or make_prefs()
+    if window is not None:
+        ctx = ctx.model_copy(update={"end_min": ctx.start_min + window})
+        prefs = prefs.model_copy(update={"available_minutes": window})
+    return validate_plan(draft, make_ledger(*candidates), ctx, prefs, make_constraints(original), travel)
 
 
 def codes(report: ValidationReport) -> set[str]:
@@ -61,7 +68,7 @@ BOOKS = make_candidate("fx:books", "bookstore", offset_km=(0.4, 0.0), cost=(0, 2
 
 def test_clean_plan_is_ok():
     report = run(make_draft(("fx:cafe", 50), ("fx:books", 40)), [CAFE, BOOKS],
-                 prefs=make_prefs(constraints=["vegetarian", "avoid crowded places"]))
+                 prefs=make_prefs(constraints=["vegetarian", "avoid crowded places"]), window=150)
     assert report.ok, report.violations
     assert report.violations == []
     assert report.plan is not None
@@ -134,7 +141,7 @@ def test_stop_overlapping_closing_time_fails():
 
 def test_unknown_hours_pass_with_warning():
     unknown = make_candidate("fx:c", "cafe", hours=Hours(status="unknown"))
-    report = run(make_draft(("fx:c", 50)), [unknown])
+    report = run(make_draft(("fx:c", 50)), [unknown], window=60)
     assert report.ok
     assert [(v.code, v.severity) for v in report.violations] == [("HOURS_UNVERIFIED", "warning")]
     assert report.plan is not None and report.plan.stops[0].warnings
@@ -266,12 +273,12 @@ def test_outdoor_walk_after_sunset_fails():
 def test_rain_outdoor_stop_without_plan_b_warns():
     park = make_candidate("fx:p", "park")
     ctx = make_ctx(weather="rain", energy="medium")
-    report = run(make_draft(("fx:p", 40)), [park], ctx=ctx)
+    report = run(make_draft(("fx:p", 40)), [park], ctx=ctx, window=60)
     assert report.ok
     assert [(v.code, v.severity) for v in report.violations] == [("WEATHER_RISK", "warning")]
     museum = make_candidate("fx:m", "museum", offset_km=(0.5, 0.0))
     draft = PlanDraft(stops=[stop("fx:p", 40, plan_b_candidate_id="fx:m")])
-    covered = run(draft, [park, museum], ctx=ctx)
+    covered = run(draft, [park, museum], ctx=ctx, window=60)
     assert covered.ok and covered.violations == []
 
 
@@ -367,7 +374,7 @@ def test_constraint_dropped_by_parser_is_flagged_and_still_enforced():
     assert found["DIET_CONFLICT"] == "error"
     assert not report.ok
     veg = make_candidate("fx:v", "restaurant")
-    ok = run(make_draft(("fx:v", 60)), [veg], prefs=make_prefs(constraints=[]), original=["vegetarian"])
+    ok = run(make_draft(("fx:v", 60)), [veg], prefs=make_prefs(constraints=[]), original=["vegetarian"], window=80)
     assert ok.ok and codes(ok) == {"CONSTRAINT_DROPPED"}
 
 
@@ -424,7 +431,7 @@ def test_alcohol_setting_crowd_and_category_rules():
     bar = make_candidate("fx:bar", "bar")
     assert "ALCOHOL_CONFLICT" in codes(run(make_draft(("fx:bar", 60)), [bar], prefs=make_prefs(constraints=["alcohol:avoid"])))
     resto = make_candidate("fx:r", "restaurant", serves_alcohol=True)
-    served = run(make_draft(("fx:r", 60)), [resto], prefs=make_prefs(constraints=["alcohol:avoid"]))
+    served = run(make_draft(("fx:r", 60)), [resto], prefs=make_prefs(constraints=["alcohol:avoid"]), window=80)
     assert served.ok and {(v.code, v.severity) for v in served.violations} == {("ALCOHOL_SERVED", "warning")}
     park = make_candidate("fx:p", "park")
     assert "SETTING_CONFLICT" in codes(run(make_draft(("fx:cafe", 40), ("fx:p", 30)), [CAFE, park],
@@ -517,6 +524,7 @@ def _scenarios() -> dict[str, Callable[[], set[str]]]:
             CAFE.model_copy(update={"id": "fx:x", "cost": CAFE.cost.model_copy(update={"currency": "GBP"})})])),
         "PACING_RELAXED": lambda: codes(run(make_draft(("fx:p", 40)), [park],
                                             prefs=make_prefs(constraints=["outdoors only"]))),
+        "UNDERFILLED": lambda: codes(run(make_draft(("fx:cafe", 40)), [CAFE])),
         "IDLE_WAIT": lambda: codes(run(make_draft(("ev:w", 60)), [
             make_candidate("ev:w", "event", event_start_min=1020, event_end_min=1140)], prefs=make_prefs(budget=None))),
         "LOCATION_APPROXIMATE": lambda: codes(run(make_draft(("ev:a", 90)), [
@@ -547,7 +555,7 @@ def test_validate_is_pure_and_deterministic():
 
 def test_summarize_checks_names_and_statuses():
     prefs = make_prefs(constraints=["vegetarian", "avoid crowded places"])
-    report = run(make_draft(("fx:cafe", 50), ("fx:books", 40)), [CAFE, BOOKS], prefs=prefs)
+    report = run(make_draft(("fx:cafe", 50), ("fx:books", 40)), [CAFE, BOOKS], prefs=prefs, window=150)
     items = summarize_checks(report, make_ctx(), prefs, prefs.hard_constraints)
     assert [i.name for i in items] == ["budget", "time", "opening_hours", "diet", "accessibility", "crowds",
                                        "weather", "sources"]
@@ -642,7 +650,7 @@ def test_sit_down_meal_needs_a_seated_meal():
 def test_seated_rule_waived_only_without_seated_outdoor_options():
     park = make_candidate("fx:p", "park")
     prefs = make_prefs(constraints=["outdoors only"])
-    waived = run(make_draft(("fx:p", 40)), [park], prefs=prefs)
+    waived = run(make_draft(("fx:p", 40)), [park], prefs=prefs, window=60)
     assert waived.ok and {(v.code, v.severity) for v in waived.violations} == {("PACING_RELAXED", "warning")}
     time_check = next(i for i in summarize_checks(waived, make_ctx(), prefs, prefs.hard_constraints) if i.name == "time")
     assert time_check.status == "warn"

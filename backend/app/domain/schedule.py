@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 
 from app.domain.categories import currency_for_country
 from app.domain.costs import compute_totals, foreign_currencies
-from app.domain.evidence import is_walking_stop
+from app.domain.evidence import is_outdoor, is_walking_stop
 from app.domain.schemas import (
     Candidate,
     CanonicalPlan,
@@ -137,6 +137,8 @@ def build_schedule(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: World
                 message=f"You would arrive at {cand.name} after the event has started",
             ))
         start = stop_start(cand, arrival)
+        if is_outdoor(cand) and is_walking_stop(cand) and ctx.weather.sunrise_min is not None:
+            start = max(start, ctx.weather.sunrise_min)
         end = start + stop.duration_min
         if is_walking_stop(cand):
             walking += stop.duration_min

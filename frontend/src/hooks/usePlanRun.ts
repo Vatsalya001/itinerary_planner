@@ -47,6 +47,7 @@ export function usePlanRun() {
   const cancel = useCallback(() => {
     controller.current?.abort()
     controller.current = null
+    dispatch({ type: 'stop' })
     setPhase({ kind: 'idle' })
   }, [])
 

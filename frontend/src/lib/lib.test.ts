@@ -77,7 +77,7 @@ describe('trace reducer', () => {
       .reduce(reduceTrace, initialTrace)
     expect(s.steps.map((x) => x.label)).toEqual([
       'Set up the day: weather, time window and pacing',
-      'Found the city',
+      'City lookup finished',
       'Built a backup plan without the AI model',
       'Worked out what blocked a plan',
     ])

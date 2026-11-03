@@ -264,6 +264,7 @@ async def _run_claimed(run: _Run, request: PlanRequest | None, checkpointer: Any
             queue.put_nowait(("error", exc))
 
     task = asyncio.create_task(produce())
+    forwarded_seq = run.tracer.seq
     hard_deadline = run.started + settings.run_deadline_s + HARD_GRACE_S
     try:
         while True:
@@ -273,6 +274,7 @@ async def _run_claimed(run: _Run, request: PlanRequest | None, checkpointer: Any
             except TimeoutError as exc:
                 raise RunDeadlineError("run deadline exceeded") from exc
             if kind == "event":
+                forwarded_seq = max(forwarded_seq, item.seq)
                 if item.type == "result":
                     if run.result_sent:
                         continue  # contract: exactly one result per call
@@ -293,6 +295,10 @@ async def _run_claimed(run: _Run, request: PlanRequest | None, checkpointer: Any
             task.cancel()
             with contextlib.suppress(BaseException):
                 await task
+            # Cancellation can append closing events after the stream writer has closed.
+            for event in run.tracer.events:
+                if event.seq > forwarded_seq:
+                    yield event
 
 
 async def _clarification_events(run: _Run, interrupts: Any, rc: RunContext) -> list[TraceEvent]:

@@ -335,8 +335,12 @@ def test_prompt_and_submit_description_state_the_common_rejections() -> None:
     submit = next(t for t in tool_schemas() if t["function"]["name"] == "submit_plan")["function"]["description"]
     for phrase in ("walking:true", "plan_b_candidate_id", "hours_today", "10%"):
         assert phrase in submit
-    for phrase in ("Rules the validator enforces", "max_walking_minutes_total", "include_events: true"):
-        assert phrase in AGENT_SYSTEM_PROMPT
+    for phrase in ("Rules the validator enforces", "max_walking_minutes_total", "include_events: true",
+                   "Use most of the user's time window (aim for 70-100%)", "visit_minutes.typical or more",
+                   "don't trim visits below their typical length unless a fix line asks you to"):
+        assert phrase in " ".join(AGENT_SYSTEM_PROMPT.split())
+    cafe = compact_candidate(make_candidate("fx:cafe", "cafe"))
+    assert set(cafe["visit_minutes"]) == {"min", "typical", "max"}
 
 
 def test_constraint_fix_names_replacement_candidates() -> None:

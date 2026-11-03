@@ -308,7 +308,7 @@ def _is_instruction_like(text: str) -> bool:
 # ---------------------------------------------------------------------------------------------------
 
 _SYMBOL_CURRENCY = {"us$": "USD", "s$": "SGD", "a$": "AUD", "c$": "CAD", "₹": "INR", "$": "USD", "£": "GBP",
-                    "€": "EUR", "¥": "JPY"}
+                    "€": "EUR", "¥": "JPY", "/-": "INR"}
 _WORD_CURRENCY = {
     "rs": "INR", "inr": "INR", "rupee": "INR", "rupees": "INR", "rupaye": "INR", "rupiya": "INR",
     "usd": "USD", "dollar": "USD", "dollars": "USD",
@@ -335,7 +335,7 @@ _MONEY_PREFIX = re.compile(
     rf"(?P<cur>{_SYMBOLS}|(?<![a-z]){_CODES}(?![a-z]))\s*(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?",
     re.IGNORECASE)
 _MONEY_SUFFIX = re.compile(
-    rf"(?<![\d.,])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?P<cur>{_SYMBOLS}|(?<![a-z]){_WORDS}(?![a-z]))",
+    rf"(?<![\d.,])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?P<cur>/-|{_SYMBOLS}|(?<![a-z]){_WORDS}(?![a-z]))",
     re.IGNORECASE)
 _MONEY_PER_PERSON = re.compile(
     rf"(?<![\d.,:])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?:per\s+person|per\s+head|a\s+head|each|pp"
@@ -468,7 +468,8 @@ _START_CUE = re.compile(
     re.IGNORECASE)
 _AT_CUE = re.compile(r"\bat\s*$", re.IGNORECASE)
 _DURATION_RE = re.compile(
-    r"\b\d+h\d{1,2}\b"
+    r"\b(?:\d+|an?|one|two|three|four|five)\s+(?:hours?\s+and\s+a\s+half|and\s+a\s+half\s+hours?)\b"
+    r"|\b\d+h\d{1,2}\b"
     r"|\b(?:\d+(?:\.\d+)?|half\s+an|an|a|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*"
     r"(?:hours?|hrs?|h)\b(?:\s*(?:and\s+)?\d+\s*(?:minutes?|mins?)\b)?"
     r"|\b\d+\s*(?:minutes?|mins?)\b",
@@ -871,6 +872,8 @@ def _diet_negation_note(text: str) -> str | None:
     a hard constraint or a clarification."""
     if negates_all_diets(text):
         return NO_DIET_RESTRICTION
+    if re.search(r"\bno (?:wheelchair|step[- ]free)(?: access)? (?:needed|required)\b", text, re.I):
+        return text.strip()[:120]
     if any(diet_negated(text, diet) for diet in ("vegan", "jain", "vegetarian")):
         return text.strip()[:120]
     return None
@@ -1091,6 +1094,8 @@ def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
     if start is None and found.start is not None:
         start, start_assumed = found.start, found.start_assumed
     minutes = parse_duration(request.available_time) if request.available_time is not None else None
+    if minutes is not None:
+        minutes = _clamp_minutes(minutes)
     if minutes is None:
         minutes = found.minutes
     assumptions: list[str] = []
@@ -1672,7 +1677,11 @@ def apply_defaults(outcome: ParseOutcome, location: Location) -> Preferences:
     if prefs.budget is None:
         default = DEFAULT_BUDGETS.get(prefs.currency or "")
         if default is not None:
-            prefs.budget = default
+            unread_values = [int(float(m.replace(",", ""))) for note in assumptions
+                             if note.startswith(UNREAD_AMOUNT_PREFIX)
+                             for m in re.findall(r"“([\d,]+(?:\.\d+)?)”", note)]
+            prefs.budget = min([default, *unread_values])
+            default = prefs.budget
             assumptions.append(f"Budget assumed to be {_fmt_money(default, prefs.currency)} per person")
         else:
             assumptions.append("No budget given, so costs are shown but not capped")
@@ -1817,6 +1826,15 @@ def default_queries(prefs: Preferences, ctx: WorldContext) -> list[PlaceQuery]:
     for c in prefs.hard_constraints:
         if c.kind == "must_include" and c.value in _INCLUDE_QUERIES:
             add(*_INCLUDE_QUERIES[c.value])
+    if outdoors_only:
+        for intent, cat in (("park", "park"), ("garden", "garden"), ("lake", "lake")):
+            add(intent, cat)
+    if ctx.start_min >= 21 * 60:
+        add("late night cafe", "cafe")
+        add("late night dessert", "dessert")
+    if prefs.budget is not None and prefs.budget <= 100:
+        add("free park", "park")
+        add("free art gallery", "art_gallery")
     if rainy and not outdoors_only:
         add("museum or art gallery", "museum", indoor=True)
     windows = meal_windows_between(ctx.start_min, ctx.end_min)

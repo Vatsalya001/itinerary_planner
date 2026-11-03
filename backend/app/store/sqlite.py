@@ -143,7 +143,7 @@ def sqlite_path_from_url(url: str) -> str:
 
 class SQLiteStore:
     def __init__(self, path: str = ":memory:", clock: Clock | None = None) -> None:
-        self.path = path
+        self.path = str(Path(path).expanduser()) if path and not path.startswith((":memory:", "file:")) else path
         self._clock: Clock = clock or utc_now
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()

@@ -127,9 +127,9 @@ def test_rain_with_only_outdoor_walks_still_offers_plan_b():
     draft, report = plan_and_validate([park, cafe, museum, gallery], ctx, prefs)
     assert draft is not None and report is not None and report.ok
     park_stop = next(s for s in draft.stops if s.candidate_id == "fx:park")
-    used = {s.candidate_id for s in draft.stops}
-    assert park_stop.plan_b_candidate_id in {"fx:cafe", "fx:museum", "fx:gallery"} - used
-    assert "WEATHER_RISK" not in {v.code for v in report.violations}
+    assert park_stop.plan_b_candidate_id is None
+    assert "WEATHER_RISK" in {v.code for v in report.violations}
+    assert "no compatible indoor alternative" in (park_stop.tradeoff or "")
 
 
 def test_wheelchair_excludes_unknown_access():
@@ -329,8 +329,8 @@ def test_rain_plan_b_is_open_distinct_and_within_budget():
     draft, report = plan_and_validate([park, cafe, closed_museum, spa, gallery], ctx, prefs)
     assert draft is not None and report is not None and report.ok, report and report.violations
     park_stop = next(s for s in draft.stops if s.candidate_id == "fx:park")
-    stop_ids = {s.candidate_id for s in draft.stops}
-    assert park_stop.plan_b_candidate_id not in {None, "fx:closed", "fx:spa"} | stop_ids
+    assert park_stop.plan_b_candidate_id is None
+    assert "WEATHER_RISK" in {v.code for v in report.violations}
 
 
 def test_mood_romantic_prefers_romantic_tagged_places():

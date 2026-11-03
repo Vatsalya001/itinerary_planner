@@ -30,7 +30,7 @@ async def test_saturday_afternoon_start_moves_forward():
     ctx, _ = await build_context(prefs, BLR, deps, Tracer("r_test"), now)
     assert ctx.date.isoformat() == "2026-11-07"
     assert ctx.start_min == 18 * 60 + 30
-    assert ctx.end_min == ctx.start_min + 180
+    assert ctx.end_min == ctx.start_min  # the original 15:00-18:00 window has passed; no extra hours invented
     assert any("usual start time has passed" in a for a in prefs.assumptions)
 
 

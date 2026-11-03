@@ -207,7 +207,7 @@ export function toggleConstraint(form: FormState, id: ToggleId): FormState {
   return {
     ...form,
     toggles: { ...form.toggles, [id]: on },
-    relaxed: on && key ? form.relaxed.filter((k) => k !== key) : form.relaxed,
+    relaxed: key ? (on ? form.relaxed.filter((k) => k !== key) : [...new Set([...form.relaxed, key])]) : form.relaxed,
   }
 }
 

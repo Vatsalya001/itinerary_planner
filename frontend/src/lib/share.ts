@@ -43,7 +43,7 @@ export function planToText(plan: CanonicalPlan, options: ShareTextOptions = {}):
   lines.push(`Worst case per person: ${fmtMoney(t.worst_case, t.currency)}${budget} (includes 10% contingency)`)
   const route = safeHttpsUrl(plan.maps_route_url)
   if (route) lines.push(`Route: ${route}`)
-  const share = safeHttpsUrl(options.shareUrl)
+  const share = safeHttpsUrl(options.shareUrl) ?? (typeof options.shareUrl === 'string' && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/p\//.test(options.shareUrl) ? options.shareUrl : null)
   if (share) lines.push(`Plan: ${share}`)
   return lines.join('\n')
 }

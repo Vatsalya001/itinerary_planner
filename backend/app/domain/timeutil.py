@@ -57,6 +57,11 @@ def parse_duration(value: str | int | float | None) -> int | None:
     for phrase, minutes in sorted(_NAMED_SPANS.items(), key=lambda kv: -len(kv[0])):
         if re.fullmatch(rf"(about |around |roughly |the )?{phrase}", text):
             return minutes
+    half = re.search(r"\b(\d+|an?|one|two|three|four|five)\s+(?:hours?\s+and\s+a\s+half|and\s+a\s+half\s+hours?)\b", text)
+    if half:
+        n = _num(half.group(1))
+        if n is not None:
+            return round((n + 0.5) * 60)
     total = 0.0
     matched = False
     m = re.search(r"(\d+)\s*h(?:ours?|rs?)?\s*(\d+)\s*m?(?:in(?:ute)?s?)?\b", text)  # 2h30, 2 hours 30 min
@@ -108,14 +113,24 @@ def parse_time_range(text: str) -> tuple[int, int] | None:
     A bare start hour borrows the end's am/pm ("4 to 8pm" -> 16:00-20:00).
     """
     pattern = (
-        r"(?:from\s+)?(\d{1,2}(?::\d{2})?)\s*(am|pm)?\s*(?:to|till|until|-|–)\s*"
+        r"(?:(?:from|between)\s+)?(\d{1,2}(?::\d{2})?)\s*(am|pm)?\s*(?:to|and|till|until|-|–)\s*"
         r"(\d{1,2}(?::\d{2})?)\s*(am|pm)?"
     )
     normalized = re.sub(r"(\d)\.(\d{2})(?!\d)", r"\1:\2", text.lower()).replace("a.m.", "am").replace("p.m.", "pm")
     for m in re.finditer(pattern, normalized):
         s_raw, s_ampm, e_raw, e_ampm = m.groups()
         if not (s_ampm or e_ampm or ":" in s_raw or ":" in e_raw):
-            continue  # "4-8" alone is too ambiguous (could be a count)
+            if not re.match(r"(?:from|between)\b", m.group(0)):
+                continue
+            # Explicit leisure window with bare hours: disclose afternoon convention via parser.
+            s_ampm = "pm" if int(s_raw) < 12 else "am"
+        if s_ampm and not e_ampm and int(e_raw.split(":")[0]) <= 12:
+            base_start = parse_clock(f"{s_raw}{s_ampm}")
+            ends = [parse_clock(f"{e_raw}{mer}") for mer in ("am", "pm")]
+            if base_start is not None:
+                viable = [e for e in ends if e is not None and base_start < e <= base_start + 720]
+                if viable:
+                    return base_start, min(viable)
         end = parse_clock(f"{e_raw}{e_ampm or ''}")
         start = parse_clock(f"{s_raw}{s_ampm or e_ampm or ''}")
         if start is None or end is None:

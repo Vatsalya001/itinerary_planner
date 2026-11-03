@@ -134,7 +134,7 @@ export function TracePanel({ trace, running, startedAt }: { trace: TraceState; r
         ) : null}
       </div>
 
-      {trace.degraded.length ? (
+      {running && trace.degraded.length ? (
         <div className="px-4 pb-3 sm:px-5">
           <DegradationNotices items={trace.degraded} />
         </div>

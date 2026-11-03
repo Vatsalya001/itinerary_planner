@@ -72,7 +72,7 @@ function LeaderboardTable({ rows, caption }: { rows: EvalRow[]; caption: string 
           {sorted.map((r, i) => (
             <tr key={`${r.model ?? 'model'}-${i}`}>
               <th scope="row" className="sticky left-0 bg-white px-3 py-2 text-left font-mono text-xs font-medium whitespace-nowrap text-stone-900">
-                {r.model || 'Unnamed model'}
+                {r.model || 'Unnamed model'}{r.coverage?.partial ? <span className="ml-2">{r.coverage.cases}/{r.coverage.suite_cases} partial</span> : null}
                 {r.prompt_current === false ? (
                   <span
                     className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 font-sans text-[11px] font-medium text-amber-900"

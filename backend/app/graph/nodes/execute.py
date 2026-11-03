@@ -110,6 +110,7 @@ async def run_tools(state: PlannerState, runtime: Runtime[RunContext]) -> dict[s
                   enforced=get_constraints(state, "enforced"), original=get_constraints(state, "original"),
                   ledger=get_ledger(state), places_mode=state.get("places_mode", "live"),  # type: ignore[arg-type]
                   events_failed=bool(state.get("events_failed")),
+                  event_queries_used=int((state.get("tool_exec") or {}).get("event_queries", 0)),
                   queries_used=int((state.get("tool_exec") or {}).get(QUERIES_KEY, 0)))
     requested: Counter[str] = Counter(state.get("tool_calls") or {})
     executed: Counter[str] = Counter(state.get("tool_exec") or {})
@@ -200,6 +201,7 @@ async def run_tools(state: PlannerState, runtime: Runtime[RunContext]) -> dict[s
         info["data"] = {"ledger_size": len(env.ledger), "places_mode": env.places_mode}
 
     executed[QUERIES_KEY] = env.queries_used
+    executed["event_queries"] = env.event_queries_used
     turns_left = int(state.get("turn_cap") or rc.deps.settings.max_agent_turns) - int(state.get("agent_turns") or 0)
     messages = [m.model_copy(update={"content": with_turns_left(str(m.content), turns_left)}) for m in messages]
     has_places = any(c.kind == "place" for c in env.ledger.values())

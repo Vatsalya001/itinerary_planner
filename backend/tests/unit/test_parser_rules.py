@@ -748,7 +748,7 @@ def test_unread_amount_is_named_and_never_silently_defaulted():
     assert "budget" in outcome.missing
     assert "Couldn't tell whether “600” is your budget, so it wasn't used" in outcome.preferences.assumptions
     prefs = apply_defaults(outcome, BLR)
-    assert prefs.budget == 1500
+    assert prefs.budget == 600  # a default must not exceed the uncertain amount the user supplied
     assert any("600" in a for a in prefs.assumptions)
 
 

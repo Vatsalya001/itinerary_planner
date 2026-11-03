@@ -33,7 +33,7 @@ def checkpoint_path_for(database_url: str) -> str | None:
     if path in (":memory:", "") or path.startswith("file::memory:"):
         return None
     db = Path(path).expanduser()
-    stem = db.stem if db.suffix else db.name  # "app.db" -> "app", "app" -> "app"
+    stem = db.stem if db.suffix == ".db" else db.name + (".file" if not db.suffix else "")  # "app.db" -> "app", "app" -> "app"
     return str(db.with_name(stem + CHECKPOINT_SUFFIX))
 
 

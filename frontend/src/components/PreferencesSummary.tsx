@@ -6,13 +6,13 @@ import { Badge } from './ui'
 const ENERGY: Record<string, string> = { low: 'Low energy', medium: 'Medium energy', high: 'High energy' }
 
 /** "What I understood": the normalised preferences the planner worked from. */
-export function PreferencesSummary({ prefs }: { prefs: Preferences }) {
+export function PreferencesSummary({ prefs, provisional = false }: { prefs: Preferences; provisional?: boolean }) {
   const chips: Array<{ key: string; text: string; tone?: 'orange' | 'amber' | 'neutral' }> = []
   if (prefs.city) chips.push({ key: 'city', text: prefs.city, tone: 'orange' })
   if (typeof prefs.budget === 'number')
     chips.push({ key: 'budget', text: prefs.currency ? `${fmtMoney(prefs.budget, prefs.currency)} per person` : `${prefs.budget} per person` })
-  chips.push({ key: 'start', text: `From ${fmtClock(prefs.start_min)}` })
-  chips.push({ key: 'time', text: fmtDuration(prefs.available_minutes) })
+  if (!provisional) chips.push({ key: 'start', text: `From ${fmtClock(prefs.start_min)}` })
+  if (!provisional) chips.push({ key: 'time', text: fmtDuration(prefs.available_minutes) })
   chips.push({ key: 'energy', text: ENERGY[prefs.energy] ?? humanize(prefs.energy) })
   if (prefs.neighbourhood) chips.push({ key: 'hood', text: `Near ${prefs.neighbourhood}` })
   if (prefs.group_size > 1) chips.push({ key: 'group', text: `Group of ${prefs.group_size}` })

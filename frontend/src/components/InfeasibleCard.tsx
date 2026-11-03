@@ -27,7 +27,7 @@ export function InfeasibleCard({
     <section aria-labelledby="infeasible-title" className={cardClass}>
       <h2 id="infeasible-title" ref={headingRef} tabIndex={-1} className="flex items-center gap-2 text-xl font-bold text-stone-900">
         <Icon name="alert" className="h-5 w-5 text-amber-700" />
-        No plan fits everything
+        {report ? 'No plan fits everything' : 'Place data is unavailable'}
       </h2>
       <p className="mt-2 text-sm text-stone-800">{reason}</p>
       {message && report?.reason && message !== report.reason ? (
@@ -78,9 +78,9 @@ export function InfeasibleCard({
             ))}
           </div>
         </div>
-      ) : (
+      ) : report ? (
         <p className="mt-3 text-sm text-stone-700">Try changing the budget, time or constraints above and plan again.</p>
-      )}
+      ) : null}
     </section>
   )
 }

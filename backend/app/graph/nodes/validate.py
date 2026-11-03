@@ -19,6 +19,7 @@ from app.graph.nodes.common import (
     AGENT_NO_TIME,
     AGENT_REPAIRS_EXHAUSTED,
     DEADLINE_RESERVE_S,
+    fill_draft,
     tracer_of,
 )
 from app.graph.state import PlannerState, RunContext, dump, get_constraints, get_ctx, get_ledger, get_prefs
@@ -58,11 +59,18 @@ async def validate_submission(state: PlannerState, runtime: Runtime[RunContext])
         codes = sorted({v.code for v in report.errors})
         if "UNKNOWN_ID" in codes:
             kinds["unknown_id"] += 1
+        filled_minutes = 0
+        if report.ok and draft is not None:  # stretch toward the window; only a still-valid result is used
+            draft, filled_minutes = fill_draft(draft, ledger, ctx, get_prefs(state), get_constraints(state, "enforced"),
+                                               get_constraints(state, "original"), rc.deps.travel)
         info["summary"] = (f"attempt {attempts}/{max_attempts}: "
-                           + ("valid" if report.ok else f"{len(report.errors)} error(s): {', '.join(codes)}"))
-        info["data"] = {"attempt": attempts, "ok": report.ok, "codes": codes}
+                           + ("valid" if report.ok else f"{len(report.errors)} error(s): {', '.join(codes)}")
+                           + (f"; visits lengthened by {filled_minutes} min to use the window" if filled_minutes
+                              else ""))
+        info["data"] = {"attempt": attempts, "ok": report.ok, "codes": codes, "filled_minutes": filled_minutes}
     tracer.emit("validation", node="validate_plan", summary="passed" if report.ok else "failed: " + ", ".join(codes),
                 data={"ok": report.ok, "attempt": attempts, "max_attempts": max_attempts, "source": "agent",
+                      "filled_minutes": filled_minutes,
                       "violations": violation_dicts(report.violations, include_ids=False)})
 
     first_valid = state.get("first_submit_valid")
@@ -76,6 +84,7 @@ async def validate_submission(state: PlannerState, runtime: Runtime[RunContext])
         update["messages"] = [ToolMessage(content=dumps({"ok": True, "message": "Plan accepted."}),
                                           tool_call_id=call_id, name=SUBMIT_PLAN)]
         update["final"] = {"status": "complete", "mode": "agent", "draft": dump(draft)}
+        update["filled_minutes"] = filled_minutes
         update["route"] = "finalize"
         return update
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 log = logging.getLogger("app.retention")
@@ -50,6 +51,23 @@ async def sweep(store: Any, checkpointer: Any) -> dict[str, int]:
         counts["paused_threads"] = deleted
         if failed:
             counts["paused_threads_failed"] = failed
+    if checkpointer is not None and hasattr(checkpointer, "alist"):
+        now = store._clock() if hasattr(store, "_clock") else datetime.now(UTC)
+        paused = set(await store.stale_paused_threads(-1)) if hasattr(store, "stale_paused_threads") else set()
+        latest: dict[str, datetime] = {}
+        async for entry in checkpointer.alist(None, limit=1000):
+            try:
+                stamp = datetime.fromisoformat(entry.checkpoint.get("ts"))
+                thread_id = entry.config.get("configurable", {}).get("thread_id")
+                if thread_id and thread_id not in paused:
+                    latest[thread_id] = max(latest.get(thread_id, stamp), stamp)
+            except (TypeError, ValueError):
+                continue
+        orphaned = [tid for tid, stamp in latest.items() if (now - stamp).total_seconds() > PAUSED_THREAD_MAX_AGE_S]
+        for thread_id in orphaned:
+            await checkpointer.adelete_thread(thread_id)
+        if orphaned:
+            counts["orphaned_threads"] = len(orphaned)
     log.info("retention sweep", extra={f"deleted_{k}": v for k, v in counts.items()})
     return counts
 

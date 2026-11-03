@@ -90,7 +90,7 @@ class SecurityHeadersMiddleware:
         finally:
             # Path only (no query string): share IDs are fine to log, user text never travels in the path.
             log.info("request", extra={
-                "method": scope.get("method"), "path": scope.get("path"), "status": status_holder["status"],
+                "method": scope.get("method"), "path": re.sub(r"(/api/plan/)[^/]+(/resume)", r"\1[redacted]\2", scope.get("path", "")), "status": status_holder["status"],
                 "duration_ms": int((time.perf_counter() - t0) * 1000),
             })
             request_id_var.reset(token)

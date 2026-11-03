@@ -237,3 +237,16 @@ def test_place_names_are_ignored_by_the_prose_rule() -> None:
     assert prose_problems(text, names) == []
     assert prose_problems("Hotel 24 Hours is 2 km away", names) == ["distance"]
     assert names_pattern([]) is None
+
+
+async def test_an_underfilled_plan_needs_a_free_time_note(clean: Observation) -> None:
+    obs = mutated(clean)
+    plan = obs.result.plan  # type: ignore[union-attr]
+    assert plan is not None
+    obs.data["available_time"] = 600  # the same plan now covers well under 60% of the window
+    obs.result.warnings = []  # type: ignore[union-attr]
+    plan.summary_note = None
+    assert "plan.uses_window" in failed(evaluate(obs))
+    obs = mutated(obs)
+    obs.result.warnings = ["This plan leaves about 5 h free after 3:30 PM — time to rest or wander nearby."]  # type: ignore[union-attr]
+    assert "plan.uses_window" not in failed(evaluate(obs))

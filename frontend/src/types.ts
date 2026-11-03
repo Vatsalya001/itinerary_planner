@@ -311,6 +311,7 @@ export interface TraceEvent {
 export type FeedbackRating = 'up' | 'down'
 
 export interface EvalRow {
+  coverage?: { cases: number; suite_cases: number; partial: boolean }
   model?: string | null
   kind?: 'baseline' | 'api' | 'local' | string | null
   runs?: number | null

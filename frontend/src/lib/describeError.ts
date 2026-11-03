@@ -46,6 +46,9 @@ export function describeError(error: unknown): ErrorInfo {
       runId: null,
     }
   }
+  if (error instanceof TypeError && 'plannerInterrupted' in error) {
+    return { title: 'The plan was interrupted', message: 'The connection closed before the plan was ready. Please try again.', retryAfter: null, runId: null }
+  }
   if (error instanceof TypeError) {
     return {
       title: "Couldn't reach the planner",

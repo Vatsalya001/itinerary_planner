@@ -34,14 +34,15 @@ SHUTDOWN_GRACE_S = 10
 
 def validation_messages(exc: RequestValidationError) -> list[str]:
     """Field-level messages without echoing the submitted values."""
-    out: list[str] = []
+    allowed = {"city", "budget", "available_time", "mood", "interests", "constraints", "free_text",
+               "currency", "start_time", "neighbourhood", "group_size", "relaxed_constraints", "answers",
+               "rating", "reason", "thread_id"}
+    messages = []
     for err in exc.errors():
-        loc = [str(p) for p in err.get("loc", ())]
-        if loc and loc[0] in {"body", "path", "query", "header"}:
-            loc = loc[1:]
-        msg = str(err.get("msg", "Invalid value"))
-        out.append(f"{'.'.join(loc)}: {msg}" if loc else msg)
-    return out[:20]
+        loc = [str(part) for part in err.get("loc", ()) if str(part) in allowed]
+        field = loc[0] if loc else "request"
+        messages.append(f"{field}: Invalid value or unsupported field")
+    return list(dict.fromkeys(messages))[:20]
 
 
 def resolve_frontend_dist(value: str) -> Path | None:
@@ -153,6 +154,8 @@ def _mount_frontend(app: FastAPI, settings: Settings) -> None:
     @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     async def spa(full_path: str) -> Response:
         if full_path == "api" or full_path.startswith("api/"):
+            return SafeJSONResponse({"detail": "Not Found"}, status_code=404)
+        if any(ord(ch) < 32 for ch in full_path):
             return SafeJSONResponse({"detail": "Not Found"}, status_code=404)
         if full_path:
             target = (dist / full_path).resolve()

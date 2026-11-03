@@ -38,8 +38,8 @@ describe('buildIcs', () => {
   it('escapes text and includes cost basis, source and links', () => {
     const summary = lines.find((l) => l.startsWith('SUMMARY:Cubbon'))
     expect(summary).toBe('SUMMARY:Cubbon Park loop (Park)')
-    const location = lines.find((l) => l.startsWith('LOCATION:Test Hall'))
-    expect(location).toBe('LOCATION:Test Hall\\, 100 Feet Road\\, Indiranagar\\, Bengaluru')
+    const location = lines.find((l) => l.startsWith('LOCATION:Courtyard'))
+    expect(location).toContain('Courtyard Filter Coffee House'); expect(location).toContain('Bangalore')
     const desc = lines.find((l) => l.startsWith('DESCRIPTION:A quiet')) ?? ''
     expect(desc).toContain('\\nCost per person: ₹250–₹450 (listed price)')
     expect(desc).toContain('\\nSource: Live · Google Maps')

@@ -532,3 +532,174 @@ async def test_per_model_turn_cap_reaches_the_model_and_the_loop(monkeypatch: py
     assert result.status == "fallback" and finalize_data(events)["agent_turns"] == 2
     assert any("ran out of turns" in d for d in result.degradations)
     assert_trace_integrity(events)
+
+
+# --- window fill (app.domain.fill contract: fill_window / free_time_note) --------------------------------
+
+
+class _Underfills(ScriptedAgentModel):
+    """Submits the usual plan but with every visit at its minimum length (the live defect: 131 of 240 min)."""
+
+    def _compose(self, prefs: Any, ctx: Any, enforced: Any, ledger: dict[str, Any]) -> Any:
+        from app.domain.validator import duration_bounds
+
+        draft = super()._compose(prefs, ctx, enforced, ledger)
+        if draft is None:
+            return None
+        stops = [s.model_copy(update={"duration_min": duration_bounds(ledger[s.candidate_id])[0]})
+                 for s in draft.stops]
+        return draft.model_copy(update={"stops": stops})
+
+
+def _stub_fill(monkeypatch: pytest.MonkeyPatch, fill: Any, note: Any = None) -> None:
+    import app.graph.nodes.common as common
+
+    monkeypatch.setattr(common, "fill_window", fill)
+    monkeypatch.setattr(common, "free_time_note", note or (lambda plan, ctx: None))
+
+
+def _use_underfilling_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = registry_module.get_chat_model
+
+    def fake_get(model_id: str, purpose: str, settings: Any, *, role: str = "primary") -> Any:
+        if purpose == "agent":
+            return _Underfills(model_id=model_id, role=role)
+        return original(model_id, purpose, settings, role=role)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry_module, "get_chat_model", fake_get)
+
+
+def _to_typical(draft: Any, ledger: Any, ctx: Any, prefs: Any, constraints: Any, travel: Any,
+                target_ratio: float = 0.85) -> Any:
+    """A small, valid stretch: ten more minutes at the first (seated, non-walking) stop."""
+    first = draft.stops[0]
+    stops = [first.model_copy(update={"duration_min": first.duration_min + 10}), *draft.stops[1:]]
+    return draft.model_copy(update={"stops": stops})
+
+
+async def test_accepted_agent_draft_is_filled_and_revalidated(monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_underfilling_model(monkeypatch)
+    _stub_fill(monkeypatch, _to_typical,
+               note=lambda plan, ctx: f"About {ctx.end_min - plan.end_min} min of your window is still free")
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert_trace_integrity(events)
+    assert result.status == "complete" and result.mode == "agent" and result.plan is not None
+    added = finalize_data(events)["filled_minutes"]
+    assert added == 10
+    accepted = next(e for e in events if e.type == "validation" and e.node == "validate_plan")
+    assert accepted.data and accepted.data["filled_minutes"] == added
+    assert any(w.startswith("About ") and "still free" in w for w in result.warnings)
+    assert all("still free" not in s.why for s in result.plan.stops)  # never in model prose
+    assert_plan_sound(result)
+
+
+async def test_a_fill_that_breaks_validation_is_not_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    def too_long(draft: Any, *args: Any, **kwargs: Any) -> Any:
+        return draft.model_copy(update={"stops": [s.model_copy(update={"duration_min": 590}) for s in draft.stops]})
+
+    _use_underfilling_model(monkeypatch)
+    _stub_fill(monkeypatch, too_long)
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert result.status == "complete" and finalize_data(events)["filled_minutes"] == 0
+    assert result.plan is not None and all(s.duration_min < 590 for s in result.plan.stops)
+
+
+async def test_fill_errors_keep_the_submitted_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("fill bug")
+
+    _use_underfilling_model(monkeypatch)
+    _stub_fill(monkeypatch, broken, note=lambda plan, ctx: 1 / 0)
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert result.status == "complete" and finalize_data(events)["filled_minutes"] == 0
+
+
+async def test_checked_draft_salvage_is_filled_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_fill(monkeypatch, _to_typical)
+    original = registry_module.get_chat_model
+
+    class _UnderfillsThenHangs(_Underfills):
+        async def _agenerate(self, messages: list[BaseMessage], stop: list[str] | None = None,
+                             run_manager: Any = None, **kwargs: Any) -> Any:
+            if self.mode == "agent" and sum(isinstance(m, AIMessage) for m in messages) >= 2:
+                await asyncio.sleep(3600)
+            return await super()._agenerate(messages, stop, run_manager, **kwargs)
+
+    def fake_get(model_id: str, purpose: str, settings: Any, *, role: str = "primary") -> Any:
+        if purpose == "agent":
+            return _UnderfillsThenHangs(model_id=model_id, role=role, check_first=True)
+        return original(model_id, purpose, settings, role=role)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry_module, "get_chat_model", fake_get)
+    result, events = await collect(request_for("assignment_example"), make_deps(run_deadline_s=16))
+    assert result.status == "complete" and result.mode == "agent"
+    salvage = next(e for e in events if e.type == "validation" and (e.data or {}).get("source") == "agent_checked_draft")
+    assert salvage.data and salvage.data["filled_minutes"] > 0
+    assert finalize_data(events)["filled_minutes"] == salvage.data["filled_minutes"]
+    assert_plan_sound(result)
+
+
+async def test_real_fill_module_lengthens_an_underfilled_agent_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_underfilling_model(monkeypatch)
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert result.status == "complete" and result.mode == "agent" and result.plan is not None
+    added = finalize_data(events)["filled_minutes"]
+    assert added > 0  # minimum-length visits (179 of 240 min) were stretched by code, with no model call
+    totals = result.plan.totals
+    assert totals.elapsed_min >= 179 + added and totals.elapsed_min <= totals.available_minutes
+    assert finalize_data(events)["agent_turns"] == 2
+    assert_plan_sound(result)
+
+
+class _KeepsSearching(ScriptedAgentModel):
+    """Searches on every turn while search tools are bound (the live "ran out of turns" pattern)."""
+
+    def _agent_reply(self, messages: list[BaseMessage]) -> Any:
+        from app.graph.prompts import context_from_payload, read_payload
+
+        if "search_places" not in self.tool_names:
+            return super()._agent_reply(messages)
+        payload = read_payload(messages)
+        assert payload is not None
+        prefs, ctx, _ = context_from_payload(payload)
+        turn = sum(isinstance(m, AIMessage) for m in messages) + 1
+        return self._search_turn(prefs, ctx, payload, turn)
+
+
+async def test_last_turn_binds_only_submit_plan_and_the_agent_still_submits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.graph.prompts import FINAL_TURN_TEXT
+
+    seen: list[tuple[tuple[str, ...], str]] = []
+    original = registry_module.get_chat_model
+
+    class _Recording(_KeepsSearching):
+        def _agent_reply(self, messages: list[BaseMessage]) -> Any:
+            seen.append((tuple(self.tool_names), str(messages[-1].content)))
+            return super()._agent_reply(messages)
+
+    def fake_get(model_id: str, purpose: str, settings: Any, *, role: str = "primary") -> Any:
+        if purpose == "agent":
+            return _Recording(model_id=model_id, role=role)
+        return original(model_id, purpose, settings, role=role)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry_module, "get_chat_model", fake_get)
+    result, events = await collect(request_for("assignment_example"), make_deps(max_agent_turns=3))
+    assert_trace_integrity(events)
+    assert result.status == "complete" and result.mode == "agent" and not result.degradations
+    assert [len(names) > 1 for names, _ in seen] == [True, True, False]
+    assert seen[-1] == (("submit_plan",), FINAL_TURN_TEXT)
+    finals = [(e.data or {}).get("final_turn") for e in events if e.type == "node_completed" and e.node == "plan_agent"]
+    assert finals == [False, False, True]
+    assert finalize_data(events)["agent_turns"] == 3
+    assert_plan_sound(result)
+
+
+async def test_text_on_the_last_turn_goes_straight_to_the_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    search = AIMessage(content="", tool_calls=[_call("search_places", {"queries": [
+        {"intent": "quiet vegetarian cafe", "category": "cafe"}], "reason": "find a cafe"}, "s")])
+    _use_model(monkeypatch, [search, AIMessage(content="Nothing fits, sorry.")])
+    result, events = await collect(request_for("assignment_example"), make_deps(max_agent_turns=2))
+    assert finalize_data(events)["agent_turns"] == 2 and finalize_data(events)["nudges"] == 0
+    assert result.status == "fallback"
+    assert any("didn't submit" in d for d in result.degradations)
+    assert_trace_integrity(events)

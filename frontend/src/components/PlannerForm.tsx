@@ -80,6 +80,8 @@ export function PlannerForm({
 }) {
   const [open, setOpen] = useState(false)
   const [customInterest, setCustomInterest] = useState('')
+  const [knownInterests, setKnownInterests] = useState<string[]>([])
+  const detailsOpen = open || Object.keys(errors).length > 0
   const uid = useId()
   const id = (name: string) => `${uid}-${name}`
   const textMode = form.freeText.trim() !== ''
@@ -97,12 +99,13 @@ export function PlannerForm({
     const v = customInterest.trim().slice(0, LIMITS.interest)
     if (!v) return
     if (!form.interests.some((i) => i.toLowerCase() === v.toLowerCase())) set('interests', [...form.interests, v], 'interests')
+    setKnownInterests((items) => [...new Set([...items, v])])
     setCustomInterest('')
   }
 
   const toggleConstraint = (tid: ToggleId) => onChange(toggledConstraint(form, tid), 'constraints')
 
-  const interestChoices = [...INTEREST_PRESETS, ...form.interests.filter((i) => !INTEREST_PRESETS.includes(i))]
+  const interestChoices = [...new Set([...INTEREST_PRESETS, ...form.interests, ...knownInterests])]
   const durationChoices = DURATION_OPTIONS.some((d) => String(d.minutes) === form.availableMinutes)
     ? DURATION_OPTIONS
     : [...DURATION_OPTIONS, { minutes: Number(form.availableMinutes), label: fmtDuration(Number(form.availableMinutes)) }]
@@ -149,15 +152,15 @@ export function PlannerForm({
         <button
           type="button"
           className="inline-flex items-center gap-1 rounded-lg py-1 text-sm font-semibold text-orange-800 hover:text-orange-900"
-          aria-expanded={open}
+          aria-expanded={detailsOpen}
           aria-controls={id('details')}
           onClick={() => setOpen((o) => !o)}
         >
-          <Icon name="chevronDown" className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
-          {open ? 'Hide the details' : 'Fine-tune the details'}
+          <Icon name="chevronDown" className={`h-4 w-4 transition-transform ${detailsOpen ? 'rotate-180' : ''}`} />
+          {detailsOpen ? 'Hide the details' : 'Fine-tune the details'}
         </button>
 
-        <div id={id('details')} hidden={!open} className="mt-3 space-y-5">
+        <div id={id('details')} hidden={!detailsOpen} className="mt-3 space-y-5">
           <p className="rounded-xl bg-stone-50 p-3 text-sm text-stone-700">
             {textMode
               ? 'Fields you change here override what the planner reads from your description. Clear the description to plan from these fields alone.'
@@ -270,6 +273,7 @@ export function PlannerForm({
                 max={LIMITS.groupMax}
                 value={form.groupSize}
                 aria-invalid={errors.groupSize ? true : undefined}
+                aria-describedby={errors.groupSize ? `${id('group')}-error` : undefined}
                 onChange={(e) => set('groupSize', e.target.value, 'groupSize')}
               />
             </Field>
@@ -415,7 +419,7 @@ export function PlannerForm({
           )}
         </button>
         {busy ? (
-          <button type="button" className={btnSecondary} onClick={onCancel}>
+          <button type="button" className={btnSecondary} onClick={() => { onCancel(); document.getElementById(id('free'))?.focus() }}>
             Stop
           </button>
         ) : null}

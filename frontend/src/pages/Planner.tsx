@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { postPlan, resumePlan } from '../api/sse'
+import { ApiError } from '../api/errors'
 import { ClarificationCard } from '../components/ClarificationCard'
 import { ErrorCard } from '../components/ErrorCard'
 import { InfeasibleCard } from '../components/InfeasibleCard'
@@ -24,7 +25,8 @@ import { runStatusText } from '../lib/runStatus'
 import { shareUrlFor } from '../lib/urls'
 import type { PlanRequest, PlanResult, Relaxation } from '../types'
 
-export default function Planner() {
+export default function Planner({ active = true }: { active?: boolean }) {
+  const Heading = active ? 'h1' : 'h2'
   useDocumentTitle('Perfect Saturday Planner')
   const [form, setForm] = useState<FormState>(defaultFormState)
   const [dirty, setDirty] = useState<DirtyFields>({})
@@ -63,6 +65,7 @@ export default function Planner() {
 
   const onChange = (next: FormState, field?: FieldKey) => {
     setForm(next)
+    if (!field && next.freeText !== form.freeText) setDirty({})
     if (field) setDirty((d) => (d[field] ? d : { ...d, [field]: true }))
   }
 
@@ -82,6 +85,8 @@ export default function Planner() {
   }
 
   const onAnswer = (threadId: string, answers: Record<string, string>) => {
+    const existing = lastRequest.current ?? {}
+    lastRequest.current = { ...existing, free_text: [existing.free_text, ...Object.values(answers)].filter(Boolean).join('. ') }
     start((onEvent, signal) => resumePlan(threadId, answers, onEvent, signal), false)
   }
 
@@ -104,7 +109,7 @@ export default function Planner() {
         {runStatusText(phase, resumed, trace.steps.length > 0)}
       </p>
       <div className="space-y-2">
-        <h1 className="text-3xl font-bold tracking-tight text-stone-900 sm:text-4xl">Plan a Saturday that fits how you feel</h1>
+        <Heading className="text-3xl font-bold tracking-tight text-stone-900 sm:text-4xl">Plan a Saturday that fits how you feel</Heading>
         <p className="max-w-2xl text-stone-700">
           Tell me how you feel and what you've got. You get real places, real clock times and the weather, a reason for
           every stop, and honesty about what couldn't be checked.
@@ -127,13 +132,13 @@ export default function Planner() {
         textareaRef={textarea}
       />
 
-      {result?.preferences && result.status !== 'rejected' ? <PreferencesSummary prefs={result.preferences} /> : null}
+      {result?.preferences && result.status !== 'rejected' ? <PreferencesSummary prefs={result.preferences} provisional={result.status === 'needs_clarification'} /> : null}
 
       <TracePanel trace={trace} running={busy} startedAt={phase.kind === 'running' ? phase.startedAt : null} />
 
 
       {phase.kind === 'error' ? (
-        <ErrorCard {...describeError(phase.error)} onRetry={onRetry} headingRef={resultHeading} />
+        <ErrorCard {...describeError(phase.error)} onRetry={phase.error instanceof ApiError && [400, 413, 422].includes(phase.error.status) ? undefined : onRetry} headingRef={resultHeading} />
       ) : null}
 
       {result ? (
@@ -145,6 +150,7 @@ export default function Planner() {
           onAnswer={onAnswer}
           onRelax={onRelax}
           onPlanAgain={onPlanAgain}
+          onRetry={onRetry}
         />
       ) : null}
     </div>
@@ -159,6 +165,7 @@ function ResultView({
   onAnswer,
   onRelax,
   onPlanAgain,
+  onRetry,
 }: {
   result: PlanResult
   busy: boolean
@@ -167,6 +174,7 @@ function ResultView({
   onAnswer: (threadId: string, answers: Record<string, string>) => void
   onRelax: (r: Relaxation) => void
   onPlanAgain: () => void
+  onRetry: () => void
 }) {
   switch (result.status) {
     case 'complete':
@@ -216,7 +224,8 @@ function ResultView({
     default:
       return (
         <ErrorCard
-          title="I can't plan that"
+          title={/something went wrong|planning took too long/i.test(result.message ?? '') ? 'The plan was interrupted' : "I can't plan that"}
+          onRetry={/something went wrong|planning took too long/i.test(result.message ?? '') ? onRetry : undefined}
           message={
             result.message ||
             result.violations.find((v) => v.severity === 'error')?.message ||

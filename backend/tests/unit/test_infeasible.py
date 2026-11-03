@@ -28,7 +28,7 @@ def test_impossible_budget_offers_cheapest_budget():
     budget_fix = [r for r in report.relaxations if "budget" in r.patch]
     assert budget_fix
     assert budget_fix[0].label == f"Raise budget to ₹{report.cheapest_budget}"
-    assert budget_fix[0].patch == {"budget": report.cheapest_budget}
+    assert budget_fix[0].patch == {"budget": report.cheapest_budget, "currency": "INR"}
     assert str(report.cheapest_budget) in report.reason
     # applying the one-tap fix yields a valid plan with every constraint still enforced
     fixed = prefs.model_copy(update={"budget": report.cheapest_budget})
@@ -92,7 +92,7 @@ def test_late_start_suggests_default_start():
 
 def test_no_candidates():
     report = explain_infeasible([], make_ctx(), make_prefs(), [], travel)
-    assert "No places" in report.reason
+    assert "place data" in report.reason
     assert report.relaxations == []
 
 
@@ -163,6 +163,6 @@ def test_empty_pool_with_a_small_budget_offers_a_budget_raise():
     prefs = make_prefs(budget=15, currency="GBP", city="London")
     report = explain_infeasible([], ctx, prefs, [], travel)
     assert "no places or events were found" not in report.reason.lower()
-    assert report.relaxations and report.relaxations[0].patch == {"budget": 40, "currency": "GBP"}
+    assert report.relaxations == []  # absent data cannot justify promising a higher budget will work
     plain = explain_infeasible([], ctx, make_prefs(budget=None, currency="GBP", city="London"), [], travel)
-    assert "No places" in plain.reason
+    assert "place data" in plain.reason

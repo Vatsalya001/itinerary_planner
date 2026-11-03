@@ -142,6 +142,7 @@
     "No duplicate stops",
     "Recomputed worst-case cost (stops + legs + 10% contingency) is within budget, in the budget's currency",
     "Recomputed elapsed time (stops + legs + buffers) is within the available window",
+    "The plan uses at least 60% of a window of 90+ minutes, or says how much free time it leaves",
     "Every stop is inside known opening hours, or carries an 'hours unverified' label",
     "Every original hard constraint is satisfied with positive evidence, or the status is neither complete nor fallback",
     "Pacing limits for the parsed energy level hold",

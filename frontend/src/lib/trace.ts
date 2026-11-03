@@ -57,13 +57,13 @@ const NODE_LABELS: Record<string, string> = {
   parse_preferences: 'Read what you asked for',
   check_clarity: 'Checked whether anything was unclear',
   ask_clarification: 'Asked you a quick question',
-  resolve_location: 'Found the city',
+  resolve_location: 'City lookup finished',
   build_context: 'Set up the day: weather, time window and pacing',
   plan_agent: 'Agent chose the next step',
   validate_plan: 'Checked budget, time, opening hours, diet and more',
   fallback_planner: 'Built a backup plan without the AI model',
   explain_infeasible: 'Worked out what blocked a plan',
-  finalize: 'Saved the plan',
+  finalize: 'Prepared the result',
 }
 
 const NODE_RUNNING_LABELS: Record<string, string> = {
@@ -360,8 +360,9 @@ export function reduceTrace(state: TraceState, ev: TraceEvent): TraceState {
   }
 }
 
-export type TraceAction = { type: 'event'; event: TraceEvent } | { type: 'reset' }
+export type TraceAction = { type: 'event'; event: TraceEvent } | { type: 'reset' } | { type: 'stop' }
 
 export function traceReducer(state: TraceState, action: TraceAction): TraceState {
+  if (action.type === 'stop') return { ...state, finished: true, steps: state.steps.map((s) => s.status === 'running' ? { ...s, status: 'info' as const } : s) }
   return action.type === 'reset' ? initialTrace : reduceTrace(state, action.event)
 }

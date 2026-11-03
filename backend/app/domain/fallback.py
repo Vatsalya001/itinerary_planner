@@ -49,6 +49,7 @@ from app.domain.evidence import (
     opening_status,
     satisfies_include,
 )
+from app.domain.fill import fill_window
 from app.domain.schedule import plan_currency
 from app.domain.schemas import (
     Candidate,
@@ -397,6 +398,8 @@ class Planner:
             start = c.event_start_min
         else:
             start = arrival
+        if is_outdoor(c) and is_walking_stop(c) and ctx.weather.sunrise_min is not None:
+            start = max(start, ctx.weather.sunrise_min)
         end = start + dur
         if end - ctx.start_min > self.limit or end > ctx.end_min:
             return None
@@ -408,8 +411,11 @@ class Planner:
         if self.crowd_avoid and likely_busy(c, start, end):
             return None
         walking_stop = is_walking_stop(c)
-        if self.sunset is not None and walking_stop and is_outdoor(c) and end > self.sunset:
-            return None
+        if walking_stop and is_outdoor(c):
+            if self.sunset is not None and end > self.sunset:
+                return None
+            if ctx.weather.sunrise_min is not None and start < ctx.weather.sunrise_min:
+                return None
         full_meals = node.full_meals if node else ()
         early_meals = node.early_meals if node else 0
         if is_full_meal(c):
@@ -573,14 +579,14 @@ class Planner:
         complete: dict[tuple[int, ...], _Node] = {}
         frontier: list[_Node | None] = [None]
         for _depth in range(self.pacing.max_stops):
-            children: dict[tuple[frozenset[int], int], _Node] = {}
+            children: dict[tuple[frozenset[int], int, int], _Node] = {}
             for node in frontier:
                 for j in range(len(self.pool)):
                     for dur in self._duration_options(self.pool[j], objective):
                         child = self._extend_into_meal(node, j, dur)
                         if child is None:
                             continue
-                        key = (frozenset(child.idx), j)
+                        key = (frozenset(child.idx), j, child.end)
                         prev = children.get(key)
                         if prev is None or self._rank_key(child, objective) < self._rank_key(prev, objective):
                             children[key] = child
@@ -635,10 +641,33 @@ class Planner:
         results: list[SearchResult] = []
         for draft in drafts[:MAX_VALIDATIONS]:
             report = validate_plan(draft, self.ledger, self.ctx, self.validation_prefs, self.constraints, self.travel)
+            if any(v.code == "PLAN_B_INVALID" for v in report.errors):
+                shorter = draft.model_copy(update={"stops": [
+                    s.model_copy(update={"duration_min": duration_bounds(self.ledger[s.candidate_id])[0]})
+                    if self.ledger[s.candidate_id].kind != "event" else s for s in draft.stops]})
+                repaired = validate_plan(shorter, self.ledger, self.ctx, self.validation_prefs, self.constraints, self.travel)
+                if repaired.ok:
+                    draft, report = shorter, repaired
+                elif any(c.key in {"must_include:outdoor_walk", "setting:outdoors_only"} for c in self.constraints):
+                    # An indoor substitution cannot fulfill an explicitly required outdoor activity.
+                    draft = draft.model_copy(update={"stops": [s.model_copy(update={
+                        "plan_b_candidate_id": None,
+                        "tradeoff": "Rain may make this outdoor stop unsuitable; no compatible indoor alternative is verified."
+                    }) if s.plan_b_candidate_id else s for s in draft.stops]})
+                    report = validate_plan(draft, self.ledger, self.ctx, self.validation_prefs, self.constraints, self.travel)
+            if report.ok and objective == "best" and any(v.code == "UNDERFILLED" for v in report.violations):
+                filled = fill_window(draft, self.ledger, self.ctx, self.validation_prefs, self.constraints,
+                                     self.travel)  # same bar the validator applies to agent plans
+                if filled is not draft:
+                    draft = filled
+                    report = validate_plan(draft, self.ledger, self.ctx, self.validation_prefs, self.constraints,
+                                           self.travel)
             if report.ok:
                 results.append(SearchResult(draft, report))
                 if len(results) >= max_results:
                     break
+        if not results and objective == "best":
+            return self.search("shortest", max_results)
         return results
 
     def _missing_plan_b(self, draft: PlanDraft) -> int:

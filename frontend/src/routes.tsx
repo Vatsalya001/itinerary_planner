@@ -1,7 +1,6 @@
 import type { RouteObject } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import NotFound from './pages/NotFound'
-import Planner from './pages/Planner'
 import SharedPlan from './pages/SharedPlan'
 
 export const routes: RouteObject[] = [
@@ -13,7 +12,7 @@ export const routes: RouteObject[] = [
       </p>
     ),
     children: [
-      { path: '/', element: <Planner /> },
+      { path: '/', element: null },
       { path: '/p/:id', element: <SharedPlan /> },
       // Secondary pages load on demand to keep the planner's first load small.
       { path: '/evals', lazy: () => import('./pages/EvalsLeaderboard').then((m) => ({ Component: m.default })) },

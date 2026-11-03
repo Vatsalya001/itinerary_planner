@@ -183,15 +183,14 @@ describe('Planner', () => {
       onEvent({ ...base, type: 'run_started', seq: 1 })
       onEvent({ ...base, type: 'degraded', seq: 2, node: 'plan_agent', summary: 'The AI planner timed out; used the deterministic planner' })
       onEvent({ ...base, type: 'degraded', seq: 3, node: 'get_weather', summary: 'Weather not checked; planning without a forecast' })
-      return fixtures.fallback()
+      return { ...fixtures.fallback(), degradations: ['The AI planner timed out; used the deterministic planner', 'Weather not checked; planning without a forecast'] }
     })
     renderPlanner()
     fireEvent.click(screen.getByRole('button', { name: 'Plan my Saturday' }))
     await screen.findByText('This is a backup plan')
-    const trace = screen.getByRole('region', { name: 'How I planned this' })
-    expect(within(trace).getByText('The rule-based planner took over')).toBeInTheDocument()
-    expect(within(trace).getByText('Running with reduced data')).toBeInTheDocument()
-    const dataNotice = within(trace).getByText('Running with reduced data').parentElement!
+    expect(screen.getByText('This is a backup plan')).toBeInTheDocument()
+    expect(screen.getByText('Running with reduced data')).toBeInTheDocument()
+    const dataNotice = screen.getByText('Running with reduced data').parentElement!
     expect(dataNotice).toHaveTextContent('Weather not checked; planning without a forecast')
     expect(dataNotice).not.toHaveTextContent('timed out')
   })

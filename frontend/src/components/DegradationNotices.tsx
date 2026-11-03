@@ -2,7 +2,7 @@ import { DEGRADATION_NOTES, DEGRADATION_TITLES, classifyDegradation, type Degrad
 import type { Degradation } from '../lib/trace'
 import { Notice } from './ui'
 
-const ORDER: DegradationKind[] = ['planner', 'model', 'parser', 'data']
+const ORDER: DegradationKind[] = ['planner', 'checked', 'model', 'parser', 'data']
 
 /**
  * One notice per kind of degradation, so a model timeout never reads as "reduced data" and vice versa.

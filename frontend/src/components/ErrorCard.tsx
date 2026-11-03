@@ -41,7 +41,7 @@ export function ErrorCard({
       </h2>
       <p className="mt-2 text-sm text-stone-800">{message}</p>
       {retryAfter !== null ? (
-        <p className="mt-1 text-sm text-stone-800" aria-live="polite">
+        <p className="mt-1 text-sm text-stone-800">
           {left > 0 ? `Try again in ${left} ${left === 1 ? 'second' : 'seconds'}.` : 'You can try again now.'}
         </p>
       ) : null}

@@ -25,7 +25,7 @@ async def build_context(state: PlannerState, runtime: Runtime[RunContext]) -> di
     matches = get_matches(state) or []
     location = matches[0]
     degradations: list[str] = []
-    extra: list[str] = []
+    extra: list[str] = list(state.get("extra_assumptions") or [])
     with tracer.node("build_context") as info:
         prefs = apply_defaults(get_parse(state), location)
         ctx, ctx_degradations = await pipeline_build_context(prefs, location, rc.deps, tracer, rc.deps.now())

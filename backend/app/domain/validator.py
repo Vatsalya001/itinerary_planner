@@ -18,6 +18,9 @@ Codes added beyond the original list:
   that are not events with times: they are only a plan when something is on.
 * ``PROSE_NUMERIC_CLAIM`` also covers distances ("2.2 km", "500 m", "a 2km walk", "half a kilometre"); leg
   distances are shown from data. It ignores place names from the ledger ("Midnight Scoops" is a name, not a time).
+* ``UNDERFILLED`` (warning): elapsed time under 60% of a window of 90+ minutes, unless opening hours, events or
+  sunset leave no stop room to run longer (see ``hours_bound_room``). ``app.domain.fill.fill_window`` stretches
+  durations to fix it; shown under the "time" check as "Uses X of Y min; about Z left free".
 * ``IDLE_WAIT`` (warning): a stop starts more than ``IDLE_WAIT_MIN`` minutes after the arrival time (waiting
   for an event); shown under the "time" check.
 * ``PACING_RELAXED`` (warning): under ``setting:outdoors_only`` with no seated outdoor candidate in the ledger,
@@ -35,6 +38,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+from itertools import product
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -48,6 +52,7 @@ from app.domain.evidence import (
     candidate_allowed,
     category_info,
     check_constraint,
+    closes_at,
     event_window,
     has_approx_location,
     is_food_stop,
@@ -71,6 +76,7 @@ from app.domain.schemas import (
     WorldContext,
 )
 from app.domain.sun import effective_sunset
+from app.domain.timeutil import fmt_duration
 from app.domain.travel import coords_valid, haversine_km
 from app.providers.base import TravelEstimator
 
@@ -107,11 +113,15 @@ CODES: dict[str, str] = {
     "PACING_RELAXED": "Low-energy seated-stop rule waived for 'outdoors only' (no seated outdoor options) (warning)",
     "LOCATION_APPROXIMATE": "Stop or Plan B has no real coordinates; venue location and legs are estimates (warning)",
     "IDLE_WAIT": "A stop starts more than 20 minutes after you arrive, e.g. waiting for an event (warning)",
+    "UNDERFILLED": "The plan uses less than 60% of a window of 90+ minutes while stops could run longer (warning)",
 }
 
 WARNING_CODES = {"HOURS_UNVERIFIED", "WEATHER_RISK", "CONSTRAINT_DROPPED", "ALCOHOL_SERVED", "PACING_RELAXED",
-                 "LOCATION_APPROXIMATE", "IDLE_WAIT"}
+                 "LOCATION_APPROXIMATE", "IDLE_WAIT", "UNDERFILLED"}
 IDLE_WAIT_MIN = 20
+UNDERFILL_RATIO = 0.6
+UNDERFILL_MIN_WINDOW = 90
+STRETCH_ROOM_MIN = 15
 CITY_RADIUS_KM = 40.0
 EVENT_MIN_MINUTES = 30
 
@@ -308,6 +318,34 @@ def seated_rule_waived(constraints: list[Constraint], ledger: Mapping[str, Candi
     )
 
 
+def hours_bound_room(plan: CanonicalPlan, ctx: WorldContext) -> list[int]:
+    """Per stop, how many minutes it could run longer before closing time, its event's end, sunset (outdoor
+    walks) or the end of the window. Ignores the duration cap: that limit can be worked around by adding stops."""
+    sunset = effective_sunset(ctx)
+    rooms = []
+    for s in plan.stops:
+        c = s.candidate
+        if c.kind == "event":
+            rooms.append(0)
+            continue
+        limit = ctx.end_min
+        close = closes_at(c, s.start_min, s.end_min)
+        if close is not None:
+            limit = min(limit, close)
+        if sunset is not None and is_outdoor(c) and is_walking_stop(c):
+            limit = min(limit, sunset)
+        rooms.append(max(0, limit - s.end_min))
+    return rooms
+
+
+def underfilled(plan: CanonicalPlan, ctx: WorldContext, prefs: Preferences) -> bool:
+    """UNDERFILLED: under 60% of a 90+ minute window used, unless hours/events/sunset leave no stop any room."""
+    available = prefs.available_minutes
+    if available < UNDERFILL_MIN_WINDOW or plan.totals.elapsed_min >= UNDERFILL_RATIO * available:
+        return False
+    return any(room >= STRETCH_ROOM_MIN for room in hours_bound_room(plan, ctx))
+
+
 def _constraint_covered(orig: Constraint, parsed: list[Constraint]) -> bool:
     if orig in parsed:
         return True
@@ -413,6 +451,8 @@ def _scheduled_checks(plan: CanonicalPlan, draft: PlanDraft, ledger: Mapping[str
                 if chk.code is not None:
                     out.append(_err(chk.code, chk.message, i, c.id))
         outdoor = is_outdoor(c)
+        if outdoor and is_walking_stop(c) and ctx.weather.sunrise_min is not None and s.start_min < ctx.weather.sunrise_min:
+            out.append(_err("DAYLIGHT_CONFLICT", f"The outdoor walk at {c.name} would start before sunrise", i, c.id))
         if sunset is not None and outdoor and is_walking_stop(c) and s.end_min > sunset:
             note = "" if ctx.weather.sunset_min is not None else " (computed sunset; weather unavailable)"
             out.append(_err("DAYLIGHT_CONFLICT", f"The outdoor walk at {c.name} would end after sunset{note}", i, c.id))
@@ -450,6 +490,11 @@ def _scheduled_checks(plan: CanonicalPlan, draft: PlanDraft, ledger: Mapping[str
                         f"The plan takes {totals.elapsed_min} min but only {prefs.available_minutes} min are free"))
     elif plan.end_min > ctx.end_min:
         out.append(_err("TIME_EXCEEDED", "The plan ends after the end of your window"))
+    elif underfilled(plan, ctx, prefs):
+        free = prefs.available_minutes - totals.elapsed_min
+        out.append(_err("UNDERFILLED",
+                        f"The plan uses only {totals.elapsed_min} of {prefs.available_minutes} min; about "
+                        f"{fmt_duration(free)} of your window is left free. Stay longer at a stop or add one"))
 
     energy = pacing.energy.value
     n = len(plan.stops)
@@ -510,6 +555,27 @@ def validate_plan(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: WorldC
     if plan is not None:
         late_events = {v.stop_index for v in schedule_violations if v.code == "HOURS_CONFLICT" and v.stop_index is not None}
         violations.extend(_scheduled_checks(plan, draft, ledger, ctx, prefs, constraints, late_events))
+        alternatives = [s.plan_b_candidate_id for s in draft.stops]
+        if any(alternatives):
+            # At most eight stops: exhaustively check each combination of rain substitutions.
+            # Remove Plan B references to make recursive validation finite.
+            options = [[s.candidate_id, s.plan_b_candidate_id] if s.plan_b_candidate_id else [s.candidate_id]
+                       for s in draft.stops]
+            main_ids = tuple(s.candidate_id for s in draft.stops)
+            for ids in product(*options):
+                if ids == main_ids:
+                    continue
+                switched = draft.model_copy(update={"stops": [
+                    s.model_copy(update={"candidate_id": cid, "plan_b_candidate_id": None,
+                                         "duration_min": max(duration_bounds(ledger[cid])[0],
+                                                             min(s.duration_min, duration_bounds(ledger[cid])[1]))
+                                         if cid in ledger else s.duration_min})
+                    for s, cid in zip(draft.stops, ids, strict=True)]})
+                checked = validate_plan(switched, ledger, ctx, prefs, original_constraints, travel)
+                if not checked.ok:
+                    violations.append(_err("PLAN_B_INVALID", "The indoor alternative route does not fit: "
+                                           + ", ".join(sorted({v.code for v in checked.errors}))))
+                    break
         for v in violations:
             if v.severity == "warning" and v.stop_index is not None and v.stop_index < len(plan.stops):
                 stop_warnings = plan.stops[v.stop_index].warnings
@@ -565,11 +631,14 @@ def summarize_checks(report: ValidationReport, ctx: WorldContext, prefs: Prefere
     else:
         t = plan.totals
         detail = f"Uses {t.elapsed_min} of {t.available_minutes} min including travel and buffers"
+        if "UNDERFILLED" in codes:
+            detail = (f"Uses {t.elapsed_min} of {t.available_minutes} min; about "
+                      f"{fmt_duration(t.available_minutes - t.elapsed_min)} left free")
         if "IDLE_WAIT" in codes:
             detail += "; " + codes["IDLE_WAIT"][0].message[0].lower() + codes["IDLE_WAIT"][0].message[1:]
         if "PACING_RELAXED" in codes:
             detail += "; no seated stop because nothing seated is outdoors"
-        warn = "PACING_RELAXED" in codes or "IDLE_WAIT" in codes
+        warn = bool({"PACING_RELAXED", "IDLE_WAIT", "UNDERFILLED"} & set(codes))
         items.append(CheckItem(name="time", status="warn" if warn else "pass", detail=detail))
     # opening hours
     if "HOURS_CONFLICT" in codes:

@@ -13,6 +13,7 @@ only. Callers still fall back to the snapshot, so users get a plan and operators
 from __future__ import annotations
 
 import logging
+import math
 import re
 from datetime import UTC, date, datetime
 from typing import Any, Literal
@@ -224,7 +225,7 @@ def google_hours_for_date(regular: dict[str, Any] | None, current: dict[str, Any
 # ---------------------------------------------------------------------------
 
 
-def _units(money: Any) -> int | None:
+def _units(money: Any, *, upper: bool = False) -> int | None:
     """Whole units of a google.type.Money; None when absent; MalformedPlace when malformed or negative."""
     if money is None:
         return None
@@ -233,7 +234,10 @@ def _units(money: Any) -> int | None:
     raw = money.get("units", "0")
     if isinstance(raw, bool) or not isinstance(raw, str | int) or not re.fullmatch(r"\d{1,9}", str(raw)):
         raise MalformedPlace("bad money units")
-    return int(raw)
+    nanos = money.get("nanos", 0)
+    if isinstance(nanos, bool) or not isinstance(nanos, int) or not 0 <= nanos < 1_000_000_000:
+        raise MalformedPlace("bad money nanos")
+    return int(raw) + (1 if upper and nanos else 0)
 
 
 def _cost(place: dict[str, Any], key: str, currency: str) -> CostRange:
@@ -244,14 +248,14 @@ def _cost(place: dict[str, Any], key: str, currency: str) -> CostRange:
         raise MalformedPlace("bad priceRange")
     if isinstance(pr, dict):
         start, end = pr.get("startPrice"), pr.get("endPrice")
-        lo, hi = _units(start), _units(end)
+        lo, hi = _units(start), _units(end, upper=True)
         cur = start.get("currencyCode") if isinstance(start, dict) else None
         if lo is not None and cur == currency:
             if hi is None or not isinstance(end, dict) or end.get("currencyCode") != currency:
                 # open-ended range ("2000+"): use the band or category upper bound, never below lo. A bound from
                 # another currency (no band table for this one) is never mixed in; the range is then unusable.
                 fallback = price_level_band(place.get("priceLevel"), currency) or category_default_cost(key, currency)
-                hi = max(lo, fallback.max) if fallback.currency == currency else None
+                hi = fallback.max if fallback.max > lo else math.ceil(lo * 1.5) if fallback.currency == currency else None
             if hi is not None:
                 if hi < lo:
                     raise MalformedPlace("inverted priceRange")

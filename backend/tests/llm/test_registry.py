@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.runnables import RunnableWithFallbacks
+from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
 
 from app.deps import fixture_settings
@@ -128,9 +128,9 @@ def test_model_chain_and_fallbacks() -> None:
     assert model_chain(settings, "baseline:deterministic") == ["baseline:deterministic"]
     assert model_chain(fixture_settings(primary_model="fake:agent")) == ["fake:agent"]
     runnable = build_agent_runnable(model_chain(settings), tool_schemas(), settings)
-    assert isinstance(runnable, RunnableWithFallbacks)
+    assert isinstance(runnable, Runnable)
     structured = build_structured_runnable(model_chain(settings), LLMParse, settings)
-    assert isinstance(structured, RunnableWithFallbacks)
+    assert isinstance(structured, Runnable)
 
 
 def test_models_are_cached_per_purpose_and_fault() -> None:

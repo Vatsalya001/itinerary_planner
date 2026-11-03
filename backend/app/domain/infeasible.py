@@ -28,7 +28,6 @@ from app.domain.constraints import merge_constraints
 from app.domain.evidence import MEAL_EARLY_MIN, candidate_allowed
 from app.domain.fallback import SearchResult, search_plans
 from app.domain.pacing import MEAL_WINDOWS, meal_windows_between, profile_for
-from app.domain.parser_rules import DEFAULT_BUDGETS
 from app.domain.schedule import plan_currency
 from app.domain.schemas import (
     Candidate,
@@ -132,18 +131,8 @@ def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs
     unique = list({c.id: c for c in candidates}.values())
 
     if not unique:
-        default = DEFAULT_BUDGETS.get(plan_currency(ctx, prefs))
-        if prefs.budget is not None and default is not None and prefs.budget < default:
-            # searches filter by price for small budgets: an empty pool means nothing affordable, not nothing at all
-            return InfeasibleReport(
-                reason=(f"Nothing affordable turned up in {ctx.location.name} for a budget of {sym}{prefs.budget}; "
-                        "places there may simply cost more. A higher budget would let the search include them."),
-                binding_constraints=["budget"],
-                relaxations=[Relaxation(label=f"Raise budget to {sym}{default}",
-                                        patch={"budget": default, "currency": plan_currency(ctx, prefs)})],
-            )
         return InfeasibleReport(
-            reason=f"No places or events were found for {ctx.location.name}, so no plan could be built.",
+            reason=f"No suitable place data is available for {ctx.location.name}. Try another city or retry the search.",
         )
 
     baseline = search_plans(unique, ctx, prefs, enforced, travel)
@@ -169,7 +158,7 @@ def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs
     if budget is not None and cheapest_budget is not None and cheapest_budget > budget:
         binding.append("budget")
         relaxations.append(Relaxation(label=f"Raise budget to {sym}{cheapest_budget}",
-                                      patch={"budget": cheapest_budget}))
+                                      patch={"budget": cheapest_budget, "currency": plan_currency(ctx, prefs)}))
     if min_minutes is not None and min_minutes > prefs.available_minutes:
         binding.append("time")
         relaxations.append(Relaxation(label=f"Allow {fmt_duration(min_minutes)}",

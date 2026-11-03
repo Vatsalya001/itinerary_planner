@@ -66,7 +66,7 @@ test.describe('planner, brief example', () => {
     await expect(page.getByText(/\d+ steps, \d+ tool calls/)).toBeVisible()
     await page.getByRole('button', { name: 'Show steps' }).click()
     await expect(page.locator('code', { hasText: 'search_places' }).first()).toBeVisible()
-    await expect(page.locator('code', { hasText: 'check_plan' }).first()).toBeVisible()
+    await expect(page.locator('code', { hasText: 'submit_plan' }).first()).toBeVisible()
     await expect(page.getByText("Agent's note:").first()).toBeVisible()
     await expect(page.getByText('Plan passed the checks')).toBeVisible()
 

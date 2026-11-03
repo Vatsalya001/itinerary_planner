@@ -223,6 +223,8 @@ export function weatherDetails(w: WeatherLike): string {
 /** One line describing the weather, e.g. "Partly cloudy · 19–28°C · 20% chance of rain · sunset 5:52 PM". */
 export function weatherLine(w: WeatherLike): string {
   if (w.status !== 'ok') return 'Weather not checked'
-  const parts = [w.summary, weatherDetails(w)].filter((x): x is string => Boolean(x))
+  const extra = weatherDetails({ ...w, precip_prob_max: /chance of rain/i.test(w.summary ?? '') ? null : w.precip_prob_max,
+    temp_max_c: /°/.test(w.summary ?? '') ? null : w.temp_max_c })
+  const parts = [w.summary, extra].filter((x): x is string => Boolean(x))
   return parts.length ? parts.join(' · ') : 'Weather checked'
 }

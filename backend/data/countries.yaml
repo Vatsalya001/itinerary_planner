@@ -40,3 +40,17 @@ BR: {currency: BRL, symbol: "R$"}
 MX: {currency: MXN, symbol: "MX$"}
 NZ: {currency: NZD, symbol: "NZ$"}
 ZA: {currency: ZAR, symbol: "R"}
+
+# Additional euro area countries
+BE: {currency: EUR, symbol: "€"}
+GR: {currency: EUR, symbol: "€"}
+FI: {currency: EUR, symbol: "€"}
+LU: {currency: EUR, symbol: "€"}
+MT: {currency: EUR, symbol: "€"}
+CY: {currency: EUR, symbol: "€"}
+EE: {currency: EUR, symbol: "€"}
+LV: {currency: EUR, symbol: "€"}
+LT: {currency: EUR, symbol: "€"}
+SK: {currency: EUR, symbol: "€"}
+SI: {currency: EUR, symbol: "€"}
+HR: {currency: EUR, symbol: "€"}

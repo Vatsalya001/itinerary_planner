@@ -233,7 +233,7 @@ async def _track_paused_thread(store: Any, result: PlanResult, resumed_thread: s
     try:
         if result.status == "needs_clarification" and result.thread_id:
             await store.record_paused_thread(result.thread_id)
-        elif resumed_thread:
+        elif resumed_thread and "already" not in (result.message or "").lower():
             await store.forget_paused_thread(resumed_thread)
     except Exception as exc:
         log.error("paused-thread bookkeeping failed", extra={"error_type": type(exc).__name__})
@@ -396,6 +396,8 @@ async def get_shared_plan(request: Request, share_id: str) -> Response:
 @router.post("/plans/{share_id}/feedback", response_model=None)
 async def plan_feedback(request: Request, share_id: str, body: FeedbackRequest) -> Response:
     deps = get_deps(request)
+    if body.reason and "\x00" in body.reason:
+        return rejected(400, "Invalid feedback text")
     limited = await check_read_limit(request, deps)
     if limited is not None:
         return limited
@@ -459,7 +461,7 @@ def places_status(deps: Deps | None) -> str:
     return status if isinstance(status, str) else "unknown"
 
 
-@router.get("/health", response_model=None)
+@router.api_route("/health", methods=["GET", "HEAD"], response_model=None)
 async def health(request: Request) -> Response:
     """200 when the database answers, else 503 with ``status: "degraded"`` (Docker and Render health checks
     read the status code). ``places`` is informational: a rejected Maps key or a Places outage falls back to the

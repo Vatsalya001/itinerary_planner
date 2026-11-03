@@ -6,6 +6,7 @@ provider payloads or the model's private reasoning; the only model text is the t
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -77,7 +78,7 @@ class Tracer:
         t0 = time.perf_counter()
         try:
             yield info
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             self.emit(
                 "tool_failed",
                 node=node,

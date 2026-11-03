@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping
+
 from langgraph.config import get_stream_writer
 from langgraph.runtime import Runtime
 
+from app.domain.fill import fill_window, free_time_note
+from app.domain.schemas import Candidate, CanonicalPlan, Constraint, PlanDraft, Preferences, WorldContext
+from app.domain.validator import validate_plan
 from app.graph.state import RunContext
+from app.providers.base import TravelEstimator
 from app.trace import Tracer
+
+log = logging.getLogger("app.graph")
+
+# Accepted agent drafts are stretched toward this share of the window (app.domain.fill.fill_window).
+FILL_TARGET_RATIO = 0.85
 
 # Every node routes to the deterministic planner when less than this many seconds remain.
 DEADLINE_RESERVE_S = 12.0
@@ -58,3 +70,31 @@ def degrade(tracer: Tracer, node: str, message: str, **data: object) -> list[str
     """Emit a "degraded" trace event and return the degradation list for the state update."""
     tracer.emit("degraded", node=node, summary=message, data=dict(data) if data else None)
     return [message]
+
+
+def fill_draft(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: WorldContext, prefs: Preferences,
+               enforced: list[Constraint], original: list[Constraint],
+               travel: TravelEstimator) -> tuple[PlanDraft, int]:
+    """Stretch an accepted agent draft toward the user's window with ``app.domain.fill.fill_window`` (no model
+    call). The filled draft is re-validated and used only if it still has no errors; otherwise the original is
+    kept. Returns (draft to use, minutes added)."""
+    try:
+        filled = fill_window(draft, ledger, ctx, prefs, enforced, travel, target_ratio=FILL_TARGET_RATIO)
+    except Exception as exc:  # a fill bug must never cost the user a valid plan
+        log.warning("fill_window failed", extra={"error_type": type(exc).__name__})
+        return draft, 0
+    added = sum(s.duration_min for s in filled.stops) - sum(s.duration_min for s in draft.stops)
+    if filled is draft or added <= 0:
+        return draft, 0
+    if not validate_plan(filled, ledger, ctx, prefs, original, travel).ok:
+        return draft, 0
+    return filled, added
+
+
+def free_time_warning(plan: CanonicalPlan, ctx: WorldContext) -> str | None:
+    """Code-generated note about unused time (``app.domain.fill.free_time_note``), or None."""
+    try:
+        return free_time_note(plan, ctx)
+    except Exception as exc:
+        log.warning("free_time_note failed", extra={"error_type": type(exc).__name__})
+        return None

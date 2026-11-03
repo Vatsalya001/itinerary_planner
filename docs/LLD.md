@@ -1,5 +1,7 @@
 # Perfect Saturday Planner: Low-Level Design
 
+Current implementation note from the completion pass: the model chooses candidate IDs, while displayed factual fit explanations are rendered from catalog evidence in `backend/app/domain/explanations.py`. Rain alternatives are validated as substituted routes, including transfer time and cost. See [release checks](verification/RELEASE_CHECKS.md) and [fresh evals](verification/RELEASE_EVAL_REPORT.md) for the current verified state; historical design targets below are not additional guarantees.
+
 Module-by-module description of everything implemented, as of the `integration` branch at `14a871e` (main plus the
 hardening merges) plus this documentation. The
 architecture, flows and design rationale are in [HLD.md](HLD.md); differences from
@@ -1927,6 +1929,7 @@ never count.
 | `plan.cost_within_budget` | Independent worst case (`sum(cost.max) + sum(fare.max) + ceil(10%)`) equals `totals.worst_case` and fits the budget; one currency |
 | `plan.legs_match_travel_model` | Independent haversine x 1.4 legs, modes, minutes and fares within tolerance |
 | `plan.time_within_window` | Start, buffers, event starts and elapsed time recomputed |
+| `plan.uses_window` | Elapsed time is at least 60% of a window of 90+ minutes, or the result carries a free-time note |
 | `plan.opening_hours` | Inside known hours or labelled unverified; events on the date and inside their window |
 | `plan.hard_constraints` | Diet and wheelchair evidence, crowds, sit-down meal, every constraint from the text present in the parsed preferences |
 | `plan.pacing` | Stops, walking, long legs, seated stops against `PROFILES` |

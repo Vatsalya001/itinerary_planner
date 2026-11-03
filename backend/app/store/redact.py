@@ -92,6 +92,11 @@ def for_storage(result: PlanResult) -> dict[str, Any]:
         for constraint in prefs.get("hard_constraints") or []:
             constraint.pop("source_text", None)
 
+    if isinstance(data.get("plan"), dict):
+        for omitted in data["plan"].get("omitted", []):
+            if str(omitted.get("ref", "")).startswith("gp:"):
+                omitted["name"] = None
+                omitted["reason"] = "Another option was not selected"
     names: dict[str, str] = {}
     redacted: list[str] = []
     for cand in _plan_candidates(data):

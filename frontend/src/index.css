@@ -43,3 +43,6 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* Venue names and user-supplied labels must fit narrow screens. */
+main { overflow-wrap: anywhere; min-width: 0; }

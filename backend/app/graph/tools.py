@@ -473,6 +473,7 @@ class ToolEnv:
     ledger: dict[str, Candidate]
     places_mode: PlacesMode = "live"
     events_failed: bool = False
+    event_queries_used: int = 0
     queries_used: int = 0  # search_places queries executed this run (cap MAX_QUERIES_PER_RUN)
 
 
@@ -677,10 +678,15 @@ async def run_search_places(args: SearchPlacesArgs, env: ToolEnv) -> ToolOutcome
 
 async def run_search_events(args: SearchEventsArgs, env: ToolEnv) -> ToolOutcome:
     ctx = env.ctx
+    if env.events_failed:
+        return error_outcome("Events unavailable; continue with the places already found", code="EVENTS_UNAVAILABLE")
+    if env.event_queries_used >= TOOL_CAPS[SEARCH_EVENTS]:
+        return error_outcome("Event search limit reached; use available candidates", code="CAP_REACHED")
     events_provider = env.deps.events
     if events_provider is None:
         return ToolOutcome(content=dumps({"count": 0, "events": [], "note": "Event search is not enabled"}),
                            summary="event search not enabled", data={"count": 0})
+    env.event_queries_used += 1
     interests = args.interests or env.prefs.interests
     max_price = args.max_price if args.max_price is not None else env.prefs.budget
     try:

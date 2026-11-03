@@ -205,6 +205,20 @@ def opening_status(c: Candidate, start_min: int, end_min: int) -> Literal["open"
     return "closed"
 
 
+def closes_at(c: Candidate, start_min: int, end_min: int) -> int | None:
+    """When the visit [start, end) has to end at the latest: the close of the known period containing it, or the
+    event's end. None when hours are unknown (no limit known) or the visit isn't inside a period."""
+    if c.kind == "event":
+        window = event_window(c)
+        return window[1] if window is not None else None
+    if c.hours.status != "known":
+        return None
+    for open_min, close_min in _normalized_periods(c):
+        if open_min <= start_min and end_min <= close_min:
+            return close_min
+    return None
+
+
 def open_overlap_minutes(c: Candidate, start_min: int, end_min: int) -> int | None:
     """Longest stretch of known opening inside [start, end); None when hours are unknown."""
     if c.kind == "event":

@@ -144,7 +144,7 @@ export function buildIcs(plan: CanonicalPlan, options: IcsOptions = {}): string 
       `DTSTART${dt(stop.start_min)}`,
       `DTEND${dt(stop.end_min)}`,
       `SUMMARY:${escapeIcsText(`${c.name} (${categoryLabel(c.category)})`)}`,
-      `LOCATION:${escapeIcsText(c.address || c.name)}`,
+      `LOCATION:${escapeIcsText([c.name, c.address, plan.city].filter(Boolean).join(', '))}`,
       `DESCRIPTION:${escapeIcsText(description.join('\n'))}`,
       `URL:${mapsUrl}`,
       'END:VEVENT',

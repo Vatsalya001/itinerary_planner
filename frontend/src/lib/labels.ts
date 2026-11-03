@@ -15,6 +15,7 @@ const CONSTRAINT_NAMES: Record<string, string> = {
 
 export function constraintName(key: string): string {
   if (CONSTRAINT_NAMES[key]) return CONSTRAINT_NAMES[key]
+  if (key.startsWith('pacing:')) return `Pacing requirement: ${humanize(key.split(':')[1]).toLowerCase()}`
   const [kind, value] = key.split(':', 2)
   if (value && kind === 'must_include') return `Must include: ${humanize(value).toLowerCase()}`
   if (value && kind === 'must_avoid') return `Avoid: ${humanize(value).toLowerCase()}`
@@ -30,7 +31,7 @@ export function omissionLabel(o: { ref: string; name?: string | null }): string 
   return ID_LIKE.test(o.ref) || !o.ref.trim() ? 'Another option' : o.ref
 }
 
-export type DegradationKind = 'data' | 'planner' | 'parser' | 'model'
+export type DegradationKind = 'data' | 'planner' | 'parser' | 'model' | 'checked'
 
 /**
  * Sort a degradation message into what actually happened: missing data (weather, places, events) versus an AI
@@ -38,13 +39,16 @@ export type DegradationKind = 'data' | 'planner' | 'parser' | 'model'
  */
 export function classifyDegradation(text: string, node?: string | null): DegradationKind {
   const t = text.toLowerCase()
-  if (/switched to/.test(t) && /model/.test(t)) return 'model'
+  if (/used the plan it had already checked/.test(t)) return 'checked'
+  if (/rule-based planner|deterministic planner/.test(t)) return 'planner'
+  if (/switched to/.test(t) && /model/.test(t)) return 'model' 
   if (/\bpars(er|ing)\b/.test(t)) return 'parser'
   if (node === 'plan_agent' || /deterministic planner|rule-based planner|ai planner|ai model/.test(t)) return 'planner'
   return 'data'
 }
 
 export const DEGRADATION_TITLES: Record<DegradationKind, string> = {
+  checked: 'Used the checked AI plan',
   data: 'Running with reduced data',
   planner: 'The rule-based planner took over',
   parser: 'Read with the rule-based parser',
@@ -52,6 +56,7 @@ export const DEGRADATION_TITLES: Record<DegradationKind, string> = {
 }
 
 export const DEGRADATION_NOTES: Record<DegradationKind, string | null> = {
+  checked: null,
   data: null,
   planner: 'The AI planner stopped, so a simpler rule-based planner built the plan. It goes through the same checks.',
   parser: 'The AI couldn’t read your request, so rule-based parsing was used. Check “What I understood”.',

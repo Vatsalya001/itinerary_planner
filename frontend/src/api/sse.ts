@@ -228,6 +228,7 @@ async function streamPlan(
     runId: null,
   }
 
+  try {
   await readSseStream(res.body, (msg) => {
     const ev = parseTraceEvent(msg.data)
     if (!ev) return // malformed payloads are ignored
@@ -246,6 +247,10 @@ async function streamPlan(
     }
   })
 
+  } catch (error) {
+    if (error instanceof TypeError && outcome.runId) Object.assign(error, { plannerInterrupted: true })
+    throw error
+  }
   if (outcome.result) return outcome.result
   throw new StreamError(
     outcome.error ?? 'The connection closed before the plan was ready. Please try again.',

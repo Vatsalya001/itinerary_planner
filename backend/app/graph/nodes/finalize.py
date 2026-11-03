@@ -9,6 +9,7 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
+from app.domain.explanations import ground_plan_text
 from app.domain.infeasible import explain_infeasible
 from app.domain.schemas import (
     Candidate,
@@ -21,7 +22,7 @@ from app.domain.schemas import (
     Violation,
 )
 from app.domain.validator import summarize_checks, validate_plan
-from app.graph.nodes.common import tracer_of
+from app.graph.nodes.common import free_time_warning, tracer_of
 from app.graph.state import (
     PlannerState,
     RunContext,
@@ -57,6 +58,8 @@ def run_metrics(state: PlannerState, model: str | None, rc: RunContext) -> dict[
       estimate_travel, check_plan or submit_plan stops), ``cap_reached`` (a call beyond the tool's per-run cap)
       and ``duplicate_submit`` (a second submit_plan in one turn). Validator findings other than UNKNOWN_ID
       (budget, hours, pacing...) are plan quality, not protocol errors.
+    * ``filled_minutes``: minutes the code added to an accepted agent draft so it uses more of the window
+      (app.domain.fill.fill_window; the filled draft passed validation again). 0 when nothing was added.
     * ``rate_limit_wait_ms``: time this call spent waiting for the client-side sliding-window rate limiter
       (app.llm.ratelimit) before model requests.
     * ``submit_attempts``, ``repairs`` (= attempts - 1), ``first_submit_valid`` (None without a submission),
@@ -73,6 +76,7 @@ def run_metrics(state: PlannerState, model: str | None, rc: RunContext) -> dict[
         "tool_calls": dict(state.get("tool_calls") or {}),
         "model": model,
         "requested_model": state.get("model_id") or rc.model_id,
+        "filled_minutes": int(state.get("filled_minutes") or 0),
         "protocol_errors": sum(kinds.values()),
         "protocol_error_kinds": kinds,
         "repairs": max(0, attempts - 1),
@@ -111,6 +115,7 @@ async def finalize(state: PlannerState, runtime: Runtime[RunContext]) -> dict[st
         plan: CanonicalPlan | None = None
         checks: list[CheckItem] = []
         violations: list[Violation] = []
+        free_note: str | None = None
         infeasible = InfeasibleReport.model_validate(final["infeasible"]) if final.get("infeasible") else None
         message = final.get("message")
         if final.get("draft") and prefs is not None:
@@ -121,8 +126,11 @@ async def finalize(state: PlannerState, runtime: Runtime[RunContext]) -> dict[st
                                    get_constraints(state, "original"), rc.deps.travel)
             if report.ok and report.plan is not None:
                 plan = with_omission_names(report.plan, ledger)
+                if mode == "agent":
+                    plan = ground_plan_text(plan, prefs, enforced, ctx)
                 checks = summarize_checks(report, ctx, prefs, enforced)
                 violations = report.warnings
+                free_note = free_time_warning(plan, ctx)  # code-generated; never mixed into model prose
             else:  # defensive: never display a plan that fails validation
                 infeasible = explain_infeasible(list(ledger.values()), ctx, prefs, enforced, rc.deps.travel)
                 status, message = "no_feasible_plan", infeasible.reason
@@ -133,7 +141,9 @@ async def finalize(state: PlannerState, runtime: Runtime[RunContext]) -> dict[st
         result = PlanResult(
             run_id=rc.run_id, status=status, mode=mode, model=model, plan=plan, checks=checks, preferences=prefs,
             violations=violations, infeasible=infeasible, degradations=list(state.get("degradations") or []),
-            assumptions=assumptions, warnings=[v.message for v in violations], message=message,
+            assumptions=assumptions,
+            warnings=[v.message for v in violations] + ([free_note] if free_note and plan is not None else []),
+            message=message,
             latency_ms=rc.elapsed_ms(),
         )
         info["summary"] = f"{status}" + (f" ({mode})" if mode else "")

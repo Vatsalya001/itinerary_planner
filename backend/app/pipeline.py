@@ -53,6 +53,8 @@ async def build_context(prefs: Preferences, location: Location, deps: Deps, trac
         earliest = local_now.hour * 60 + local_now.minute + 15
         earliest = -(-earliest // 15) * 15  # round up to the quarter hour
         if prefs.start_min < earliest:
+            original_end = prefs.start_min + prefs.available_minutes
+            prefs.available_minutes = max(0, original_end - earliest)
             prefs.start_min = earliest
             prefs.assumptions = [a for a in prefs.assumptions if not a.startswith("Starting at ")]
             prefs.assumptions.append(f"Starting at {fmt_clock(earliest)} because the usual start time has passed")
@@ -108,9 +110,11 @@ async def search_places(queries: list[PlaceQuery], ctx: WorldContext, deps: Deps
         return found
 
     degradations: list[str] = []
-    try:
-        results = await asyncio.gather(*(run(deps.places.name, q, deps.places) for q in queries))
-    except ProviderError:
+    batches = await asyncio.gather(*(run(deps.places.name, q, deps.places) for q in queries), return_exceptions=True)
+    results = [batch for batch in batches if isinstance(batch, list)]
+    if len(results) < len(batches):
+        degradations.append("Some place searches were unavailable")
+    if batches and not results:
         if deps.snapshot is not None and deps.snapshot.covers(ctx.location):
             degradations.append(SNAPSHOT_USED)
             tracer.emit("degraded", node="gather_candidates", summary=SNAPSHOT_USED)

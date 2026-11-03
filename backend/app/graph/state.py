@@ -82,6 +82,7 @@ class PlannerState(TypedDict, total=False):
     protocol_error_kinds: dict[str, int]  # unknown_tool, malformed_args, schema_invalid, unknown_id, cap_reached, ...
     agent_stop: str | None  # why the agent loop ended without an accepted plan (degradation decided by fallback)
     checked_draft: dict[str, Any] | None  # PlanDraft JSON of the last check_plan call when it had no errors
+    filled_minutes: int  # minutes app.domain.fill added to the accepted agent draft (no model call)
     tool_calls: dict[str, int]  # calls the model requested, by tool name
     tool_exec: dict[str, int]  # calls executed (caps apply to these)
     usage: Annotated[dict[str, Any], add_usage]

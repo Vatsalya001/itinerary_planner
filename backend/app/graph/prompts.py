@@ -103,7 +103,9 @@ yes: prefer candidates whose evidence is confirmed. If the person wants to avoid
 that are likely busy at the time they would be visited.
 - Respect the budget per person, including travel. Prefer free and low-cost stops when the budget is \
 tight, and leave headroom because the worst case adds a contingency.
-- Fit the stop length to the place: use the duration range each candidate reports.
+- Use most of the user's time window (aim for 70-100%). For a low-energy user choose fewer stops with \
+longer, relaxed visits (visit_minutes.typical or more), never shorter ones; don't trim visits below their \
+typical length unless a fix line asks you to. Stay inside each candidate's visit_minutes range.
 - Use each place once. Events have fixed start times; arrive before they start.
 - Avoid long idle waits. Don't arrive at an event or a place long before it starts or opens: lengthen \
 the stop before it, reorder the stops, or pick something that fits the time, rather than leaving the \
@@ -125,6 +127,12 @@ the person as your note for that step.
 - Only use the tools provided. Make tool calls rather than describing them in text, and don't narrate \
 your analysis in the reply: at most one short sentence of text per turn.
 """
+
+FINAL_TURN_TEXT = (
+    "This is your last turn and only submit_plan is available. Call submit_plan now with the best stops from "
+    "the candidates your tools already returned. If you are sure no plan can satisfy the hard constraints, "
+    "reply with one short sentence saying so."
+)
 
 NUDGE_TEXT = (
     "You ended your turn without calling submit_plan. Finish now: call submit_plan with candidate IDs "
@@ -352,6 +360,6 @@ def request_from_parse_payload(payload: dict[str, Any]) -> tuple[PlanRequest, da
 def prompt_hash() -> str:
     """Short hash of every static prompt (recorded with eval results)."""
     digest = hashlib.sha256()
-    for text in (AGENT_SYSTEM_PROMPT, PARSE_SYSTEM_PROMPT, NUDGE_TEXT):
+    for text in (AGENT_SYSTEM_PROMPT, PARSE_SYSTEM_PROMPT, NUDGE_TEXT, FINAL_TURN_TEXT):
         digest.update(text.encode("utf-8"))
     return digest.hexdigest()[:12]

@@ -721,6 +721,7 @@ PLAN_CHECKS: list[tuple[str, str]] = [
     ("plan.cost_within_budget", "Recomputed worst-case cost (stops + legs + 10% contingency) is within budget, in the budget's currency"),
     ("plan.legs_match_travel_model", "Legs match the travel model (distance, mode, minutes, fare) recomputed from the records"),
     ("plan.time_within_window", "Recomputed elapsed time (stops + legs + buffers) is within the available window"),
+    ("plan.uses_window", "The plan uses at least 60% of a window of 90+ minutes, or says how much free time it leaves"),
     ("plan.opening_hours", "Every stop is inside known opening hours, or carries an 'hours unverified' label"),
     ("plan.hard_constraints", "Every original hard constraint is satisfied with positive evidence, or the status is neither complete nor fallback"),
     ("plan.pacing", "Pacing limits for the parsed energy level hold"),
@@ -730,6 +731,7 @@ PLAN_CHECKS: list[tuple[str, str]] = [
     ("plan.rain_plan_b", "In rain, every outdoor stop has an indoor, open, distinct, constraint-meeting Plan B"),
     ("plan.no_failed_check_displayed", "No check with status 'fail' is displayed with a plan"),
 ]
+USE_RATIO, USE_MIN_WINDOW = 0.6, 90
 KNOWN_SOURCES = {"google_places", "curated_snapshot", "fixture", "web_event", "fixture_event"}
 
 
@@ -845,6 +847,12 @@ def plan_checks(obs: Observation, exp: Expect) -> list[Check]:
     available = exp.available if exp.available is not None else plan.totals.available_minutes
     if elapsed > available:
         tf.append(f"elapsed {elapsed} > available {available}")
+    # time use: a 4-hour window must not quietly become a 2-hour plan
+    if available >= USE_MIN_WINDOW and elapsed < USE_RATIO * available:
+        notes = [*result.warnings, plan.summary_note or ""]
+        if not any("free" in n.lower() for n in notes):
+            fails["plan.uses_window"].append(
+                f"elapsed {elapsed} < {USE_RATIO:.0%} of {available} and no free-time note")
 
     # opening hours (or an 'hours unverified' label); events inside their own window and on the target date
     hf = fails["plan.opening_hours"]

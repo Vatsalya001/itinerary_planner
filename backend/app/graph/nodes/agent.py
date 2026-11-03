@@ -4,6 +4,9 @@ Each turn appends the model's AIMessage unchanged (append-only history). Excepti
 the turn cap and the deadline route to the deterministic planner with a visible degradation. A text-only
 turn gets one nudge; a second one goes to the fallback. Once a fallback model answers, the run sticks
 with it for the remaining turns.
+
+The last turn under the cap (once the tools have returned candidates) binds only submit_plan and appends a
+short "last turn" message, so a model that keeps searching still submits instead of running out of turns.
 """
 
 from __future__ import annotations
@@ -31,7 +34,13 @@ from app.graph.nodes.common import (
     is_rate_limit_error,
     tracer_of,
 )
-from app.graph.prompts import AGENT_SYSTEM_PROMPT, NUDGE_TEXT, agent_payload, agent_payload_message
+from app.graph.prompts import (
+    AGENT_SYSTEM_PROMPT,
+    FINAL_TURN_TEXT,
+    NUDGE_TEXT,
+    agent_payload,
+    agent_payload_message,
+)
 from app.graph.state import PlannerState, RunContext, get_constraints, get_ctx, get_prefs
 from app.graph.tools import MAX_QUERIES_PER_RUN, SUBMIT_PLAN, TOOL_CAPS, tool_schemas
 from app.llm.ratelimit import call_budget
@@ -85,6 +94,7 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
     degradations: list[str] = []
     failure: str | None = None
     ai: AIMessage | None = None
+    final_turn = False
 
     with tracer.node("plan_agent") as info:
         timeout = min(turn_timeout_s(chain[0]), rc.remaining() - DEADLINE_RESERVE_S)
@@ -94,11 +104,16 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
             failure = AGENT_NO_TIME
         else:
             turns += 1
+            tools = tool_schemas()
+            if turns == turn_cap and turn_cap > 1 and state.get("ledger"):
+                final_turn = True
+                tools = [t for t in tools if t["function"]["name"] == SUBMIT_PLAN]
+                new.append(HumanMessage(content=FINAL_TURN_TEXT))
             tracker = UsageTracker()
             waits: list[float] = []
             try:
                 runnable = build_agent_runnable(
-                    chain, tool_schemas(), settings,
+                    chain, tools, settings,
                     primary_timeout_s=timeout * PRIMARY_SHARE if len(chain) > 1 else None,
                     primary_id=full_chain[0])
                 with call_budget(timeout, waits):
@@ -122,7 +137,7 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
         if ai is not None:
             info["summary"] = _summary(turns, ai)
             info["data"] = {"turn": turns, "model": ai.response_metadata.get(METADATA_KEY),
-                            "tool_calls": [tc["name"] for tc in ai.tool_calls]}
+                            "tool_calls": [tc["name"] for tc in ai.tool_calls], "final_turn": final_turn}
         elif failure in (AGENT_TURN_CAP, AGENT_NO_TIME):
             info["summary"] = f"stopped before turn {turns + 1}: {failure}"
             info["data"] = {"turn": turns, "model": chain[0], "stop": failure}
@@ -147,7 +162,7 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
     new.append(ai)
     if ai.tool_calls or ai.invalid_tool_calls:
         update["route"] = "tools"
-    elif state.get("nudges", 0) < 1:
+    elif state.get("nudges", 0) < 1 and turns < turn_cap:  # a nudge needs a turn left to answer it
         new.append(HumanMessage(content=NUDGE_TEXT))
         update["nudges"] = state.get("nudges", 0) + 1
         update["route"] = "plan_agent"

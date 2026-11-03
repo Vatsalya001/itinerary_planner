@@ -1,4 +1,6 @@
 import { NavLink, Outlet, useMatch } from 'react-router-dom'
+import { useEffect } from 'react'
+import Planner from '../pages/Planner'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `rounded-lg px-2.5 py-1.5 text-sm font-medium transition-colors ${
@@ -6,6 +8,9 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
   }`
 
 export function Layout() {
+  const home = useMatch('/') !== null
+  const shared = useMatch('/p/:id') !== null
+  useEffect(() => { if (home) document.title = 'Perfect Saturday Planner' }, [home])
   const wide = useMatch('/evals') !== null
   const width = wide ? 'max-w-6xl' : 'max-w-4xl'
   return (
@@ -44,6 +49,8 @@ export function Layout() {
         </div>
       </header>
       <main id="main" tabIndex={-1} className={`mx-auto w-full ${width} flex-1 px-4 py-6 sm:py-10`}>
+        <div hidden={!home}><Planner active={home} /></div>
+        {shared ? <h1 className="sr-only">Shared Saturday plan</h1> : null}
         <Outlet />
       </main>
       <footer className="border-t border-stone-200 bg-white">

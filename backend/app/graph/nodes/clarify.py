@@ -13,7 +13,9 @@ from langgraph.runtime import Runtime
 from langgraph.types import RetryPolicy, interrupt
 
 from app.domain.parser_rules import apply_answers, clarification_questions
+from app.domain.schemas import PlanRequest
 from app.graph.nodes.common import tracer_of
+from app.graph.nodes.guard import clamp_available_time, normalize_request
 from app.graph.state import (
     PlannerState,
     RunContext,
@@ -104,6 +106,13 @@ async def ask_clarification(state: PlannerState, runtime: Runtime[RunContext]) -
         clean: dict[str, str] = {}
         if isinstance(answers, dict):
             clean = {str(k)[:40]: str(v)[:200] for k, v in answers.items() if v is not None and str(v).strip()}
-        request = apply_answers(get_request(state), clean)
+        normalized_answers = {k: normalize_request(PlanRequest(mood=v))[0].mood or "" for k, v in clean.items()}
+        request, assumptions = normalize_request(apply_answers(get_request(state), normalized_answers))
+        for key, value in normalized_answers.items():
+            if key in {"available_time", "time", "budget_time"}:
+                _, note = clamp_available_time(value)
+                if note and note not in assumptions:
+                    assumptions.append(note)
         info["summary"] = f"applied {len(clean)} answer(s): {', '.join(sorted(clean)) or 'none'}"
-    return {"request": dump(request), "asked_before": True, "questions": [], "route": "parse_preferences"}
+    return {"request": dump(request), "asked_before": True, "questions": [], "route": "parse_preferences",
+            "extra_assumptions": assumptions}

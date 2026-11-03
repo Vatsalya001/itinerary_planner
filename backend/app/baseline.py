@@ -70,12 +70,16 @@ async def run_baseline(request: PlanRequest, deps: Deps, *, tracer: Tracer | Non
     if not matches:
         return done(PlanResult(run_id=run_id, status="no_feasible_plan", mode="deterministic",
                                model="baseline:deterministic", preferences=outcome.preferences,
-                               message="I couldn't look up that city right now. Please try again shortly."))
+                               message=("I couldn't look up that city right now. Please try again shortly." if matches is None
+                                        else f"No city called {outcome.preferences.city!r} was found.")))
 
     location = matches[0]
     prefs = apply_defaults(outcome, location)
     ctx, degradations = await build_context(prefs, location, deps, tracer, now)
     constraints, original = enforced_constraints(prefs, request)
+    if prefs.available_minutes < 30:
+        return done(PlanResult(run_id=run_id, status="no_feasible_plan", model="baseline:deterministic",
+                               preferences=prefs, message="Your available window has ended or has too little time left."))
 
     with tracer.node("gather_candidates") as info:
         candidates, place_deg, places_ok = await search_places(default_queries(prefs, ctx), ctx, deps, tracer)

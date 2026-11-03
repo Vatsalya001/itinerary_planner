@@ -1,5 +1,7 @@
 # Perfect Saturday Planner: High-Level Design
 
+Current implementation note from the completion pass: the model chooses candidate IDs, while displayed factual fit explanations are rendered from catalog evidence in `backend/app/domain/explanations.py`. Rain alternatives are validated as substituted routes, including transfer time and cost. See [release checks](verification/RELEASE_CHECKS.md) and [fresh evals](verification/RELEASE_EVAL_REPORT.md) for the current verified state; historical design targets below are not additional guarantees.
+
 This document describes the system as implemented on `main` at `5643543`, plus this documentation. Where the code differs from [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md), the code is described and the difference is
 listed in [Plan vs implementation](#16-plan-vs-implementation). Module-level detail is in [LLD.md](LLD.md).
 
