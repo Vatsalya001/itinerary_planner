@@ -4,9 +4,9 @@
 
 - Public app: https://itinerary-planner-r54t.onrender.com/
 - Source: https://github.com/Vatsalya001/itinerary_planner
-- Release CI: https://github.com/Vatsalya001/itinerary_planner/actions/runs/41655769302 (passed for `1e46c83`).
+- Code release CI: https://github.com/Vatsalya001/itinerary_planner/actions/runs/41664934026 (passed for `89b963f`).
 - Anonymous Mumbai UI and share-link smoke: [recorded evidence](verification/SUBMISSION_SMOKE_2026-11-03.md). The earlier Groq run verified labelled fallback; the earlier Cerebras run verified orchestration/sharing. Both predate the practical-guardrail corrections.
-- The earlier Cerebras smoke verified agent completion but had practical admission/transport faults. See the [current guardrails release](verification/PRACTICAL_GUARDRAILS_2026-11-03.md) for the fixes, regression results and live recheck requirements. Historical evidence is not a full practical-validity claim.
+- Fresh Mumbai and London acceptance runs completed in Cerebras agent mode without degradation; both anonymous share pages retained the correct caveats. See the [current guardrails release](verification/PRACTICAL_GUARDRAILS_2026-11-03.md) for exact observations, regression results and remaining limits. The older admission/transport defects and historical runs are retained as earlier evidence, not current practical-validity claims.
 - Keep Cerebras credits/quota available. The application retains its trial-safe 5-call/minute limiter; allow at least a minute between demo runs. Billing tier was not inspected.
 - Local interview handbook is private and intentionally uncommitted.
 

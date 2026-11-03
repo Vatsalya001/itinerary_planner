@@ -25,7 +25,22 @@ The prior Mumbai and London runs completed in AI mode and passed internal checks
 
 ## Live acceptance
 
-After deployment, check the health commit, submit fresh Mumbai and London prompts, inspect the trace and share pages, and record actual results separately. A saved plan created before this release is a historical snapshot; its admissions, fares and stored checks are not recomputed merely by opening it. Generate a new plan to apply these guardrails.
+Render health confirmed runtime release `89b963f91dd1ccd89a0c4994b6e66e866fc1acc2` with Cerebras selected. [Release CI](https://github.com/Vatsalya001/itinerary_planner/actions/runs/41664934026) passed backend/frontend checks, real Postgres and Docker smoke tests.
+
+Fresh public UI requests and saved-plan APIs were checked without an application login:
+
+| Case | Result | Recorded observation |
+| --- | --- | --- |
+| Mumbai | `r_95199ed981ba`; complete/agent; no degradation | Two stops; INR 1,250 estimated upper cost of INR 2,000; 184/240 min; stored latency 20,293 ms |
+| London | `r_4342701a6165`; complete/agent; no degradation | Two stops; GBP 44 estimated upper cost of GBP 50; 196/240 min; stored latency 16,229 ms |
+
+Mumbai excluded MuSo, used a cab motor transfer and showed both `PRICE_UNVERIFIED` and `LONG_TRANSFER`. The budget check was unverified/provisional rather than a false guarantee. The short-travel preference was only partly met, and the UI said so.
+
+London retained positive entrance evidence at both selected venues, labelled wider accessibility unverified, used an outdoor-transfer label with pedestrian-time caveats, and linked walking directions. National Gallery general admission was zero-cost/free with a link to its official policy; optional paid exhibitions were excluded. The source field and an official website are not a physical accessibility audit.
+
+The separate anonymous share pages `/p/ld_XkKRQ0tM` and `/p/SZJnsJ_8GIk` rendered and retained the relevant pricing/accessibility caveats. Public API assertions independently checked status/mode, transport, policy and check fields. Share links are subject to configured TTL and source rehydration. Screenshots were saved locally, not committed; raw Google Places payloads were not copied into the repository.
+
+These are two smoke observations, not a latency or sustained-reliability benchmark. A saved plan created before this release remains a historical snapshot; its admissions, fares and stored checks are not recomputed merely by opening it. Generate a new plan to apply these guardrails.
 
 ## Limits
 

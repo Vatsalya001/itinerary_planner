@@ -130,6 +130,10 @@ See [submission checklist](docs/SUBMISSION.md) for deployment settings and anony
 
 Claude Code was used for the original implementation and audit scaffolding. Codex reviewed the code, fixed the recorded regressions and additional validation gaps, and ran deterministic tests, browser checks, and a small live-provider evaluation. The repository includes the resulting checks and the live rate-limit failure rather than reporting only successful examples.
 
+## Latest live acceptance
+
+Release `89b963f` completed fresh Mumbai and London requests in Cerebras agent mode without degradation; both anonymous share pages worked. Mumbai returned a provisional INR 1,250 estimate with admission/long-transfer warnings. London returned a GBP 44 estimate, scoped entrance evidence, unverified wider accessibility and walking directions. See the practical guardrails report for exact runs, checks and limitations. These are smoke tests, not a reliability benchmark.
+
 ## Practical guardrail scope
 
 Entrance accessibility is distinct from internal facilities and routes; the latter remain explicitly unverified. Museum admission estimates make budget checks provisional. Known child-accompaniment restrictions are enforced conservatively because ages are not represented. National Gallery general admission is distinguished from paid exhibitions. Mumbai motor travel uses cab estimates, and a short-travel preference can still require an explained compromise. See the current guardrails report for evidence and limitations; no zero-bug or comprehensive venue-verification claim is made.
