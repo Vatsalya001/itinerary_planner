@@ -1058,3 +1058,46 @@ def test_llm_mapping_of_an_unmapped_phrase_clears_the_question():
     assert keys(merged.preferences.hard_constraints) == ["access:wheelchair"]
     assert merged.unmapped_constraints == []
     assert clarification_questions(merged, [BLR], False) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "location", "city", "budget", "start", "minutes", "required"),
+    [
+        ("I’m in Delhi and have exactly 10 AM to 12 PM this Saturday. Budget ₹1,000 for one person. "
+         "I want a historical attraction and vegetarian lunch. Include travel and waiting time. "
+         "If both won’t fit, explain the trade-off.",
+         BLR.model_copy(update={"name": "Delhi"}), "Delhi", 1000, 600, 120, "diet:vegetarian"),
+        ("Plan a relaxed Saturday in London from noon to 4 PM. Budget £50 per person, including "
+         "transport. I use a wheelchair and enjoy museums and cafés. Step-free access is mandatory. "
+         "Clearly distinguish confirmed accessibility from anything I need to verify.",
+         LONDON, "London", 50, 720, 240, "access:wheelchair"),
+    ],
+)
+def test_response_guidance_does_not_block_complete_live_product_prompts(
+    text, location, city, budget, start, minutes, required,
+):
+    request = PlanRequest(free_text=text)
+    outcome = parse_rules(request, NOW)
+    prefs = outcome.preferences
+    assert (prefs.city, prefs.budget, prefs.start_min, prefs.available_minutes) == (city, budget, start, minutes)
+    assert required in keys(prefs.hard_constraints)
+    assert outcome.unmapped_constraints == []
+    assert clarification_questions(outcome, [location], False) == []
+    # A model independently returning the same guidance must not reintroduce the question.
+    guidance = "If both won't fit" if city == "Delhi" else (
+        "Clearly distinguish confirmed accessibility from anything I need to verify"
+    )
+    llm = outcome.model_copy(update={"source": "llm", "unmapped_constraints": [guidance]})
+    merged = merge_parse(llm, outcome, request)
+    assert required in keys(merged.preferences.hard_constraints)
+    assert clarification_questions(merged, [location], False) == []
+
+
+@pytest.mark.parametrize("requirement", [
+    "I need a hearing loop", "I can't walk much", "allergic to nuts",
+    "Clearly distinguish confirmed accessibility from anything I need to verify and I need a hearing loop",
+])
+def test_response_guidance_does_not_hide_unknown_access_or_safety_requirements(requirement):
+    outcome = parse(city="London", budget=50, currency="GBP", constraints=[requirement])
+    assert outcome.unmapped_constraints == [requirement]
+    assert any(q.id == "constraint" for q in clarification_questions(outcome, [LONDON], False))

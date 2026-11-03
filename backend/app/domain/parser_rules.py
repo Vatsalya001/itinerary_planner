@@ -289,6 +289,22 @@ _BENIGN_RE = re.compile(
     r"|need\s+(?:ideas|suggestions|a\s+plan|plans|something))\b",
     re.IGNORECASE,
 )
+# Full-clause matches keep response guidance separate from venue requirements.
+# Do not broadly ignore "need"/"won't": they also express real safety constraints.
+_RESPONSE_GUIDANCE_RE = re.compile(
+    r"(?:if\s+(?:both|all|they|these|those)(?:\s+activities)?\s+"
+    r"(?:won't|can't|cannot|don't|do not)\s+fit"
+    r"|(?:clearly\s+)?(?:distinguish|differentiate|separate)\s+"
+    r"(?:confirmed|verified)\s+(?:accessibility|information|facts|details)\s+from\s+"
+    r"(?:anything|what|anything that)\s+(?:I|we)\s+need\s+to\s+(?:verify|check))",
+    re.IGNORECASE,
+)
+
+
+def _is_response_guidance(text: str) -> bool:
+    return bool(_RESPONSE_GUIDANCE_RE.fullmatch(_normalize_text(text).strip(" .!?")))
+
+
 _SOFT_RE = re.compile(
     r"\b(?:prefer|preferably|ideally|would\s+(?:like|love)|rather|if\s+possible|nice\s+to\s+have)\b",
     re.IGNORECASE,
@@ -884,7 +900,7 @@ def _unmapped_and_soft(request: PlanRequest) -> tuple[list[str], list[str]]:
     unmapped: list[str] = []
     soft: list[str] = []
     for entry in request.constraints:
-        if map_constraint_text(entry):
+        if map_constraint_text(entry) or _is_response_guidance(entry):
             continue
         diet_note = _diet_negation_note(entry)
         if diet_note and not _is_instruction_like(entry):
@@ -898,7 +914,7 @@ def _unmapped_and_soft(request: PlanRequest) -> tuple[list[str], list[str]]:
             unmapped.append(sentence[:120])
             continue
         for clause in _clauses(sentence):
-            if map_constraint_text(clause) or _BENIGN_RE.search(clause):
+            if map_constraint_text(clause) or _BENIGN_RE.search(clause) or _is_response_guidance(clause):
                 continue
             diet_note = _diet_negation_note(clause)
             if diet_note:
@@ -1243,7 +1259,8 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     return ParseOutcome(
         preferences=prefs, missing=_missing(city, budget, minutes_found),
         unmapped_constraints=[u for u in _dedupe([*rules.unmapped_constraints, *llm.unmapped_constraints])
-                              if not any(_clause_supports(c, u) for c in llm_hard)],  # the model mapped it
+                              if not _is_response_guidance(u)
+                              and not any(_clause_supports(c, u) for c in llm_hard)],  # the model mapped it
         conflicts=detect_conflicts(hard), budget_currency_explicit=explicit, source="llm",
     )
 
