@@ -102,7 +102,7 @@ def parse_clock(text: str | None) -> int | None:
         if not 1 <= hour <= 12:
             return None
         hour = hour % 12 + (12 if ampm == "pm" else 0)
-    elif hour > 24:
+    elif hour > 24 or (hour == 24 and minute != 0):
         return None
     return hour * 60 + minute
 

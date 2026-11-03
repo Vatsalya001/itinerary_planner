@@ -212,7 +212,7 @@ def _normalize_text(text: str | None) -> str:
     """Unicode-normalize and smooth notation that would otherwise break sentence splitting."""
     if not text:
         return ""
-    t = unicodedata.normalize("NFKC", text).replace("\u2019", "'").replace("\u2018", "'")
+    t = unicodedata.normalize("NFKC", text).replace("\u2019", "'").replace("\u2018", "'").replace("\u2212", "-")
     t = re.sub(r"(?<=[\d\s])([ap])\.\s?m\b", r"\1m", t, flags=re.IGNORECASE)  # 8 p.m. -> 8 pm.
     t = re.sub(r"\b(rs)\.(?=\s*\d)", r"\1 ", t, flags=re.IGNORECASE)  # Rs. 1500 -> Rs 1500
     t = re.sub(r"\b([A-Z])\.\s?([A-Z])\.", r"\1\2", t)  # M.G. Road -> MG Road, D.C. -> DC
@@ -292,11 +292,13 @@ _BENIGN_RE = re.compile(
 # Full-clause matches keep response guidance separate from venue requirements.
 # Do not broadly ignore "need"/"won't": they also express real safety constraints.
 _RESPONSE_GUIDANCE_RE = re.compile(
-    r"(?:if\s+(?:both|all|they|these|those)(?:\s+activities)?\s+"
+    r"(?:if\s+(?:both|all|they|these|those|that|this|it|the plan)(?:\s+activities)?\s+"
     r"(?:won't|can't|cannot|don't|do not)\s+fit"
-    r"|(?:clearly\s+)?(?:distinguish|differentiate|separate)\s+"
+    r"|(?:please\s+)?(?:clearly\s+)?(?:distinguish|differentiate|separate)\s+"
     r"(?:confirmed|verified)\s+(?:accessibility|information|facts|details)\s+from\s+"
-    r"(?:anything|what|anything that)\s+(?:I|we)\s+need\s+to\s+(?:verify|check))",
+    r"(?:anything|what|anything that)\s+(?:I|we)\s+need\s+to\s+(?:verify|check)"
+    r"|(?:I|we)\s+need\s+you\s+to\s+(?:explain|show|state|list|describe)\s+"
+    r"(?:the\s+|your\s+|any\s+)?(?:trade[- ]?offs?|assumptions|sources|costs|timings))",
     re.IGNORECASE,
 )
 
@@ -348,28 +350,28 @@ _NOT_MONEY_UNIT = (
     r"|nd\b|rd\b|-\s*\d|–\s*\d|to\s+\d|stars?))"
 )
 _MONEY_PREFIX = re.compile(
-    rf"(?P<cur>{_SYMBOLS}|(?<![a-z]){_CODES}(?![a-z]))\s*(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?",
+    rf"(?P<cur>{_SYMBOLS}|(?<![a-z]){_CODES}(?![a-z]))\s*(?P<num>(?:[+-]\s*)?{_NUM}){_NUM_END}(?P<mult>{_MULT})?",
     re.IGNORECASE)
 _MONEY_SUFFIX = re.compile(
-    rf"(?<![\d.,])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?P<cur>/-|{_SYMBOLS}|(?<![a-z]){_WORDS}(?![a-z]))",
+    rf"(?<![\d.,])(?P<num>(?:[+-]\s*)?{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?P<cur>/-|{_SYMBOLS}|(?<![a-z]){_WORDS}(?![a-z]))",
     re.IGNORECASE)
 _MONEY_PER_PERSON = re.compile(
-    rf"(?<![\d.,:])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?:per\s+person|per\s+head|a\s+head|each|pp"
+    rf"(?<![\d.,:])(?P<num>(?:[+-]\s*)?{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?:per\s+person|per\s+head|a\s+head|each|pp"
     rf"|/\s*(?:person|head|pp))\b",
     re.IGNORECASE)
 _MONEY_CONTEXT = re.compile(
     rf"(?:\b(?P<ctx>budget(?:\s+(?:of|is|was|around|about|under|max|roughly|approx))*|got|have|spend(?:ing)?"
     rf"|around|about|approx(?:imately)?|roughly|under|below|upto|up\s+to|max(?:imum)?|within|less\s+than|with"
     rf"|cap|limit)|~)"
-    rf"\s*[:=]?\s*(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?{_NOT_MONEY_UNIT}",
+    rf"\s*[:=]?\s*(?P<num>(?:[+-]\s*)?{_NUM}){_NUM_END}(?P<mult>{_MULT})?{_NOT_MONEY_UNIT}",
     re.IGNORECASE)
 _MONEY_CUE_AFTER = re.compile(  # "600 budget", "2500 max", "1500 all in", "2k tops"
-    rf"(?<![\d.,:])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?P<ctx>budget|max(?:imum)?|tops|all[\s-]+in"
+    rf"(?<![\d.,:])(?P<num>(?:[+-]\s*)?{_NUM}){_NUM_END}(?P<mult>{_MULT})?\s*(?P<ctx>budget|max(?:imum)?|tops|all[\s-]+in"
     rf"|in\s+total|total|limit|cap)\b",
     re.IGNORECASE)
-_MONEY_K = re.compile(r"(?<![\d.,])(?P<num>\d+(?:\.\d+)?)\s*(?P<mult>k)(?![a-z])(?!\s*(?:run|race|steps|km))",
+_MONEY_K = re.compile(r"(?<![\d.,])(?P<num>(?:[+-]\s*)?\d+(?:\.\d+)?)\s*(?P<mult>k)(?![a-z])(?!\s*(?:run|race|steps|km))",
                       re.IGNORECASE)
-_MONEY_BARE = re.compile(rf"(?<![\d.,:])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?{_NOT_MONEY_UNIT}",
+_MONEY_BARE = re.compile(rf"(?<![\d.,:])(?P<num>(?:[+-]\s*)?{_NUM}){_NUM_END}(?P<mult>{_MULT})?{_NOT_MONEY_UNIT}",
                          re.IGNORECASE)
 _CURRENCY_MENTION = re.compile(
     r"\b(?:in|using|of)\s+(rupees|inr|pounds|gbp|dollars|usd|euros|eur|dirhams|aed|yen|jpy|sgd|aud|cad)\b",
@@ -386,10 +388,10 @@ class _Money:
 
 
 def _amount(num: str, mult: str | None) -> int | None:
-    value = float(num.replace(",", ""))
+    value = float(re.sub(r"\s+", "", num).replace(",", ""))
     if mult:
         value *= _MULTIPLIERS[mult.strip().lower()]
-    if value > _MAX_BUDGET:
+    if not math.isfinite(value) or abs(value) > _MAX_BUDGET:
         return None
     return round(value)
 
@@ -476,7 +478,7 @@ def _fmt_money(amount: int, currency: str | None) -> str:
 # ---------------------------------------------------------------------------------------------------
 
 _CLOCK_TOKEN = re.compile(
-    r"(?<![\w:₹$£€.,])(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2}|noon|midday)(?![\w:])", re.IGNORECASE)
+    r"(?<![\w:₹$£€.,])(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2}|noon|midday|midnight)(?![\w:])", re.IGNORECASE)
 _END_CUE = re.compile(r"\b(?:by|before|until|till|til|latest)\s*$", re.IGNORECASE)
 _RANGE_CUE = re.compile(r"(?:\bto|[-–])\s*$", re.IGNORECASE)  # an end only after an earlier clock time
 _START_CUE = re.compile(
@@ -527,7 +529,7 @@ def _extract_duration(text: str) -> int | None:
 _EARLY_HINT = re.compile(r"\d\s*a\.?\s?m\b|\b(?:morning|dawn|sunrise|midnight|night|overnight|early)\b",
                          re.IGNORECASE)
 _EARLY_START_MIN = 7 * 60
-_AMPM_TOKEN = re.compile(r"[ap]m|noon|midday", re.IGNORECASE)
+_AMPM_TOKEN = re.compile(r"[ap]m|noon|midday|midnight", re.IGNORECASE)
 _AMPM_ANYWHERE = re.compile(r"\d\s*[ap]m\b", re.IGNORECASE)
 
 
@@ -558,6 +560,8 @@ def _extract_time(text: str) -> _TimeInfo:
         is_range_end = bool(_RANGE_CUE.search(before)) and (start_tok is not None or bool(bare))
         if _END_CUE.search(before) or is_range_end:
             end = value if end is None else end
+        elif m.group(1).lower() == "midnight":
+            start_tok = 0 if start_tok is None else start_tok
         elif _START_CUE.search(before):
             start_tok = value if start_tok is None else start_tok
         elif _AT_CUE.search(before):
@@ -970,7 +974,7 @@ _DATE_SPAN = re.compile(
     rf"|\b\d{{1,4}}[/-]\d{{1,2}}[/-]\d{{1,4}}\b",
     re.IGNORECASE)
 _CANDIDATE_AMOUNT = re.compile(
-    rf"(?<![\w.,:/#₹$£€¥-])(?P<num>{_NUM}){_NUM_END}(?P<mult>{_MULT})?{_NOT_MONEY_UNIT}"
+    rf"(?<![\w.,:/#₹$£€¥-])(?P<num>(?:[+-]\s*)?{_NUM}){_NUM_END}(?P<mult>{_MULT})?{_NOT_MONEY_UNIT}"
     r"(?!\s*(?:feet|ft|road|rd|main|cross|block|sector|street|lane|floor|phase|stage|layout|nagar)\b)",
     re.IGNORECASE)
 _READ_SPANS: list[re.Pattern[str]] = [
@@ -978,6 +982,7 @@ _READ_SPANS: list[re.Pattern[str]] = [
     _CLOCK_TOKEN, _DURATION_RE, *(rx for rx, _ in _FUZZY_DURATIONS), _GROUP_PLUS_ME, _GROUP_TOTAL, _DATE_SPAN,
 ]
 _MIN_UNREAD_AMOUNT = 50
+NEGATIVE_BUDGET_NOTE = "Your budget was negative; using zero until you provide a non-negative budget"
 UNREAD_AMOUNT_PREFIX = "Couldn't tell whether "
 
 
@@ -1099,7 +1104,7 @@ def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
         if not explicit and money and money.explicit and money.amount == budget:
             currency, explicit = money.currency, True
     elif money is not None:
-        budget = money.amount
+        budget = max(0, money.amount)
         if not explicit and money.explicit:
             currency, explicit = money.currency, True
 
@@ -1115,6 +1120,8 @@ def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
     if minutes is None:
         minutes = found.minutes
     assumptions: list[str] = []
+    if request.budget is None and money is not None and money.amount < 0:
+        assumptions.append(NEGATIVE_BUDGET_NOTE)
     if start is None:
         start = LONG_DAY_START_MIN if minutes and minutes > LONG_WINDOW_MIN else DEFAULT_START_MIN
         start_assumed = True
@@ -1203,7 +1210,8 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     # The model's time and budget fields count only when the user's text actually contains a time expression
     # or a money-like number; otherwise they were invented and the rules value or a disclosed default is used.
     time_seen, money_seen = _text_evidence(request)
-    budget = m.budget if request.budget is None and m.budget is not None and money_seen else r.budget
+    budget = (m.budget if request.budget is None and m.budget is not None and money_seen
+              and NEGATIVE_BUDGET_NOTE not in r.assumptions else r.budget)
     explicit = request.currency is not None or rules.budget_currency_explicit  # only text we can see
     if request.currency is not None:
         currency: str | None = request.currency
@@ -1436,6 +1444,10 @@ def clarification_questions(outcome: ParseOutcome, matches: list[Location] | Non
         questions.append(ClarificationQuestion(
             id="conflict", question=f"“{a}” and “{b}” can't both happen in one plan. Which should I keep?",
             options=[a, b], field="constraints"))
+    if NEGATIVE_BUDGET_NOTE in prefs.assumptions:
+        questions.append(ClarificationQuestion(
+            id="budget", question="Your budget is negative. What non-negative budget should I use per person?",
+            options=["0", "500", "1000"], field="budget"))
     if not city_missing and prefs.budget is not None and not outcome.budget_currency_explicit:
         known, local = _location_currency(prefs.city, matches)
         if known and local != "INR":
@@ -1513,7 +1525,7 @@ def _apply_budget(data: dict[str, Any], value: str) -> None:
     money = _extract_money(_normalize_text(value), bare_ok=True)
     if money is None or not 0 <= money.amount <= _MAX_BUDGET:
         return
-    data["budget"] = money.amount
+    data["budget"] = max(0, money.amount)
     if money.explicit and money.currency:
         data["currency"] = money.currency
 

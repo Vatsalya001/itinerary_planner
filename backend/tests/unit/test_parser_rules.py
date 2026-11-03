@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from app.domain.pacing import meal_windows_between, profile_for
 from app.domain.parser_rules import (
+    apply_answers,
     apply_defaults,
     clarification_questions,
     default_queries,
@@ -1101,3 +1102,64 @@ def test_response_guidance_does_not_hide_unknown_access_or_safety_requirements(r
     outcome = parse(city="London", budget=50, currency="GBP", constraints=[requirement])
     assert outcome.unmapped_constraints == [requirement]
     assert any(q.id == "constraint" for q in clarification_questions(outcome, [LONDON], False))
+
+
+@pytest.mark.parametrize("guidance", [
+    "If that won’t fit, explain the trade-off.",
+    "If it cannot fit, explain the trade-off.",
+    "I need you to explain the trade-offs.",
+    "We need you to state the assumptions.",
+    "Please clearly distinguish verified accessibility from what I need to check.",
+])
+def test_response_guidance_variants_are_not_unknown_venue_requirements(guidance):
+    outcome = parse(free_text="London. Budget £50. From noon to 4 PM. " + guidance)
+    assert outcome.unmapped_constraints == []
+    assert clarification_questions(outcome, [LONDON], False) == []
+
+
+@pytest.mark.parametrize("requirement", [
+    "I need you to explain the trade-offs and avoid peanuts",
+    "I need you to find a hearing loop",
+])
+def test_response_guidance_matching_does_not_swallow_mixed_safety_requirements(requirement):
+    outcome = parse(city="London", budget=50, currency="GBP", constraints=[requirement])
+    assert outcome.unmapped_constraints == [requirement]
+    assert any(q.id == "constraint" for q in clarification_questions(outcome, [LONDON], False))
+
+
+def test_response_guidance_preserves_wheelchair_requirement():
+    outcome = parse(city="London", budget=50, currency="GBP",
+                    constraints=["If my wheelchair won't fit", "I need you to explain the trade-offs"])
+    assert "access:wheelchair" in keys(outcome.preferences.hard_constraints)
+    assert outcome.unmapped_constraints == []
+
+
+@pytest.mark.parametrize(("window", "start", "minutes"), [
+    ("From midnight to 4 AM", 0, 240),
+    ("From 10 PM until midnight", 1320, 120),
+    ("midnight to 4 AM", 0, 240),
+])
+def test_midnight_windows_keep_the_requested_boundaries(window, start, minutes):
+    outcome = parse(free_text="London. Budget £50. " + window)
+    assert (outcome.preferences.start_min, outcome.preferences.available_minutes) == (start, minutes)
+
+
+@pytest.mark.parametrize("budget", ["-100 rupees", "₹-100", "budget -100", "-1k rupees", "- 100 rupees", "₹−100"])
+def test_negative_text_budget_is_not_turned_positive_or_replaced_by_a_default(budget):
+    request = PlanRequest(free_text="Delhi. " + budget + ". I have 2 hours.")
+    outcome = parse_rules(request, NOW)
+    assert outcome.preferences.budget == 0
+    assert any(q.id == "budget" for q in clarification_questions(outcome, [BLR], False))
+    # Even a model misreading the sign cannot relax this bound.
+    llm = outcome.model_copy(update={"preferences": outcome.preferences.model_copy(update={"budget": 100})})
+    merged = merge_parse(llm, outcome, request)
+    assert merged.preferences.budget == 0
+    assert any(q.id == "budget" for q in clarification_questions(merged, [BLR], False))
+    resumed = parse_rules(apply_answers(request, {"budget": "500"}), NOW)
+    assert resumed.preferences.budget == 500
+    assert clarification_questions(resumed, [BLR], False) == []
+
+
+def test_oversized_negative_money_input_does_not_crash_parser():
+    outcome = parse(free_text="Delhi. Budget -" + "9" * 400 + " rupees. I have 2 hours.")
+    assert outcome.preferences.budget is None

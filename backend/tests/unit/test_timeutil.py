@@ -92,3 +92,15 @@ def test_parse_time_range_dotted():
                                                 ("9:30 to 1:00", (570, 780)), ("22:00 to 01:00", (1320, 1500))])
 def test_parse_time_range_across_noon(text, expected):
     assert parse_time_range(text) == expected
+
+
+@pytest.mark.parametrize("text", ["24:01", "24:30", "24:59", "24.30"])
+def test_clock_rejects_non_midnight_values_in_hour_24(text):
+    assert parse_clock(text) is None
+
+
+def test_clock_keeps_exact_end_of_day_and_overnight_ranges():
+    assert parse_clock("24:00") == 1440
+    assert parse_clock("midnight") == 1440
+    assert parse_time_range("23:00 to 24:00") == (1380, 1440)
+    assert parse_time_range("23:00 to 24:30") is None
