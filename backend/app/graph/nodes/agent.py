@@ -107,10 +107,13 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
         else:
             turns += 1
             tools = tool_schemas()
-            if turns == turn_cap and turn_cap > 1 and state.get("ledger"):
-                final_turn = True
+            reserve_repair = full_chain[0].startswith("cerebras:") and turn_cap >= 3 and turns == turn_cap - 1
+            if (turns == turn_cap or reserve_repair) and turn_cap > 1 and state.get("ledger"):
+                final_turn = turns == turn_cap
                 tools = [t for t in tools if t["function"]["name"] == SUBMIT_PLAN]
-                new.append(HumanMessage(content=FINAL_TURN_TEXT))
+                new.append(HumanMessage(content=("Submit the best validated option now. Keep the remaining turn "
+                                                "for validation repair; do not search or check again.")
+                                        if reserve_repair else FINAL_TURN_TEXT))
             tracker = UsageTracker()
             waits: list[float] = []
             try:

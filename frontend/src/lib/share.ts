@@ -15,6 +15,7 @@ import { routeUrlFor, safeHttpsUrl } from './urls'
 
 export interface ShareTextOptions {
   shareUrl?: string | null
+  accessRequired?: boolean
 }
 
 /** The plan as plain text for copying or WhatsApp. Only data fields; no markup. */
@@ -23,6 +24,7 @@ export function planToText(plan: CanonicalPlan, options: ShareTextOptions = {}):
   const lines: string[] = []
   lines.push(`My Saturday in ${plan.city}`)
   lines.push(`${fmtDate(plan.date)}, ${fmtClockRange(plan.start_min, plan.end_min)}`)
+  lines.push(`Requested window: ${fmtClockRange(plan.start_min, plan.start_min + t.available_minutes)}`)
   lines.push(`Weather: ${weatherLine(plan.weather)}`)
   lines.push('')
 
@@ -37,13 +39,16 @@ export function planToText(plan: CanonicalPlan, options: ShareTextOptions = {}):
     const leg = legAfter(plan, i) // by from_id/to_id, exactly like the timeline in PlanView
     if (leg) {
       const fare = leg.fare.max > 0 ? `, ${fmtMoneyRange(leg.fare.min, leg.fare.max, leg.fare.currency)} estimate` : ''
-      lines.push(`   then ${modeLabel(leg.mode).toLowerCase()} about ${leg.minutes} min${fare}`)
+      const label = options.accessRequired && leg.mode === 'walk'
+        ? 'outdoor transfer (step-free route unverified); standard pedestrian estimate'
+        : modeLabel(leg.mode).toLowerCase()
+      lines.push(`   then ${label} about ${leg.minutes} min${fare}`)
     }
   })
 
   lines.push('')
   const budget = t.budget !== null && t.budget !== undefined ? ` of ${fmtMoney(t.budget, t.currency)} budget` : ''
-  lines.push(`Worst case per person: ${fmtMoney(t.worst_case, t.currency)}${budget} (includes 10% contingency)`)
+  lines.push(`Estimated upper total per person: ${fmtMoney(t.worst_case, t.currency)}${budget} (includes 10% contingency)`)
   const route = routeUrlFor(plan)
   if (route) lines.push(`Route: ${route}`)
   const share = safeHttpsUrl(options.shareUrl) ?? (typeof options.shareUrl === 'string' && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/p\//.test(options.shareUrl) ? options.shareUrl : null)

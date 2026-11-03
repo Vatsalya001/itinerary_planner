@@ -37,6 +37,10 @@ def policy_for(c: Candidate, ctx: WorldContext) -> dict[str, Any] | None:
 
 
 def admission_problem(c: Candidate, ctx: WorldContext) -> str | None:
+    if c.kind == "place" and ("listing:tour_operator" in c.tags or re.search(
+            r"\bwalking\s+tours?\b|\btour\s+(?:agency|operator)\b|\btravel\s+agency\b", c.name, re.I)):
+        return (f"{c.name} is a tour-service listing, not a verified historical attraction or a scheduled tour; "
+                "a business's opening hours do not establish a tour start time")
     policy = policy_for(c, ctx)
     if policy and policy.get("requires_child"):
         return (f"{c.name} requires an accompanying child under its published admission policy; "

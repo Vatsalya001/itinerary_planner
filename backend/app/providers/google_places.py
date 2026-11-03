@@ -297,6 +297,8 @@ def _choose_category(place: dict[str, Any], wanted: str | None) -> str | None:
     for key in found:
         if key in allowed:
             return key
+    if not found and wanted in {"museum", "art_gallery", "heritage_walk"}:
+        return None  # a search category is not evidence that a tour agency is a historical attraction
     if not found and wanted in allowed:
         return wanted  # nothing maps (e.g. only "point_of_interest"): trust the requested category
     return None
@@ -374,6 +376,8 @@ def place_to_candidate(
     popularity = popularity_from_rating_count(rating_count)
     live = place.get("liveMusic")
     tags = list(info.tags)
+    if {"tour_agency", "travel_agency", "tourist_information_center"} & set(types):
+        tags.append("listing:tour_operator")
     if live is True:
         tags.append("live music")
     if place.get("outdoorSeating") is True:

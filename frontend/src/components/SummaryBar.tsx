@@ -47,7 +47,7 @@ function BudgetMeter({ worst, budget, currency }: { worst: number; budget: numbe
   )
 }
 
-export function SummaryBar({ plan }: { plan: CanonicalPlan }) {
+export function SummaryBar({ plan, accessRequired = false }: { plan: CanonicalPlan; accessRequired?: boolean }) {
   const t = plan.totals
   const hasBudget = typeof t.budget === 'number'
   const rainy = plan.weather.status === 'ok' && (plan.weather.precip_prob_max ?? 0) >= 50
@@ -57,7 +57,7 @@ export function SummaryBar({ plan }: { plan: CanonicalPlan }) {
         icon="calendar"
         label="When"
         value={fmtClockRange(plan.start_min, plan.end_min)}
-        sub={`${fmtDate(plan.date)} · ${fmtDuration(t.elapsed_min)}`}
+        sub={`${fmtDate(plan.date)} · ${fmtDuration(t.elapsed_min)} scheduled. Requested window: ${fmtClockRange(plan.start_min, plan.start_min + t.available_minutes)}`}
       />
       <Tile
         icon={rainy ? 'rain' : 'sun'}
@@ -89,7 +89,7 @@ export function SummaryBar({ plan }: { plan: CanonicalPlan }) {
         icon="clock"
         label="Left over"
         value={typeof t.budget_left === 'number' ? `${fmtMoney(t.budget_left, t.currency)} spare` : 'No budget set'}
-        sub={`${fmtDuration(Math.max(0, t.minutes_left))} spare of ${fmtDuration(t.available_minutes)} · ${fmtDuration(t.walking_min)} walking`}
+        sub={`${fmtDuration(Math.max(0, t.minutes_left))} spare of ${fmtDuration(t.available_minutes)} · ${fmtDuration(t.walking_min)} ${accessRequired ? 'standard pedestrian estimate' : 'walking'}`}
       />
     </dl>
   )

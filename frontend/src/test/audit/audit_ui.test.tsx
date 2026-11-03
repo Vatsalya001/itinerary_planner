@@ -189,7 +189,7 @@ describe('audit: degraded results', () => {
     renderPlanner()
     plan()
     await screen.findByRole('heading', { name: 'Your Saturday in Bangalore' })
-    expect(screen.getByText('Planned by cerebras:gpt-oss-120b and checked by the validator.')).toBeInTheDocument()
+    expect(screen.getByText('Planned with cerebras:gpt-oss-120b and checked by the validator.')).toBeInTheDocument()
     expect(screen.queryByText('The rule-based planner took over')).not.toBeInTheDocument()
     expect(screen.queryByText(/a simpler rule-based planner built the plan/)).not.toBeInTheDocument()
   })

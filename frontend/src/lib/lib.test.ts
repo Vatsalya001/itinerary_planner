@@ -296,7 +296,7 @@ describe('share text', () => {
     expect(text).toContain('₹250–₹450 per person, listed price')
     expect(text).toContain('then auto-rickshaw about 16 min, ₹60–₹90 estimate')
     expect(text).toContain('Plan B if it rains: Venkatappa Art Gallery')
-    expect(text).toContain('Worst case per person: ₹1,143 of ₹2,000 budget')
+    expect(text).toContain('Estimated upper total per person: ₹1,143 of ₹2,000 budget')
     expect(text).toContain('Plan: https://saturday.example/p/sh_test123')
     expect(whatsappUrl('a b')).toBe('https://wa.me/?text=a%20b')
   })

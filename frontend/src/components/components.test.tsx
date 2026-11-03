@@ -14,11 +14,11 @@ describe('PlanView', () => {
     render(<PlanView result={result} shareUrl="https://saturday.example/p/sh_test123" />)
 
     expect(screen.getByRole('heading', { level: 2, name: 'Your Saturday in Bangalore' })).toBeInTheDocument()
-    expect(screen.getByText('Planned by anthropic:claude-opus-5-5 and checked by the validator.')).toBeInTheDocument()
+    expect(screen.getByText('Planned with anthropic:claude-opus-5-5 and checked by the validator.')).toBeInTheDocument()
 
     // summary bar
     expect(screen.getByText('3:00 PM – 6:35 PM')).toBeInTheDocument()
-    expect(screen.getByText('Saturday, 7 November 2026 · 3 h 35 min')).toBeInTheDocument()
+    expect(screen.getByText('Saturday, 7 November 2026 · 3 h 35 min scheduled. Requested window: 3:00 PM – 7:00 PM')).toBeInTheDocument()
     expect(screen.getByText('Partly cloudy')).toBeInTheDocument()
     expect(screen.getByText('19–28°C · 20% chance of rain · sunset 5:45 PM')).toBeInTheDocument()
     expect(screen.getByText('₹1,143')).toBeInTheDocument()

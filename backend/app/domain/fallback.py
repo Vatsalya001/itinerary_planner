@@ -552,7 +552,7 @@ class Planner:
         return (n.end - self.ctx.start_min - n.idle) / max(1, self.limit)
 
     def _quality(self, n: _Node) -> float:
-        travel_penalty = 0.4 if prefers_short_travel(self.prefs) else 0.08
+        travel_penalty = 0.15 if prefers_short_travel(self.prefs) else 0.08
         s = n.base + 6.0 * len(n.covered) + 6.0 * len(n.includes) - travel_penalty * n.leg_minutes - 0.03 * n.idle
         for name in n.meal_credit:
             s += 1.5 if name == "snack" else self.main_meal_weight.get(name, 3.0)
@@ -560,6 +560,10 @@ class Planner:
         s -= 4.0 * n.long_waits  # avoid standing around before an event when another plan exists
         s -= 4.0 * sum(1 for name in n.full_meals if not name)  # a required meal at an odd time
         used = self._used(n)
+        if self.limit >= 90 and used < MIN_USE:
+            # Do not let a nearby but incomplete café-only plan beat a feasible mixed-interest outing.
+            missing = len(set(self.inputs.interests) - set(n.covered))
+            s -= 15.0 * missing * (1.0 - used / MIN_USE)
         s += 4.0 * min(1.0, used / MIN_USE) + 3.0 * min(1.0, max(0.0, used - MIN_USE) / 0.25)
         if self.ctx.weather.is_rainy:
             s -= 4.0 * n.outdoor  # all-indoor when rain is likely and indoor options exist

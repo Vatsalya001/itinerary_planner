@@ -703,3 +703,45 @@ async def test_text_on_the_last_turn_goes_straight_to_the_fallback(monkeypatch: 
     assert result.status == "fallback"
     assert any("didn't submit" in d for d in result.degradations)
     assert_trace_integrity(events)
+
+
+async def test_cerebras_reserves_a_turn_for_submission_repair(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str, ...]] = []
+
+    class Recording(_KeepsSearching):
+        def _agent_reply(self, messages: list[BaseMessage]) -> Any:
+            seen.append(tuple(self.tool_names))
+            return super()._agent_reply(messages)
+
+    monkeypatch.setattr(registry_module, "get_chat_model",
+                        lambda model_id, purpose, settings, **kwargs: Recording(model_id=model_id))
+    result, events = await collect(request_for("assignment_example"),
+                                   make_deps(primary_model="cerebras:gpt-oss-120b"))
+    assert result.status == "complete" and result.mode == "agent"
+    assert len(seen) == 3  # search, search, submit; fourth model turn remains available for a repair
+    assert seen[-1] == ("submit_plan",)
+    assert_trace_integrity(events)
+    assert_plan_sound(result)
+
+
+async def test_underfilled_proposal_is_improved_and_disclosed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.domain.schemas import DraftStop, PlanDraft
+
+    class ShortProposal(ScriptedAgentModel):
+        def _compose(self, prefs: Any, ctx: Any, enforced: Any, ledger: dict[str, Any]) -> Any:
+            cafes = [c for c in ledger.values() if c.category == "cafe"]
+            if not cafes:
+                return super()._compose(prefs, ctx, enforced, ledger)
+            return PlanDraft(stops=[DraftStop(candidate_id=cafes[0].id, duration_min=50, why="A food break.")])
+
+    monkeypatch.setattr(registry_module, "get_chat_model",
+                        lambda model_id, purpose, settings, **kwargs: ShortProposal(model_id=model_id))
+    result, events = await collect(request_for("assignment_example"), make_deps())
+    assert result.status == "complete" and result.mode == "agent" and result.plan
+    assert len(result.plan.stops) > 1
+    assert result.plan.totals.elapsed_min >= 144
+    assert any("system replaced a short AI proposal" in a for a in result.assumptions)
+    validations = [e for e in events if e.type == "validation" and e.node == "validate_plan"]
+    assert any((e.data or {}).get("quality_improved") for e in validations)
+    assert_trace_integrity(events)
+    assert_plan_sound(result)

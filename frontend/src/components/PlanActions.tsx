@@ -12,11 +12,13 @@ export function PlanActions({
   shareUrl,
   shareId,
   onPlanAgain,
+  accessRequired = false,
 }: {
   plan: CanonicalPlan
   shareUrl: string | null
   shareId: string | null
   onPlanAgain?: () => void
+  accessRequired?: boolean
 }) {
   const [status, setStatus] = useState('')
   const timer = useRef<number | undefined>(undefined)
@@ -29,7 +31,7 @@ export function PlanActions({
   }
 
   const routeUrl = routeUrlFor(plan)
-  const text = planToText(plan, { shareUrl })
+  const text = planToText(plan, { shareUrl, accessRequired })
 
   return (
     <div className="space-y-2">

@@ -10,6 +10,10 @@
 - Keep Cerebras credits/quota available. The application retains its trial-safe 5-call/minute limiter; allow at least a minute between demo runs. Billing tier was not inspected.
 - Local interview handbook is private and intentionally uncommitted.
 
+## Latest follow-up
+
+The Mumbai underfill, Delhi tour-listing/turn-budget and Gurugram preference/export findings are addressed in the [plan-quality release](verification/PLAN_QUALITY_2026-11-03.md). Fresh acceptance evidence belongs there; earlier smoke results remain historical observations.
+
 ## Required deliverables
 
 - Public hosted UI URL, tested without the author's login.

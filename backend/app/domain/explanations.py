@@ -18,7 +18,8 @@ def ground_plan_text(plan: CanonicalPlan, prefs: Preferences, constraints: list[
         covered.update(hits)
         labels = [label for interest in prefs.interests if interest in hits
                   if (label := safe_interest_label(interest))]
-        parts = ["Fits your interest in " + " and ".join(labels[:2]) if labels else "Adds a break between your main activities"]
+        parts = ["Fits your interest in " + " and ".join(labels[:2]) if labels else
+                 "Provides a food break" if is_food_stop(c) else "Adds a change of pace from your main interests"]
         if prefs.energy == Energy.LOW and c.seated:
             parts.append("a seated break to suit your low energy")
         for con in constraints:

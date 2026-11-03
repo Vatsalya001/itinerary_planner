@@ -7,12 +7,14 @@ the deadline close -> deterministic fallback.
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from typing import Any
 
 from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
 
+from app.domain.quality import improve_underfilled
 from app.domain.schemas import ValidationReport
 from app.domain.validator import draft_from_payload, validate_plan
 from app.graph.nodes.common import (
@@ -60,23 +62,43 @@ async def validate_submission(state: PlannerState, runtime: Runtime[RunContext])
         if "UNKNOWN_ID" in codes:
             kinds["unknown_id"] += 1
         filled_minutes = 0
+        quality_improved = False
+        quality_error: str | None = None
         if report.ok and draft is not None:  # stretch toward the window; only a still-valid result is used
             draft, filled_minutes = fill_draft(draft, ledger, ctx, get_prefs(state), get_constraints(state, "enforced"),
                                                get_constraints(state, "original"), rc.deps.travel)
+            if rc.remaining() > DEADLINE_RESERVE_S + 1:
+                try:
+                    improved = await asyncio.wait_for(asyncio.to_thread(
+                        improve_underfilled, draft, ledger, ctx, get_prefs(state),
+                        get_constraints(state, "original"), rc.deps.travel), 0.75)
+                except Exception as exc:  # optional quality search; cancellation still propagates
+                    quality_error = type(exc).__name__
+                    improved = draft
+                if improved is not draft:
+                    draft, filled_minutes = fill_draft(improved, ledger, ctx, get_prefs(state),
+                        get_constraints(state, "enforced"), get_constraints(state, "original"), rc.deps.travel)
+                    quality_improved = True
+            report = validate_plan(draft, ledger, ctx, get_prefs(state), get_constraints(state, "original"), rc.deps.travel)
         info["summary"] = (f"attempt {attempts}/{max_attempts}: "
                            + ("valid" if report.ok else f"{len(report.errors)} error(s): {', '.join(codes)}")
+                           + ("; improved an underfilled proposal" if quality_improved else "")
                            + (f"; visits lengthened by {filled_minutes} min to use the window" if filled_minutes
                               else ""))
-        info["data"] = {"attempt": attempts, "ok": report.ok, "codes": codes, "filled_minutes": filled_minutes}
+        info["data"] = {"attempt": attempts, "ok": report.ok, "codes": codes, "filled_minutes": filled_minutes,
+                        "quality_improved": quality_improved, "quality_error": quality_error}
     tracer.emit("validation", node="validate_plan", summary="passed" if report.ok else "failed: " + ", ".join(codes),
                 data={"ok": report.ok, "attempt": attempts, "max_attempts": max_attempts, "source": "agent",
-                      "filled_minutes": filled_minutes,
+                      "filled_minutes": filled_minutes, "quality_improved": quality_improved,
                       "violations": violation_dicts(report.violations, include_ids=False)})
 
     first_valid = state.get("first_submit_valid")
     update: dict[str, Any] = {"submit_attempts": attempts, "pending_submit": None,
                               "protocol_errors": sum(kinds.values()), "protocol_error_kinds": dict(kinds),
                               "first_submit_valid": report.ok if attempts == 1 else first_valid}
+    if quality_improved:
+        note = "The system replaced a short AI proposal with a fuller validated plan from the places it searched."
+        update["extra_assumptions"] = [note]
     call_id = str(pending.get("id") or "submit_plan")
     if report.ok and draft is not None:
         tracer.emit("tool_completed", node="validate_plan", tool=SUBMIT_PLAN, summary="plan accepted",

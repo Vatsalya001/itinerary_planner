@@ -5,7 +5,7 @@ An AI agent that turns a city, budget, available time, mood, interests, and cons
 **Source:** https://github.com/Vatsalya001/itinerary_planner  
 **Public app:** https://itinerary-planner-r54t.onrender.com/
 
-**Submission verification:** [practical guardrails and current checks](docs/verification/PRACTICAL_GUARDRAILS_2026-11-03.md) · [historical live smoke evidence](docs/verification/SUBMISSION_SMOKE_2026-11-03.md).
+**Submission verification:** [latest plan-quality fixes](docs/verification/PLAN_QUALITY_2026-11-03.md) · [practical guardrails and current checks](docs/verification/PRACTICAL_GUARDRAILS_2026-11-03.md) · [historical live smoke evidence](docs/verification/SUBMISSION_SMOKE_2026-11-03.md).
 
 ## What the app does
 
@@ -95,8 +95,8 @@ Latest verified release results (see the [performance release evidence](docs/ver
 
 | Check | Result |
 |---|---|
-| Backend tests | 1,863 passed; 11 live/Ollama cases deselected; no expected failures |
-| Frontend tests | 142 passed; no expected failures |
+| Backend tests | 1,871 passed; 11 live/Ollama cases deselected; no expected failures |
+| Frontend tests | 144 passed; no expected failures |
 | Ruff, mypy, frontend typecheck/lint/build | Passed |
 | Chromium browser end to end | 21 passed; no expected failures |
 | Offline fault and workflow evals | 32/32 |
@@ -137,3 +137,7 @@ Release `89b963f` completed fresh Mumbai and London requests in Cerebras agent m
 ## Practical guardrail scope
 
 Entrance accessibility is distinct from internal facilities and routes; the latter remain explicitly unverified. Museum admission estimates make budget checks provisional. Known child-accompaniment restrictions are enforced conservatively because ages are not represented. National Gallery general admission is distinguished from paid exhibitions. Mumbai motor travel uses cab estimates, and a short-travel preference can still require an explained compromise. See the current guardrails report for evidence and limitations; no zero-bug or comprehensive venue-verification claim is made.
+
+## Requested time and plan quality
+
+The UI separates the requested window from scheduled activity time and labels substantially underfilled plans as partial. A bounded local quality check can replace a short proposal with a fuller validated option from the returned places while preserving covered interests and hard constraints; that adjustment is disclosed. Optional activities remain optional, explicit interests are retained, and tour-business listings do not establish scheduled historical visits. See the latest plan-quality report for exact checks and limits.

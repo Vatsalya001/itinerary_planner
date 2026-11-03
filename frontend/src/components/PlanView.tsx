@@ -61,7 +61,7 @@ export function PlanView({
           {result.mode === 'deterministic'
             ? 'Built by the backup planner (no AI model) and checked by the validator.'
             : result.model
-              ? `Planned by ${result.model} and checked by the validator.`
+              ? `Planned with ${result.model} and checked by the validator.`
               : 'Checked by the validator before it was shown.'}
         </p>
       </div>
@@ -80,7 +80,12 @@ export function PlanView({
       ) : null}
       <DegradationNotices items={result.degradations} exclude={isFallback ? ['planner'] : []} />
 
-      <SummaryBar plan={plan} />
+      {plan.totals.available_minutes >= 90 && plan.totals.elapsed_min < 0.6 * plan.totals.available_minutes ? (
+        <Notice tone="warn" title="Partial itinerary">
+          <p>Only part of your requested window is scheduled. The remaining time is free; this is not a full-window outing.</p>
+        </Notice>
+      ) : null}
+      <SummaryBar plan={plan} accessRequired={accessRequired} />
 
       {plan.summary_note ? (
         <p className="rounded-xl bg-orange-50 p-3 text-sm text-stone-800">{plan.summary_note}</p>
@@ -152,7 +157,7 @@ export function PlanView({
         <h3 id="actions-title" className="mb-3 text-base font-semibold text-stone-900">
           Take it with you
         </h3>
-        <PlanActions plan={plan} shareUrl={shareUrl} shareId={result.share_id ?? null} onPlanAgain={onPlanAgain} />
+        <PlanActions plan={plan} accessRequired={accessRequired} shareUrl={shareUrl} shareId={result.share_id ?? null} onPlanAgain={onPlanAgain} />
         {result.share_id ? (
           <div className="mt-3 border-t border-stone-100 pt-3">
             <Feedback shareId={result.share_id} />

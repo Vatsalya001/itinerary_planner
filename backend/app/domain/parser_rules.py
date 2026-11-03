@@ -703,6 +703,20 @@ def normalize_interest(raw: str) -> list[str]:
     return _extract_interests([low]) or [low]
 
 
+def _explicit_interest_tags(request: PlanRequest) -> list[str]:
+    sentences = _sentences(_normalize_text(request.free_text))
+    stated = [s for s in sentences if not _is_instruction_like(s) and re.search(
+        r"\b(?:enjoy|like|love|interested in|interests|try to include|if possible)\b", s, re.I)]
+    return _extract_interests([_blank_places(s) for s in stated])
+
+
+def _dedupe_soft(items: list[str]) -> list[str]:
+    # A model often repeats "Prefer nearby stops" as "nearby stops".
+    normalized = [re.sub(r"^(?:please\s+)?(?:i\s+)?prefer(?:s)?\s+", "", x.strip(), flags=re.I)
+                  for x in items]
+    return _dedupe([x.rstrip(" .") for x in normalized])
+
+
 def _normalize_interests(raw: list[str]) -> list[str]:
     out: list[str] = []
     for item in raw:
@@ -865,6 +879,9 @@ def _relaxed_assumptions(request: PlanRequest) -> list[str]:
     return out
 
 
+_OPTIONAL_INCLUDE = re.compile(r"\b(?:try to|if possible|if time (?:allows|permits)|ideally|preferably)\b", re.I)
+
+
 def _map_sentence(sentence: str) -> list[Constraint]:
     """map_constraint_text over a free-text sentence, with source_text narrowed to the triggering clause."""
     found = map_constraint_text(sentence)
@@ -874,6 +891,8 @@ def _map_sentence(sentence: str) -> list[Constraint]:
     out: list[Constraint] = []
     for c in found:
         clause = next((cl for cl in clauses if c.key in {x.key for x in map_constraint_text(cl)}), sentence)
+        if c.kind == "must_include" and _OPTIONAL_INCLUDE.search(clause):
+            continue
         out.append(c.model_copy(update={"source_text": clause}))
     return out
 
@@ -1246,7 +1265,8 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     if request.interests:
         interests = r.interests
     else:  # the model may only name interests the user's own words support
-        interests = _grounded_interests(m.interests, r.interests, request) or r.interests
+        interests = _dedupe([*(_grounded_interests(m.interests, r.interests, request) or r.interests),
+                             *_explicit_interest_tags(request)])
     llm_hard = _supported_llm_constraints(m.hard_constraints, request)
     hard = _without_relaxed(merge_constraints(r.hard_constraints, original_constraints(request), llm_hard), request)
     if request.group_size != 1:
@@ -1263,7 +1283,7 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
         city=city, budget=budget, currency=currency, start_min=start, available_minutes=minutes,
         date=r.date if request.date is not None else (m.date or r.date), mood=mood, energy=m.energy,
         interests=interests,
-        hard_constraints=hard, soft_preferences=_dedupe([*r.soft_preferences, *m.soft_preferences]),
+        hard_constraints=hard, soft_preferences=_dedupe_soft([*r.soft_preferences, *m.soft_preferences]),
         neighbourhood=neighbourhood, group_size=group, assumptions=assumptions,
     )
     return ParseOutcome(
@@ -1327,6 +1347,8 @@ def _user_constraint_texts(request: PlanRequest) -> tuple[list[str], list[str]]:
 
 def _clause_supports(c: Constraint, clause: str) -> bool:
     low = clause.lower()
+    if c.kind == "must_include" and _OPTIONAL_INCLUDE.search(clause):
+        return False
     if c.key in {x.key for x in map_constraint_text(clause)}:
         return True
     if c.kind == "diet" and diet_negated(low, c.value):
@@ -1354,7 +1376,7 @@ def _supported_llm_constraints(constraints: list[Constraint], request: PlanReque
     """Model-proposed hard constraints that the user's own words support: the rules mapping of a whole sentence or
     entry yields it, or the per-key lexicon matches inside one clause (cues never reach across clauses)."""
     sources, clauses = _user_constraint_texts(request)
-    mapped = {x.key for source in sources for x in map_constraint_text(source)}
+    mapped = {x.key for source in sources for x in _map_sentence(source)}
     return [c for c in constraints
             if is_valid(c) and (c.key in mapped or any(_clause_supports(c, clause) for clause in clauses))]
 

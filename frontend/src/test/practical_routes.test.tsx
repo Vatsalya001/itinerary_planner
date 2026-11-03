@@ -40,6 +40,7 @@ describe('practical route and evidence regressions', () => {
     expect(screen.getAllByText('Source reports a wheelchair-accessible entrance.')).toHaveLength(2)
     expect(screen.getAllByText(/Internal facilities, toilets and routes between stops are unverified/)).toHaveLength(2)
     expect(screen.getByText('Outdoor transfer')).toBeInTheDocument()
+    expect(screen.getByText(/standard pedestrian estimate/)).toBeInTheDocument()
     expect(screen.getByText(/timing is not a wheelchair-route estimate/)).toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: /Check entrance evidence/ })).toHaveLength(2)
     expect(screen.getByRole('link', { name: /Open full route/ }).getAttribute('href')).toContain('travelmode=walking')
@@ -51,6 +52,22 @@ describe('practical route and evidence regressions', () => {
     expect(fmtCandidateCost(candidate)).toBe('Price unknown (not included in total)')
     candidate.cost.basis = 'free'
     expect(fmtCandidateCost(candidate)).toBe('Free')
+  })
+
+  it('clearly separates a partial schedule from the requested window', () => {
+    const result = walkingPlan()
+    result.plan!.totals.elapsed_min = 63
+    result.plan!.totals.available_minutes = 240
+    render(<PlanView result={result} />)
+    expect(screen.getByText('Partial itinerary')).toBeInTheDocument()
+    expect(screen.getByText(/Requested window: 3:00 PM – 7:00 PM/)).toBeInTheDocument()
+  })
+
+  it('copied wheelchair plans do not label the transfer as a verified walk', () => {
+    const text = planToText(walkingPlan().plan!, { accessRequired: true })
+    expect(text).toContain('outdoor transfer (step-free route unverified)')
+    expect(text).toContain('standard pedestrian estimate')
+    expect(text).not.toContain('then walk about')
   })
 
   it('retains price and access caveats in copied and WhatsApp text', () => {
