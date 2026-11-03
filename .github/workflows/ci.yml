@@ -37,7 +37,7 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -85,7 +85,7 @@ jobs:
       DATABASE_URL: postgresql://planner:planner@localhost:5432/planner
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -133,9 +133,9 @@ jobs:
       BASE_URL: http://127.0.0.1:8000
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@v4.4.1
       - name: Build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           load: true
@@ -249,7 +249,7 @@ jobs:
       REPEATS: ${{ inputs.repeats }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -282,7 +282,7 @@ jobs:
         run: make eval-report
       - name: Upload results
         if: always() && steps.harness.outputs.present == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: eval-results-${{ github.run_id }}
           path: |

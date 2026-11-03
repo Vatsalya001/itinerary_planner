@@ -329,9 +329,11 @@ describe('audit: rate-limit countdown', () => {
 
 describe('audit: /evals with the committed backend/evals/results/summary.json', () => {
   bug('F-22', 'a partial row (Groq: 5 of 26 cases) is marked as partial like docs/EVAL_REPORT.md does', async () => {
+    const summary = { ...realSummary, rows: [{ ...realSummary.rows[0], model: 'groq:openai/gpt-oss-120b',
+      runs: 5, coverage: { cases: 5, suite_cases: 26, partial: true } }] }
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(JSON.stringify(realSummary), { headers: { 'content-type': 'application/json' } })),
+      vi.fn(async () => new Response(JSON.stringify(summary), { headers: { 'content-type': 'application/json' } })),
     )
     render(
       <MemoryRouter>
