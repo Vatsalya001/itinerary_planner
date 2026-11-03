@@ -96,7 +96,7 @@ Latest verified release results (see the [performance release evidence](docs/ver
 | Check | Result |
 |---|---|
 | Backend tests | 1,881 passed; 11 live/Ollama cases deselected; no expected failures |
-| Frontend tests | 144 passed; no expected failures |
+| Frontend tests | 146 passed; no expected failures |
 | Ruff, mypy, frontend typecheck/lint/build | Passed |
 | Chromium browser end to end | 21 passed; no expected failures |
 | Offline fault and workflow evals | 32/32 |
