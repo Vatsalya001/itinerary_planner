@@ -54,15 +54,15 @@ make dev
 
 Open `http://127.0.0.1:5173`. To serve the built UI and API together, run `make serve` and open `http://127.0.0.1:8000`.
 
-Example model configuration:
+Current public deployment model configuration (Render environment overrides the registry/Blueprint Groq example):
 
 ```dotenv
-PRIMARY_MODEL=groq:openai/gpt-oss-120b
-GROQ_API_KEY=your_key_here
+PRIMARY_MODEL=cerebras:gpt-oss-120b
+CEREBRAS_API_KEY=your_key_here
 FALLBACK_MODEL=
 ```
 
-For more reliable multi-call testing, use Groq Developer billing and confirm your account limits. The current public demo has been tested on the Free tier; it can hit token limits within a single planning run. The app retains a conservative 30-model-calls/minute ceiling; provider token quotas still apply. With no secondary model, failures use the validated deterministic planner.
+The live service now uses Cerebras GPT-OSS 120B. A Mumbai request completed in agent mode with no degradation; see the submission smoke report. Account billing/tier was not inspected. The Cerebras registry retains a trial-safe ceiling of 5 model calls per rolling minute and 4 agent turns, shared by requests in one process; allow at least a minute between demo runs. Provider quotas still apply. With no secondary model, failures use the validated deterministic planner. Groq remains an optional registered provider; the repository Blueprint still uses Groq unless its environment is changed.
 
 Keep real secrets in `backend/.env` or the host's environment settings. Never commit them. Model availability and provider quotas depend on your account; a rate-limited model produces a labelled fallback.
 
@@ -103,7 +103,7 @@ Latest verified release results (see the [performance release evidence](docs/ver
 | Deterministic model-suite evals | 26/26 |
 | Historical live Cerebras smoke, frozen world | 2/3; assignment example completed in agent mode; free-text case hit rate limit and returned a validated fallback |
 
-The current live Mumbai smoke returned a validated, explicitly labelled deterministic fallback after Groq HTTP 429; its anonymous share page worked. This verifies recovery and sharing, not successful AI completion. The historical Cerebras sample is small and partial; it measures model orchestration on fixed data, not real venue accuracy. No judge score or large-sample reliability claim is made. Failed and rate-limited runs remain in the report.
+After switching the deployed environment to Cerebras, the live Mumbai smoke completed in agent mode: two stops, INR 1,205 worst-case of INR 2,000, 215 of 240 minutes, stored latency 15,025 ms, and no degradation. The anonymous share page worked. An earlier Groq run hit HTTP 429 and verified labelled fallback. These are individual smoke observations, not a success-rate or latency benchmark. The historical Cerebras sample is small and partial; it measures model orchestration on fixed data, not real venue accuracy. No judge score or large-sample reliability claim is made. Failed and rate-limited runs remain in the report.
 
 [Fresh generated eval report](docs/verification/RELEASE_EVAL_REPORT.md) · [Completion checks and changes](docs/verification/RELEASE_CHECKS.md). Older model results remain in [the historical report](docs/EVAL_REPORT.md); they describe an earlier working tree.
 
@@ -113,7 +113,7 @@ The existing `Dockerfile` builds the UI and serves it from FastAPI. `render.yaml
 
 A simpler review demo can use one Render Docker service, `DATABASE_URL=sqlite:////tmp/saturday/app.db`, `FRONTEND_DIST=/app/frontend/dist`, a hosted model and its key, and the Bangalore snapshot. SQLite on an ephemeral filesystem resets on a redeploy; this is suitable for a disposable demo, not durable production sharing. `/api/health` must return HTTP 200.
 
-See [submission checklist](docs/SUBMISSION.md) for deployment settings and anonymous smoke checks. The public UI and a saved Mumbai plan were checked without login. For the strongest evaluator experience, resolve the provider quota and verify one fresh AI-completed run; the current live smoke demonstrated labelled fallback.
+See [submission checklist](docs/SUBMISSION.md) for deployment settings and anonymous smoke checks. The public UI and a saved Mumbai plan were checked without login. A fresh Mumbai run completed with Cerebras in AI agent mode and its share page was checked without login. Keep account credits/quota available for evaluators.
 
 ## Limitations
 
@@ -124,7 +124,7 @@ See [submission checklist](docs/SUBMISSION.md) for deployment settings and anony
 - Model limiters and resume locks are per process. Keep the demo at one instance; additional instances require shared coordination.
 - Persisting the planner across navigation uses browser memory only. Reloading the page clears the unsaved form and active plan; share links persist subject to the configured store and TTL.
 - The public Mumbai smoke exercised live Google Places, geocoding, weather, storage and anonymous sharing. Tavily is configured but event discovery was not exercised by this smoke. The [GitHub CI workflow](https://github.com/Vatsalya001/itinerary_planner/actions/workflows/ci.yml) checks real Postgres and builds/smoke-tests Docker. Offline checks do not establish live venue accuracy or provider capacity.
-- The latest Mumbai run hit Groq HTTP 429 and returned a one-stop fallback with an explicit underfilled-window warning. It did not fulfil every soft interest. No current successful AI-completion rate or production latency benchmark is claimed.
+- The earlier Groq Mumbai run returned an underfilled fallback after HTTP 429; the later Cerebras run completed two stops. Its estimated transfer was 35–46 minutes, so the short-travel preference was only partly satisfied. Travel modes and fares are city-level heuristics, not route-specific availability checks; verify local transport restrictions and current admission/venue suitability. No broad live AI-completion rate or production latency benchmark is claimed.
 
 ## How AI tools were used
 
