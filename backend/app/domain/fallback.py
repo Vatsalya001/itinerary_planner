@@ -806,6 +806,9 @@ class Planner:
         pace = {Energy.LOW: "An easy-paced", Energy.MEDIUM: "A relaxed", Energy.HIGH: "A full"}[self.prefs.energy]
         labels = [lab for i in self.inputs.interests if i in node.covered if (lab := safe_interest_label(i))]
         text = f"{pace} plan" + (f" around {_join(labels[:4])}" if labels else "") + "."
+        missed = [lab for i in self.inputs.interests if i not in node.covered if (lab := safe_interest_label(i))]
+        if missed:
+            text += f" This itinerary does not cover {_join(missed[:3])}; no matching stop was selected within the constraints."
         stops = [self.pool[j] for j in node.idx]
         if self.ctx.weather.is_rainy:
             text += (" Rain is likely; outdoor stops have an indoor backup." if any(is_outdoor(c) for c in stops)
@@ -820,7 +823,7 @@ class Planner:
         if self.min_seated < self.pacing.min_seated_stops and node.seated < self.pacing.min_seated_stops:
             text += " Nothing seated is outdoors, so take rests whenever you like."
         if self._used(node) < 0.5:
-            text += " It leaves plenty of free time, since this pace keeps to a few unhurried stops."
+            text += " It leaves free time; no fuller itinerary was selected from the available options."
         return text[:400]
 
     def _omissions(self, used: set[str], stops: Sequence[Candidate]) -> list[Omission]:

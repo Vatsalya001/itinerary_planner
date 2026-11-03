@@ -16,11 +16,12 @@ These saved public results were inspected without new inference calls. Singapore
 4. **Cerebras repair reserve:** when candidates exist, the penultimate turn is submission-only on the tight Cerebras cap, leaving a turn available for validation repair. The four-turn cap and five-call/minute limiter are unchanged. This reduces avoidable exhaustion; it does not guarantee no fallback.
 5. **Tour-listing guard:** place records identified as tour services are not treated as scheduled historical outings. A requested museum/art/heritage search category is no longer sufficient evidence when provider types do not map to an attraction. Actual dated tour events still use event/time validation. Historical shared plans are not rewritten.
 6. **Preference preservation:** explicit “enjoy/like/try to include” interests survive an incomplete LLM parse. Optional includes are not promoted to mandatory activities; explicit mandatory requirements remain enforced. Duplicate “Prefer nearby stops” / “nearby stops” preferences are merged.
-7. **Evidence and exports:** the wider-accessibility and unknown-price caveats remain. Wheelchair-facing summaries identify standard pedestrian estimates; copied text uses an outdoor-transfer description and labels the total as estimated. Food stops explain their food-break role when there is no other interest match.
+7. **Honest backup summaries:** a follow-up live run exposed a backup summary that attributed spare time to pace and omitted missing interests. The deterministic summary now names uncovered interests and says no fuller itinerary was selected, without inventing a cause. A synthetic regression covers this. Historical saved snapshots retain their original summary.
+8. **Evidence and exports:** the wider-accessibility and unknown-price caveats remain. Wheelchair-facing summaries identify standard pedestrian estimates; copied text uses an outdoor-transfer description and labels the total as estimated. Food stops explain their food-break role when there is no other interest match.
 
 ## Local verification
 
-- Full backend: **1,871 passed; 11 live/Ollama cases deselected**.
+- Full backend: **1,872 passed; 11 live/Ollama cases deselected**.
 - Full frontend: **144 passed**.
 - Chromium browser suite: **21 passed**; production build and real local fixture API.
 - Ruff passed; mypy passed across **75 source files**; frontend lint/typecheck/build passed.
@@ -31,7 +32,19 @@ These saved public results were inspected without new inference calls. Singapore
 
 ## Public acceptance
 
-Fresh Mumbai, Delhi and Gurugram runs must be recorded after deployment. Singapore is out of scope for this follow-up. Check completion mode, trace, actual selected venue type, schedule coverage, source caveats and share pages separately; a green code check is not an independent physical venue audit.
+Code release `48a78a2` passed [all CI jobs](https://github.com/Vatsalya001/itinerary_planner/actions/runs/41679470319), including Docker smoke and Postgres. Render initially marked that commit live while public health and assets still served `ac90d61`. A manual redeploy restored agreement: public health reported `48a78a2` before the following requests. Anonymous share pages were inspected separately.
+
+| City / run | Observed result | Coverage and limits |
+|---|---|---|
+| Mumbai `r_7ea0e55eff6e` | Agent, no degradation, 6,989 ms; 175/240 min, INR 1,929 estimated upper cost | Two stops instead of the reported 63-minute café-only result. Museum interest remained uncovered and was explicitly disclosed. A transfer could take 25 min; short-travel preference was only partly met and warned. [Saved plan](https://itinerary-planner-r54t.onrender.com/p/e5AHWkTEwJA). |
+| Delhi `r_19f3cd88cf1e` | Agent, no degradation, 18,298 ms; 90/120 min, INR 660 estimated upper cost | One repair, two submissions within three agent turns. Food and coffee survived parsing; the café stayed optional. No unscheduled walking-tour business was selected. It produced a café-only outing and disclosed the missing history interest; this is not full-interest coverage. [Saved plan](https://itinerary-planner-r54t.onrender.com/p/aqc7jOVTgpE). |
+| Gurugram `r_e0aee77953c4` | Labelled deterministic fallback after no AI submission, 13,475 ms; 110/240 min, INR 880 estimated upper cost | One restaurant, prominent Partial itinerary, requested versus scheduled window, entrance evidence linked, wider accessibility unverified. Art/museums were not covered. This run revealed the additional backup-summary wording correction above; its historical saved summary predates that correction. [Saved plan](https://itinerary-planner-r54t.onrender.com/p/Au5xaJpBDMc). |
+
+Each run used four model calls. The requests were spaced, but Delhi still recorded limiter wait; capacity is model-call based, not user-prompt based. These are individual observations, not a reliability benchmark or independent venue audit. Singapore was not run.
+
+An earlier exploratory Mumbai request added “Avoid venues that require accompanying children or membership”; the parser asked to clarify this unsupported compound constraint (`r_169202599404`, one inference call). The table uses the reported outing without that added requirement. It is not counted as a completed plan.
+
+The final backup-summary correction is covered by the full local suite and subsequent source CI; no additional hosted inference is needed to verify deterministic wording. Saved shared plans are immutable snapshots, so re-run to obtain newly worded summaries.
 
 ## Remaining boundaries
 

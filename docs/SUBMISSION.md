@@ -4,7 +4,7 @@
 
 - Public app: https://itinerary-planner-r54t.onrender.com/
 - Source: https://github.com/Vatsalya001/itinerary_planner
-- Code release CI: https://github.com/Vatsalya001/itinerary_planner/actions/runs/41664934026 (passed for `89b963f`).
+- Code release CI: https://github.com/Vatsalya001/itinerary_planner/actions/runs/41679470319 (passed for `48a78a2`; final backup-summary follow-up is verified separately).
 - Anonymous Mumbai UI and share-link smoke: [recorded evidence](verification/SUBMISSION_SMOKE_2026-11-03.md). The earlier Groq run verified labelled fallback; the earlier Cerebras run verified orchestration/sharing. Both predate the practical-guardrail corrections.
 - Fresh Mumbai and London acceptance runs completed in Cerebras agent mode without degradation; both anonymous share pages retained the correct caveats. See the [current guardrails release](verification/PRACTICAL_GUARDRAILS_2026-11-03.md) for exact observations, regression results and remaining limits. The older admission/transport defects and historical runs are retained as earlier evidence, not current practical-validity claims.
 - Keep Cerebras credits/quota available. The application retains its trial-safe 5-call/minute limiter; allow at least a minute between demo runs. Billing tier was not inspected.
@@ -12,7 +12,7 @@
 
 ## Latest follow-up
 
-The Mumbai underfill, Delhi tour-listing/turn-budget and Gurugram preference/export findings are addressed in the [plan-quality release](verification/PLAN_QUALITY_2026-11-03.md). Fresh acceptance evidence belongs there; earlier smoke results remain historical observations.
+The Mumbai underfill, Delhi tour-listing/turn-budget and Gurugram preference/export findings are addressed in the [plan-quality release](verification/PLAN_QUALITY_2026-11-03.md). Fresh Mumbai and Delhi requests completed in agent mode, while Gurugram used a labelled partial backup. Missing interests remain disclosed; these runs do not demonstrate full-interest coverage or universal reliability. Earlier smoke results remain historical observations.
 
 ## Required deliverables
 

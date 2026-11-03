@@ -84,3 +84,14 @@ def test_explicit_mandatory_requirement_and_soft_deduplication_are_preserved():
     outcome = merge_parse(llm, rules, request)
     assert "must_include:museum" in {c.key for c in outcome.preferences.hard_constraints}
     assert outcome.preferences.soft_preferences == ["nearby stops"]
+
+
+def test_partial_backup_names_missing_interests_without_inventing_a_pacing_reason():
+    from app.domain.fallback import plan_deterministic
+    cafe = make_candidate("fx:only-food", "cafe", cost=(100, 200))
+    prefs = make_prefs(interests=["food", "art", "museums"], available=480)
+    draft = plan_deterministic([cafe], make_ctx(available=480), prefs, [], HeuristicTravel())
+    assert draft is not None
+    assert "does not cover art and museums" in draft.summary_note
+    assert "since this pace" not in draft.summary_note
+    assert "no fuller itinerary was selected" in draft.summary_note
