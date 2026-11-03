@@ -51,3 +51,6 @@ IMPLEMENTATION_PLAN.md
 AGENTS.md
 README.md
 *.pdf
+
+# Private local interview handbook; never include it in the image context
+INTERVIEW_GUIDE_LOCAL.md
