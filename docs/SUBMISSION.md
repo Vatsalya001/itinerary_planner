@@ -21,7 +21,8 @@ The Mumbai underfill, Delhi tour-listing/turn-budget and Gurugram preference/exp
 - Public hosted UI URL, tested without the author's login.
 - Source repository: https://github.com/Vatsalya001/itinerary_planner
 - README with local setup, architecture, tools, provenance, limitations and AI-use disclosure.
-- Fresh eval report at `docs/verification/RELEASE_EVAL_REPORT.md`.
+- Saved release eval report at `docs/verification/RELEASE_EVAL_REPORT.md` (historical snapshot).
+- Downloadable consolidated [evaluation PDF](../output/pdf/EVALUATION_REPORT.pdf), including local models, latest code checks and limitations.
 - Optional demonstration script at `docs/DEMO_SCRIPT.md`.
 
 The original assignment allows mock data and requires three tools/functions, a realistic personalized plan, explanations, graceful failure and a simple execution trace. It specifies a two-hour limit. This repository contains additional work; do not claim it was built within that limit unless that is true of your own build process.

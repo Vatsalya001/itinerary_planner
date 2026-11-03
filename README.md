@@ -143,3 +143,9 @@ Entrance accessibility is distinct from internal facilities and routes; the latt
 The UI separates the requested window from scheduled activity time and labels substantially underfilled plans as partial. A bounded local quality check can replace a short proposal with a fuller validated option from the returned places while preserving covered interests and hard constraints; that adjustment is disclosed. Optional activities remain optional, explicit interests are retained, and tour-business listings do not establish scheduled historical visits. See the latest plan-quality report for exact checks and limits.
 
 Latest planning behaviour: [85% window target, safe final-venue fitting and medium default](docs/verification/WINDOW_POLICY_2026-11-03.md). Targets remain subordinate to venue evidence and hard constraints.
+
+## Downloadable evaluation report
+
+[Evaluation report (PDF)](output/pdf/EVALUATION_REPORT.pdf) consolidates the historical hosted/local-model comparisons, current code checks, methodology, provenance and open limitations. Historical scores are not presented as current-code model results.
+
+To regenerate with ReportLab installed: `python docs/reports/build_evaluation_pdf.py`. The generator cross-checks historical hard-pass counts against their selected committed JSONL sessions. No inference calls are made.
