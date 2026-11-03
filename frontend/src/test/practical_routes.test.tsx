@@ -63,6 +63,14 @@ describe('practical route and evidence regressions', () => {
     expect(screen.getByText(/Requested window: 3:00 PM – 7:00 PM/)).toBeInTheDocument()
   })
 
+  it.each([[191, true], [192, false]] as const)('uses the 80 percent lower margin at %i scheduled minutes', (elapsed, partial) => {
+    const result = walkingPlan()
+    result.plan!.totals.elapsed_min = elapsed
+    result.plan!.totals.available_minutes = 240
+    render(<PlanView result={result} />)
+    expect(screen.queryByText('Partial itinerary') !== null).toBe(partial)
+  })
+
   it('copied wheelchair plans do not label the transfer as a verified walk', () => {
     const text = planToText(walkingPlan().plan!, { accessRequired: true })
     expect(text).toContain('outdoor transfer (step-free route unverified)')

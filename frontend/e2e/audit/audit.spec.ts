@@ -177,7 +177,11 @@ test.describe('audit: regression guards (checked and correct)', () => {
     for await (const c of stream) chunks.push(c as Buffer)
     const ics = Buffer.concat(chunks).toString('utf8')
     expect(ics).toContain('TZID:Asia/Kolkata')
-    expect(ics).toMatch(/DTEND;TZID=Asia\/Kolkata:20261108T00\d{4}/)
+    const endMin = Number((result.plan as { end_min: number }).end_min)
+    expect(endMin).toBeGreaterThanOrEqual(1440)
+    expect(endMin).toBeLessThanOrEqual(1500) // 9 PM plus the requested four hours
+    const clock = `${String(Math.floor((endMin % 1440) / 60)).padStart(2, '0')}${String(endMin % 60).padStart(2, '0')}00`
+    expect(ics).toContain(`DTEND;TZID=Asia/Kolkata:20261108T${clock}`)
     expect(ics.split('\r\n').every((l) => Buffer.byteLength(l) <= 75)).toBe(true)
   })
 
@@ -213,7 +217,8 @@ test.describe('audit: regression guards (checked and correct)', () => {
     await expect(page.getByText(X).first()).toBeVisible()
     expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined()
     expect(await page.locator('a[href^="javascript:"]').count()).toBe(0)
-    await expect(page.getByRole('link', { name: /Open full route/ })).toHaveCount(0)
+    // A safe route is recomputed from validated coordinates; the malicious server URL is discarded.
+    await expect(page.getByRole('link', { name: /Open full route/ })).toHaveAttribute('href', /^https:\/\/www\.google\.com\/maps\/dir\/\?api=1&/)
     expect(dialogs).toEqual([])
   })
 })

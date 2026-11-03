@@ -179,7 +179,6 @@ describe('request building', () => {
       city: 'Bangalore',
       budget: 2000,
       available_time: 240,
-      mood: 'tired but wants to do something fun',
       interests: ['food', 'music', 'walks'],
       constraints: ['vegetarian', 'avoid crowded places'],
     })

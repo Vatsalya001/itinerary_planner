@@ -66,11 +66,11 @@ CAFE = make_candidate("fx:cafe", "cafe", cost=(200, 400))
 BOOKS = make_candidate("fx:books", "bookstore", offset_km=(0.4, 0.0), cost=(0, 200))
 
 
-def test_clean_plan_is_ok():
+def test_safe_underfilled_plan_is_ok_with_utilization_warning():
     report = run(make_draft(("fx:cafe", 50), ("fx:books", 40)), [CAFE, BOOKS],
                  prefs=make_prefs(constraints=["vegetarian", "avoid crowded places"]), window=150)
     assert report.ok, report.violations
-    assert report.violations == []
+    assert [(v.code, v.severity) for v in report.violations] == [("UNDERFILLED", "warning")]
     assert report.plan is not None
 
 
@@ -275,11 +275,11 @@ def test_rain_outdoor_stop_without_plan_b_warns():
     ctx = make_ctx(weather="rain", energy="medium")
     report = run(make_draft(("fx:p", 40)), [park], ctx=ctx, window=60)
     assert report.ok
-    assert [(v.code, v.severity) for v in report.violations] == [("WEATHER_RISK", "warning")]
+    assert [(v.code, v.severity) for v in report.violations] == [("WEATHER_RISK", "warning"), ("UNDERFILLED", "warning")]
     museum = make_candidate("fx:m", "museum", offset_km=(0.5, 0.0))
     draft = PlanDraft(stops=[stop("fx:p", 40, plan_b_candidate_id="fx:m")])
     covered = run(draft, [park, museum], ctx=ctx, window=60)
-    assert covered.ok and covered.violations == []
+    assert covered.ok and [(v.code, v.severity) for v in covered.violations] == [("UNDERFILLED", "warning")]
 
 
 def test_invalid_plan_b():
@@ -375,7 +375,7 @@ def test_constraint_dropped_by_parser_is_flagged_and_still_enforced():
     assert not report.ok
     veg = make_candidate("fx:v", "restaurant")
     ok = run(make_draft(("fx:v", 60)), [veg], prefs=make_prefs(constraints=[]), original=["vegetarian"], window=80)
-    assert ok.ok and codes(ok) == {"CONSTRAINT_DROPPED"}
+    assert ok.ok and codes(ok) == {"CONSTRAINT_DROPPED", "UNDERFILLED"}
 
 
 def test_stricter_parsed_diet_is_not_a_drop():
@@ -432,7 +432,7 @@ def test_alcohol_setting_crowd_and_category_rules():
     assert "ALCOHOL_CONFLICT" in codes(run(make_draft(("fx:bar", 60)), [bar], prefs=make_prefs(constraints=["alcohol:avoid"])))
     resto = make_candidate("fx:r", "restaurant", serves_alcohol=True)
     served = run(make_draft(("fx:r", 60)), [resto], prefs=make_prefs(constraints=["alcohol:avoid"]), window=80)
-    assert served.ok and {(v.code, v.severity) for v in served.violations} == {("ALCOHOL_SERVED", "warning")}
+    assert served.ok and {(v.code, v.severity) for v in served.violations} == {("ALCOHOL_SERVED", "warning"), ("UNDERFILLED", "warning")}
     park = make_candidate("fx:p", "park")
     assert "SETTING_CONFLICT" in codes(run(make_draft(("fx:cafe", 40), ("fx:p", 30)), [CAFE, park],
                                            prefs=make_prefs(constraints=["indoors only"])))
@@ -569,7 +569,7 @@ def test_summarize_checks_names_and_statuses():
     items = summarize_checks(report, make_ctx(), prefs, prefs.hard_constraints)
     assert [i.name for i in items] == ["budget", "time", "opening_hours", "diet", "accessibility", "crowds",
                                        "weather", "sources"]
-    assert all(i.status == "pass" for i in items), items
+    assert all(i.status == ("warn" if i.name == "time" else "pass") for i in items), items
     assert "₹" in items[0].detail
 
 
@@ -661,7 +661,7 @@ def test_seated_rule_waived_only_without_seated_outdoor_options():
     park = make_candidate("fx:p", "park")
     prefs = make_prefs(constraints=["outdoors only"])
     waived = run(make_draft(("fx:p", 40)), [park], prefs=prefs, window=60)
-    assert waived.ok and {(v.code, v.severity) for v in waived.violations} == {("PACING_RELAXED", "warning")}
+    assert waived.ok and {(v.code, v.severity) for v in waived.violations} == {("PACING_RELAXED", "warning"), ("UNDERFILLED", "warning")}
     time_check = next(i for i in summarize_checks(waived, make_ctx(), prefs, prefs.hard_constraints) if i.name == "time")
     assert time_check.status == "warn"
     seated_outdoor = make_candidate("fx:terrace", "street_food", seated=True, offset_km=(0.4, 0.0))

@@ -138,7 +138,7 @@ def test_fill_is_fast():
 # --- UNDERFILLED and free_time_note -------------------------------------------------------------------
 
 
-def test_underfilled_fires_below_sixty_percent_only():
+def test_underfilled_uses_eighty_percent_margin_including_short_windows():
     museum, cafe = jaipur_like()
     ctx = make_ctx(energy="medium")
     prefs = make_prefs(energy="medium", constraints=[])
@@ -157,7 +157,7 @@ def test_underfilled_fires_below_sixty_percent_only():
     assert "UNDERFILLED" not in {v.code for v in high.violations}
     short_window = check(make_draft(("fx:cafe", 30)), [cafe], make_ctx(energy="medium", available=80),
                          make_prefs(energy="medium", available=80, constraints=[]))
-    assert "UNDERFILLED" not in {v.code for v in short_window.violations}
+    assert "UNDERFILLED" in {v.code for v in short_window.violations}
 
 
 def test_underfilled_is_quiet_when_hours_make_more_impossible():

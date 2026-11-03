@@ -95,7 +95,7 @@ Latest verified release results (see the [performance release evidence](docs/ver
 
 | Check | Result |
 |---|---|
-| Backend tests | 1,872 passed; 11 live/Ollama cases deselected; no expected failures |
+| Backend tests | 1,881 passed; 11 live/Ollama cases deselected; no expected failures |
 | Frontend tests | 144 passed; no expected failures |
 | Ruff, mypy, frontend typecheck/lint/build | Passed |
 | Chromium browser end to end | 21 passed; no expected failures |
@@ -141,3 +141,5 @@ Entrance accessibility is distinct from internal facilities and routes; the latt
 ## Requested time and plan quality
 
 The UI separates the requested window from scheduled activity time and labels substantially underfilled plans as partial. A bounded local quality check can replace a short proposal with a fuller validated option from the returned places while preserving covered interests and hard constraints; that adjustment is disclosed. Optional activities remain optional, explicit interests are retained, and tour-business listings do not establish scheduled historical visits. See the latest plan-quality report for exact checks and limits.
+
+Latest planning behaviour: [85% window target, safe final-venue fitting and medium default](docs/verification/WINDOW_POLICY_2026-11-03.md). Targets remain subordinate to venue evidence and hard constraints.

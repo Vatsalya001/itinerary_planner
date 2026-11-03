@@ -18,7 +18,7 @@ Codes added beyond the original list:
   that are not events with times: they are only a plan when something is on.
 * ``PROSE_NUMERIC_CLAIM`` also covers distances ("2.2 km", "500 m", "a 2km walk", "half a kilometre"); leg
   distances are shown from data. It ignores place names from the ledger ("Midnight Scoops" is a name, not a time).
-* ``UNDERFILLED`` (warning): elapsed time under 60% of a window of 90+ minutes, unless opening hours, events or
+* ``UNDERFILLED`` (warning): elapsed time under 80% of a window of 30+ minutes, unless opening hours, events or
   sunset leave no stop room to run longer (see ``hours_bound_room``). ``app.domain.fill.fill_window`` stretches
   durations to fix it; shown under the "time" check as "Uses X of Y min; about Z left free".
 * ``IDLE_WAIT`` (warning): a stop starts more than ``IDLE_WAIT_MIN`` minutes after the arrival time (waiting
@@ -118,15 +118,15 @@ CODES: dict[str, str] = {
     "PACING_RELAXED": "Low-energy seated-stop rule waived for 'outdoors only' (no seated outdoor options) (warning)",
     "LOCATION_APPROXIMATE": "Stop or Plan B has no real coordinates; venue location and legs are estimates (warning)",
     "IDLE_WAIT": "A stop starts more than 20 minutes after you arrive, e.g. waiting for an event (warning)",
-    "UNDERFILLED": "The plan uses less than 60% of a window of 90+ minutes while stops could run longer (warning)",
+    "UNDERFILLED": "The plan uses less than 80% of a window of 30+ minutes while stops could run longer (warning)",
 }
 
 WARNING_CODES = {"HOURS_UNVERIFIED", "WEATHER_RISK", "CONSTRAINT_DROPPED", "ALCOHOL_SERVED", "PACING_RELAXED",
                  "LOCATION_APPROXIMATE", "IDLE_WAIT", "UNDERFILLED", "PRICE_UNVERIFIED", "LONG_TRANSFER",
                  "ACCESS_SCOPE_UNVERIFIED"}
 IDLE_WAIT_MIN = 20
-UNDERFILL_RATIO = 0.6
-UNDERFILL_MIN_WINDOW = 90
+UNDERFILL_RATIO = 0.8
+UNDERFILL_MIN_WINDOW = 30
 STRETCH_ROOM_MIN = 15
 CITY_RADIUS_KM = 40.0
 EVENT_MIN_MINUTES = 30
@@ -345,7 +345,7 @@ def hours_bound_room(plan: CanonicalPlan, ctx: WorldContext) -> list[int]:
 
 
 def underfilled(plan: CanonicalPlan, ctx: WorldContext, prefs: Preferences) -> bool:
-    """UNDERFILLED: under 60% of a 90+ minute window used, unless hours/events/sunset leave no stop any room."""
+    """UNDERFILLED: under 80% of a 30+ minute window used, unless hours/events/sunset leave no stop any room."""
     available = prefs.available_minutes
     if available < UNDERFILL_MIN_WINDOW or plan.totals.elapsed_min >= UNDERFILL_RATIO * available:
         return False

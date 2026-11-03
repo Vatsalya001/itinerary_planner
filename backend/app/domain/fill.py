@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from app.domain.evidence import is_full_meal, meal_slot
+from app.domain.schedule import build_schedule
 from app.domain.schemas import (
     Candidate,
     CanonicalPlan,
@@ -29,6 +30,33 @@ from app.domain.validator import UNDERFILL_RATIO, duration_bounds, validate_plan
 from app.providers.base import TravelEstimator
 
 DEFAULT_TARGET_RATIO = 0.85
+MAX_FINAL_TRIM_MINUTES = 15
+
+
+def cap_final_stop(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: WorldContext, prefs: Preferences,
+                   constraints: list[Constraint], travel: TravelEstimator) -> PlanDraft:
+    """Trim at most fifteen minutes from the last flexible venue, never a fixed event or a minimum visit.
+
+    The schedule includes worst-case transfers and buffers. All ordinary validation must still pass.
+    A large overrun or an earlier invalid stop needs replanning, not silent truncation.
+    """
+    if not draft.stops or draft.stops[-1].candidate_id not in ledger:
+        return draft
+    c = ledger[draft.stops[-1].candidate_id]
+    if c.kind == "event":
+        return draft
+    plan, errors = build_schedule(draft, ledger, ctx, prefs, travel)
+    if plan is None or errors:
+        return draft
+    overrun = plan.end_min - min(ctx.end_min, ctx.start_min + prefs.available_minutes)
+    if not 0 < overrun <= MAX_FINAL_TRIM_MINUTES:
+        return draft
+    duration = draft.stops[-1].duration_min - overrun
+    if duration < duration_bounds(c)[0]:
+        return draft
+    stops = [*draft.stops[:-1], draft.stops[-1].model_copy(update={"duration_min": duration})]
+    trimmed = draft.model_copy(update={"stops": stops})
+    return trimmed if validate_plan(trimmed, ledger, ctx, prefs, constraints, travel).ok else draft
 
 
 def _stage_caps(c: Candidate, energy: Energy) -> tuple[int, int]:
@@ -139,7 +167,7 @@ def fill_window(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: WorldCon
 
 
 def free_time_note(plan: CanonicalPlan, ctx: WorldContext) -> str | None:
-    """Code-generated (not model prose, so numbers are fine) note when the plan still uses under 60% of the
+    """Code-generated (not model prose, so numbers are fine) note when the plan still uses under 80% of the
     window: how much time is left and from when. None otherwise."""
     available = plan.totals.available_minutes
     free = available - plan.totals.elapsed_min

@@ -49,7 +49,7 @@ from app.domain.evidence import (
     opening_status,
     satisfies_include,
 )
-from app.domain.fill import fill_window
+from app.domain.fill import DEFAULT_TARGET_RATIO, MAX_FINAL_TRIM_MINUTES, fill_window
 from app.domain.realworld import admission_estimate_unverified, prefers_short_travel
 from app.domain.schedule import plan_currency
 from app.domain.schemas import (
@@ -99,7 +99,7 @@ MEAL_STRETCH_MAX_MIN = 120  # how far earlier stops may be lengthened so a meal 
 # Stretch each stop from its default toward its maximum by this share first; the rest only if the plan would
 # otherwise use less than MIN_USE of the window.
 STRETCH_SHARE = {Energy.LOW: 0.34, Energy.MEDIUM: 0.5, Energy.HIGH: 0.5}
-MIN_USE = 0.6
+MIN_USE = DEFAULT_TARGET_RATIO
 # Stated order from the parser, e.g. "order: brunch > art" (soft preference; a strong one in ranking).
 ORDER_PREFIX = "order: "
 MORNING_ITEMS = frozenset({"brunch", "breakfast"})
@@ -402,8 +402,13 @@ class Planner:
         if is_outdoor(c) and is_walking_stop(c) and ctx.weather.sunrise_min is not None:
             start = max(start, ctx.weather.sunrise_min)
         end = start + dur
-        if end - ctx.start_min > self.limit or end > ctx.end_min:
-            return None
+        finish = min(ctx.end_min, ctx.start_min + self.limit)
+        if end > finish:
+            overrun = end - finish
+            if c.kind == "event" or overrun > MAX_FINAL_TRIM_MINUTES or dur - overrun < duration_bounds(c)[0]:
+                return None
+            dur -= overrun
+            end = finish
         status = opening_status(c, start, end)
         if status == "closed":
             return None
@@ -560,7 +565,7 @@ class Planner:
         s -= 4.0 * n.long_waits  # avoid standing around before an event when another plan exists
         s -= 4.0 * sum(1 for name in n.full_meals if not name)  # a required meal at an odd time
         used = self._used(n)
-        if self.limit >= 90 and used < MIN_USE:
+        if self.limit >= 30 and used < MIN_USE:
             # Do not let a nearby but incomplete café-only plan beat a feasible mixed-interest outing.
             missing = len(set(self.inputs.interests) - set(n.covered))
             s -= 15.0 * missing * (1.0 - used / MIN_USE)
@@ -640,7 +645,7 @@ class Planner:
         finalists = self._beam(objective)
         if objective == "best":
             stretched = [self._stretch(n) for n in finalists[:FINALISTS]]
-            finalists = sorted(stretched, key=lambda n: self._rank_key(n, objective))
+            finalists = sorted(stretched, key=lambda n: (self._used(n) < 0.8, *self._rank_key(n, objective)))
         drafts = [self.to_draft(node) for node in finalists[: MAX_VALIDATIONS * 2]]
         if self.ctx.weather.is_rainy:  # plans whose outdoor stops all have an indoor Plan B first
             drafts.sort(key=lambda d: self._missing_plan_b(d))

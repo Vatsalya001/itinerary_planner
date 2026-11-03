@@ -12,6 +12,8 @@
 
 ## Latest follow-up
 
+The [requested-window policy](verification/WINDOW_POLICY_2026-11-03.md) now targets 85% utilization with an 80–100% practical range, safely fits the final flexible venue and defaults to medium energy when no mood is supplied.
+
 The Mumbai underfill, Delhi tour-listing/turn-budget and Gurugram preference/export findings are addressed in the [plan-quality release](verification/PLAN_QUALITY_2026-11-03.md). Fresh Mumbai and Delhi requests completed in agent mode, while Gurugram used a labelled partial backup. Missing interests remain disclosed; these runs do not demonstrate full-interest coverage or universal reliability. Earlier smoke results remain historical observations.
 
 ## Required deliverables

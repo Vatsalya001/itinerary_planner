@@ -1281,7 +1281,7 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
 
     prefs = Preferences(
         city=city, budget=budget, currency=currency, start_min=start, available_minutes=minutes,
-        date=r.date if request.date is not None else (m.date or r.date), mood=mood, energy=m.energy,
+        date=r.date if request.date is not None else (m.date or r.date), mood=mood, energy=m.energy if mood else Energy.MEDIUM,
         interests=interests,
         hard_constraints=hard, soft_preferences=_dedupe_soft([*r.soft_preferences, *m.soft_preferences]),
         neighbourhood=neighbourhood, group_size=group, assumptions=assumptions,

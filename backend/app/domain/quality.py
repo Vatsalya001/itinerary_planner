@@ -5,9 +5,10 @@ import re
 from collections.abc import Mapping
 
 from app.domain.fallback import plan_deterministic
+from app.domain.fill import DEFAULT_TARGET_RATIO
 from app.domain.schemas import Candidate, Constraint, PlanDraft, Preferences, WorldContext
 from app.domain.scoring import covered_interests
-from app.domain.validator import UNDERFILL_MIN_WINDOW, UNDERFILL_RATIO, validate_plan
+from app.domain.validator import UNDERFILL_MIN_WINDOW, validate_plan
 from app.providers.base import TravelEstimator
 
 _SINGLE_STOP = re.compile(r"\b(?:one|single)\s+(?:stop|activity|venue)\b|\b(?:only|just)\s+(?:a\s+)?caf[eé]\b", re.I)
@@ -26,7 +27,7 @@ def improve_underfilled(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: 
     if not base.ok or base.plan is None:
         return draft
     totals = base.plan.totals
-    if totals.available_minutes < UNDERFILL_MIN_WINDOW or totals.elapsed_min >= UNDERFILL_RATIO * totals.available_minutes:
+    if totals.available_minutes < UNDERFILL_MIN_WINDOW or totals.elapsed_min >= DEFAULT_TARGET_RATIO * totals.available_minutes:
         return draft
     alternative = plan_deterministic(list(ledger.values()), ctx, prefs, constraints, travel)
     if alternative is None or len(alternative.stops) <= len(draft.stops):

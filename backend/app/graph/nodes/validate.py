@@ -14,6 +14,7 @@ from typing import Any
 from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
 
+from app.domain.fill import cap_final_stop
 from app.domain.quality import improve_underfilled
 from app.domain.schemas import ValidationReport
 from app.domain.validator import draft_from_payload, validate_plan
@@ -50,12 +51,17 @@ async def validate_submission(state: PlannerState, runtime: Runtime[RunContext])
 
     ledger = get_ledger(state)
     ctx = get_ctx(state)
+    trimmed_minutes = 0
     with tracer.node("validate_plan") as info:
         draft, schema_errors = draft_from_payload(normalize_plan_payload(pending.get("args")))
         if draft is None:
             kinds["schema_invalid"] += 1
             report = ValidationReport(ok=False, violations=schema_errors)
         else:
+            proposed_minutes = sum(s.duration_min for s in draft.stops)
+            draft = cap_final_stop(draft, ledger, ctx, get_prefs(state),
+                                   get_constraints(state, "original"), rc.deps.travel)
+            trimmed_minutes = proposed_minutes - sum(s.duration_min for s in draft.stops)
             report = validate_plan(draft, ledger, ctx, get_prefs(state), get_constraints(state, "original"),
                                    rc.deps.travel)
         codes = sorted({v.code for v in report.errors})
@@ -86,19 +92,21 @@ async def validate_submission(state: PlannerState, runtime: Runtime[RunContext])
                            + (f"; visits lengthened by {filled_minutes} min to use the window" if filled_minutes
                               else ""))
         info["data"] = {"attempt": attempts, "ok": report.ok, "codes": codes, "filled_minutes": filled_minutes,
-                        "quality_improved": quality_improved, "quality_error": quality_error}
+                        "quality_improved": quality_improved, "quality_error": quality_error, "trimmed_minutes": trimmed_minutes}
     tracer.emit("validation", node="validate_plan", summary="passed" if report.ok else "failed: " + ", ".join(codes),
                 data={"ok": report.ok, "attempt": attempts, "max_attempts": max_attempts, "source": "agent",
                       "filled_minutes": filled_minutes, "quality_improved": quality_improved,
-                      "violations": violation_dicts(report.violations, include_ids=False)})
+                      "trimmed_minutes": trimmed_minutes, "violations": violation_dicts(report.violations, include_ids=False)})
 
     first_valid = state.get("first_submit_valid")
     update: dict[str, Any] = {"submit_attempts": attempts, "pending_submit": None,
                               "protocol_errors": sum(kinds.values()), "protocol_error_kinds": dict(kinds),
                               "first_submit_valid": report.ok if attempts == 1 else first_valid}
+    if trimmed_minutes:
+        update["extra_assumptions"] = [f"The final venue visit was shortened by {trimmed_minutes} min to finish within your window."]
     if quality_improved:
         note = "The system replaced a short AI proposal with a fuller validated plan from the places it searched."
-        update["extra_assumptions"] = [note]
+        update["extra_assumptions"] = [*update.get("extra_assumptions", []), note]
     call_id = str(pending.get("id") or "submit_plan")
     if report.ok and draft is not None:
         tracer.emit("tool_completed", node="validate_plan", tool=SUBMIT_PLAN, summary="plan accepted",

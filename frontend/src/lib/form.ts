@@ -92,7 +92,7 @@ export type DirtyFields = Partial<Record<FieldKey, boolean>>
 
 /** The brief's example as a sentence. */
 export const DEFAULT_FREE_TEXT =
-  "I'm in Bangalore with ₹2000 and 4 hours this Saturday. I'm tired but want to do something fun. " +
+  "I'm in Bangalore with ₹2000 and 4 hours this Saturday. " +
   "I like food, music and walks. I'm vegetarian and want to avoid crowded places."
 
 const NO_TOGGLES: Record<ToggleId, boolean> = {
@@ -114,7 +114,7 @@ export function defaultFormState(): FormState {
     currency: '',
     startTime: '15:00',
     availableMinutes: '240',
-    mood: 'tired but wants to do something fun',
+    mood: '',
     interests: ['food', 'music', 'walks'],
     toggles: { ...NO_TOGGLES, vegetarian: true, avoid_crowds: true },
     extraConstraints: '',

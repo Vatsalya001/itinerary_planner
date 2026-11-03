@@ -80,7 +80,7 @@ export function PlanView({
       ) : null}
       <DegradationNotices items={result.degradations} exclude={isFallback ? ['planner'] : []} />
 
-      {plan.totals.available_minutes >= 90 && plan.totals.elapsed_min < 0.6 * plan.totals.available_minutes ? (
+      {plan.totals.available_minutes >= 30 && plan.totals.elapsed_min < 0.8 * plan.totals.available_minutes ? (
         <Notice tone="warn" title="Partial itinerary">
           <p>Only part of your requested window is scheduled. The remaining time is free; this is not a full-window outing.</p>
         </Notice>

@@ -38,7 +38,7 @@ describe('Planner', () => {
     expect(screen.getByLabelText('City')).toHaveValue('Bangalore')
     expect(screen.getByLabelText('Budget per person')).toHaveValue(2000)
     expect(screen.getByLabelText('Time you have')).toHaveValue('240')
-    expect(screen.getByLabelText('Mood')).toHaveValue('tired but wants to do something fun')
+    expect(screen.getByLabelText('Mood')).toHaveValue('')
     expect(screen.getByRole('button', { name: 'Food' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Music' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Walks' })).toHaveAttribute('aria-pressed', 'true')
@@ -271,7 +271,6 @@ describe('Planner', () => {
       city: 'Bangalore',
       budget: 2000,
       available_time: 240,
-      mood: 'tired but wants to do something fun',
       interests: ['food', 'music', 'walks'],
       constraints: ['vegetarian', 'avoid crowded places'],
     })

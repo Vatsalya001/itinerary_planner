@@ -72,7 +72,7 @@ test.describe('planner, brief example', () => {
 
     // "What I understood" chips.
     await expect(page.getByRole('heading', { name: 'What I understood' })).toBeVisible()
-    await expect(page.locator('section[aria-labelledby="understood-title"]').getByText('Low energy')).toBeVisible()
+    await expect(page.locator('section[aria-labelledby="understood-title"]').getByText('Medium energy')).toBeVisible()
 
     expect(dialogs).toEqual([])
     expect(errors).toEqual([])

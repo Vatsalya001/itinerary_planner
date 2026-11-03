@@ -67,7 +67,7 @@ such as {"intent": "quiet vegetarian cafe", "category": "cafe"}): specific inten
 interests, a meal if the window spans a meal window, and the hard constraints. When the interests suggest \
 an event (music, theatre, comedy, art), set include_events: true in that same call instead of calling \
 search_events separately.
-2. Compose. Search results may include validated_option: code has already checked its IDs, durations, \
+2. Compose. Aim to schedule about 85–100% of the requested window (80% is an acceptable lower margin), including transfers and buffers. Never exceed the end time or pad a visit beyond its range. If coverage is short, search for another suitable nearby stop when tools and time allow; disclose any remaining gap. A final flexible venue may be shortened by at most fifteen minutes, within its visit range; never truncate a fixed event. Search results may include validated_option: code has already checked its IDs, durations, \
 budget, transfers and constraints. Prefer submitting those stops unchanged when its covered_interests \
 match the request; copy stops and summary_note, not the extra computed fields. If you change it, the \
 option's totals no longer apply. Missing evidence fields in compact candidates mean unknown, never yes. \
