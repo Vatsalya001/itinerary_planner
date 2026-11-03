@@ -23,6 +23,7 @@ from app.domain.schemas import Constraint, Energy, ParseOutcome, PlanRequest, Pr
 from app.graph.nodes.common import DEADLINE_RESERVE_S, MIN_LLM_CALL_S, PARSER_DEGRADED, degrade, tracer_of
 from app.graph.prompts import LLMParse, parse_hhmm, parse_messages
 from app.graph.state import PlannerState, RunContext, dump, get_request
+from app.llm.provider_errors import provider_error_details
 from app.llm.ratelimit import call_budget
 from app.llm.registry import (
     ModelRefusalError,
@@ -148,7 +149,11 @@ async def llm_parse(request: PlanRequest, rc: RunContext, model_id: str
         kind = "not_configured"
     except Exception as exc:  # provider SDK errors vary; any failure means "use the rules parse"
         kind = type(exc).__name__
-        log.warning("LLM parse failed", extra={"error_type": kind, "model": model_id})
+        details = provider_error_details(exc)
+        log.warning("LLM parse failed", extra={"model": model_id, **details})
+        rc.tracer.emit("degraded", node="parse_preferences",
+                               summary="Model parser provider failed; continuing with rule-based parsing",
+                               data={"model": model_id, **details})
     return None, _with_waits(tracker.usage, waits), None, kind
 
 

@@ -61,7 +61,11 @@ such as {"intent": "quiet vegetarian cafe", "category": "cafe"}): specific inten
 interests, a meal if the window spans a meal window, and the hard constraints. When the interests suggest \
 an event (music, theatre, comedy, art), set include_events: true in that same call instead of calling \
 search_events separately.
-2. Compose. Pick stops only from candidate IDs that tools returned in this run. Copy IDs exactly. Never \
+2. Compose. Search results may include validated_option: code has already checked its IDs, durations, \
+budget, transfers and constraints. Prefer submitting those stops unchanged when its covered_interests \
+match the request; copy stops and summary_note, not the extra computed fields. If you change it, the \
+option's totals no longer apply. Missing evidence fields in compact candidates mean unknown, never yes. \
+Pick stops only from candidate IDs that tools returned in this run. Copy IDs exactly. Never \
 invent an ID, a place or an event. Order stops to keep travel short and fit opening hours, meal windows, \
 event times and sunset, using the hours, visit_minutes and distances in the results.
 3. Submit. Call submit_plan directly with the final stops. It validates the plan server-side, exactly like \

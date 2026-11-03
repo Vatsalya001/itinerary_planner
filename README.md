@@ -29,6 +29,8 @@ React form → FastAPI input boundary → parse and clarify → resolve city and
 
 The server hydrates selected candidate IDs from the run's ledger and computes all costs and times. Model-written claims about amenities are replaced by explanations based on the supplied preferences and candidate evidence. This keeps an invented vegan menu, accessible toilet, or concert promise out of the displayed plan.
 
+Search results can include a code-validated itinerary option with budget/time bounds and interest coverage, reducing the model’s arithmetic burden. Groq SDK retries are disabled so long provider retry delays recover visibly instead of silently consuming the run deadline. Full validation remains mandatory. See [performance release evidence](docs/verification/PERFORMANCE_RELEASE_2026-11-03.md).
+
 The functions `parse_preferences`, `resolve_location`, `get_weather`, candidate searches, cost/schedule construction, and validation are separate implementations. `check_plan` and `estimate_travel` are optional agent tools; final validation is mandatory.
 
 ## Data and coverage

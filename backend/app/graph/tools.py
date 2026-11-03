@@ -7,7 +7,9 @@ Candidate records in ``ToolMessage.artifact["candidates"]``.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -19,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from app.deps import Deps
 from app.domain.categories import currency_symbol, is_category, load_categories
 from app.domain.evidence import candidate_allowed, category_info, event_window, is_walking_stop, likely_busy
+from app.domain.options import validated_option
 from app.domain.parser_rules import default_queries
 from app.domain.schemas import (
     Candidate,
@@ -410,8 +413,6 @@ def compact_candidate(c: Candidate, centre: tuple[float, float] | None = None) -
     out["price"] = price_text(c.cost)
     if c.rating is not None:
         out["rating"] = c.rating
-        if c.rating_count is not None:
-            out["rating_count"] = c.rating_count
     if c.kind == "event":
         window = event_window(c)
         out["event_date"] = c.event_date.isoformat() if c.event_date else "unknown"
@@ -419,7 +420,7 @@ def compact_candidate(c: Candidate, centre: tuple[float, float] | None = None) -
     else:
         out["hours_today"] = hours_text(c)
     if c.diet:
-        out["diet"] = {k: v.value for k, v in c.diet.items()}
+        out["diet"] = {k: v.value for k, v in c.diet.items() if v.value != "unknown"}
     out["wheelchair"] = c.wheelchair.value
     out["indoor"] = "unknown" if c.indoor is None else c.indoor
     out["seated"] = c.seated
@@ -434,7 +435,6 @@ def compact_candidate(c: Candidate, centre: tuple[float, float] | None = None) -
     out["visit_minutes"] = {"min": lo, "typical": max(lo, min(hi, c.duration_range[1])), "max": hi}
     if c.tags:
         out["tags"] = [t[:30] for t in c.tags[:8]]
-    out["source"] = c.source.provider
     return out
 
 
@@ -596,7 +596,7 @@ async def run_search_places(args: SearchPlacesArgs, env: ToolEnv) -> ToolOutcome
 
     results: list[dict[str, Any]] = []
     candidates: list[Candidate] = []
-    listed: set[str] = set()
+    listed: set[str] = set(env.ledger)
     ran = 0
     for raw in raw_queries:
         label = str(raw.get("intent", ""))[:60] if isinstance(raw, Mapping) else ""
@@ -670,6 +670,22 @@ async def run_search_places(args: SearchPlacesArgs, env: ToolEnv) -> ToolOutcome
         candidates += events.candidates
         bits.append(events.summary)
         data["events"] = len(events.candidates)
+    # Reuse code-owned planning to offer a feasible starting option before a costly model repair.
+    pool = dict(env.ledger)
+    for candidate in candidates:
+        pool.setdefault(candidate.id, candidate)
+    if candidates:
+        try:
+            option = await asyncio.wait_for(asyncio.to_thread(
+                validated_option, list(pool.values()), ctx, env.prefs, [*env.enforced, *env.original], env.deps.travel), 0.5)
+        except TimeoutError:
+            option = None  # optional optimization must not delay the primary retrieval path
+        except Exception as exc:
+            logging.getLogger(__name__).warning("planning hint unavailable", extra={"error_type": type(exc).__name__})
+            option = None
+        if option:
+            body["validated_option"] = option
+            data["validated_option"] = True
     if recovered:
         data["recovered"] = True
     return ToolOutcome(content=dumps(body), candidates=candidates, summary=", ".join(bits), recovered=recovered,

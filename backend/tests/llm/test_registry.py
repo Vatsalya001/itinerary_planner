@@ -187,7 +187,7 @@ def test_groq_param_rules() -> None:
     parse = provider_kwargs(spec, "parse", settings)
     assert agent["reasoning_effort"] == "medium" and parse["reasoning_effort"] == "low"
     assert agent["reasoning_format"] == "hidden" and agent["temperature"] == 0.0
-    assert agent["max_tokens"] == 8192 and agent["request_timeout"] == 60.0 and agent["max_retries"] == 1
+    assert agent["max_tokens"] == 8192 and agent["request_timeout"] == 60.0 and agent["max_retries"] == 0
 
 
 def test_gemini_keeps_provider_default_temperature() -> None:
@@ -213,7 +213,7 @@ def test_production_chain_retry_settings_and_structured_schema() -> None:
     cerebras = get_spec("cerebras:gpt-oss-120b")
     groq = get_spec("groq:openai/gpt-oss-120b")
     assert provider_kwargs(cerebras, "agent", settings)["max_retries"] == 0  # a 429 goes straight to Groq
-    assert provider_kwargs(groq, "agent", settings)["max_retries"] == 1
+    assert provider_kwargs(groq, "agent", settings)["max_retries"] == 0
     as_dict = registry.structured_schema(cerebras, LLMParse)
     assert isinstance(as_dict, dict) and as_dict["title"] == "LLMParse"
     assert "$defs" not in json.dumps(as_dict) and "$ref" not in json.dumps(as_dict)

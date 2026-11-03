@@ -1163,3 +1163,17 @@ def test_negative_text_budget_is_not_turned_positive_or_replaced_by_a_default(bu
 def test_oversized_negative_money_input_does_not_crash_parser():
     outcome = parse(free_text="Delhi. Budget -" + "9" * 400 + " rupees. I have 2 hours.")
     assert outcome.preferences.budget is None
+
+
+
+def test_accessibility_evidence_instruction_does_not_add_a_clarification():
+    request = PlanRequest(free_text="London. Budget GBP 60. From noon to 4 PM. "
+                          "I use a wheelchair. Step-free access is mandatory. "
+                          "Don't assume unknown facilities are accessible.")
+    outcome = parse_rules(request, NOW)
+    assert outcome.unmapped_constraints == []
+    assert "access:wheelchair" in keys(outcome.preferences.hard_constraints)
+    assert clarification_questions(outcome, [LONDON], False) == []
+    mixed = parse(city="London", budget=60, currency="GBP", constraints=[
+        "Don't assume unknown facilities are accessible and I need a hearing loop"])
+    assert mixed.unmapped_constraints and clarification_questions(mixed, [LONDON], False)

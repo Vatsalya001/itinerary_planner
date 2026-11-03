@@ -43,6 +43,7 @@ from app.graph.prompts import (
 )
 from app.graph.state import PlannerState, RunContext, get_constraints, get_ctx, get_prefs
 from app.graph.tools import MAX_QUERIES_PER_RUN, SUBMIT_PLAN, TOOL_CAPS, tool_schemas
+from app.llm.provider_errors import provider_error_details
 from app.llm.ratelimit import call_budget
 from app.llm.registry import (
     METADATA_KEY,
@@ -95,6 +96,7 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
     failure: str | None = None
     ai: AIMessage | None = None
     final_turn = False
+    provider_error: dict[str, Any] | None = None
 
     with tracer.node("plan_agent") as info:
         timeout = min(turn_timeout_s(chain[0]), rc.remaining() - DEADLINE_RESERVE_S)
@@ -131,7 +133,15 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
             except RegistryError:
                 failure = AGENT_NOT_CONFIGURED
             except Exception as exc:  # provider SDK errors vary; all of them mean "use the fallback planner"
-                log.warning("agent turn failed", extra={"error_type": type(exc).__name__, "model": chain[0]})
+                provider_error = provider_error_details(exc)
+                log.warning("agent turn failed", extra={"model": chain[0], **provider_error})
+                status = provider_error.get("http_status")
+                wait = provider_error.get("retry_after_s")
+                summary = f"Model provider error{f' (HTTP {status})' if status else ''}; using recovery"
+                if wait is not None:
+                    summary += f" instead of waiting {wait:g} seconds for a provider retry"
+                tracer.emit("degraded", node="plan_agent", summary=summary,
+                            data={"model": chain[0], **provider_error})
                 failure = AGENT_RATE_LIMITED if is_rate_limit_error(exc) else AGENT_UNAVAILABLE
             usage = add_usage(tracker.usage, {"rate_limit_wait_ms": round(sum(waits) * 1000)})
         if ai is not None:
@@ -144,6 +154,13 @@ async def plan_agent(state: PlannerState, runtime: Runtime[RunContext]) -> dict[
         else:
             info["summary"] = f"turn {turns}: stopped ({failure})"
             info["data"] = {"turn": turns, "model": chain[0], "stop": failure}
+
+        if provider_error is not None:
+            info["data"] = {**(info.get("data") or {}), "provider_error": provider_error}
+        info["data"] = {**(info.get("data") or {}),
+                        "input_tokens": usage.get("input_tokens", 0),
+                        "output_tokens": usage.get("output_tokens", 0),
+                        "rate_limit_wait_ms": usage.get("rate_limit_wait_ms", 0)}
 
     update: dict[str, Any] = {"agent_turns": turns, "usage": usage, "turn_cap": turn_cap}
     if ai is None:

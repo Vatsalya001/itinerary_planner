@@ -298,7 +298,9 @@ _RESPONSE_GUIDANCE_RE = re.compile(
     r"(?:confirmed|verified)\s+(?:accessibility|information|facts|details)\s+from\s+"
     r"(?:anything|what|anything that)\s+(?:I|we)\s+need\s+to\s+(?:verify|check)"
     r"|(?:I|we)\s+need\s+you\s+to\s+(?:explain|show|state|list|describe)\s+"
-    r"(?:the\s+|your\s+|any\s+)?(?:trade[- ]?offs?|assumptions|sources|costs|timings))",
+    r"(?:the\s+|your\s+|any\s+)?(?:trade[- ]?offs?|assumptions|sources|costs|timings)"
+    r"|(?:please\s+)?(?:don't|do not|never)\s+assume\s+(?:unknown|unverified)\s+"
+    r"(?:facilities|venues|places)\s+are\s+accessible)",
     re.IGNORECASE,
 )
 

@@ -69,7 +69,7 @@ candidates:
       temperature: 0
       max_tokens: 8192
       rate_limit: {requests: 30, window_s: 60}  # conservative app ceiling; provider TPM still applies
-      max_retries: 1
+      max_retries: 0  # no hidden Retry-After sleeps; quota failures recover visibly
       request_timeout_s: 60
       reasoning_effort: {parse: low, agent: medium, judge: medium}
       reasoning_format: hidden
