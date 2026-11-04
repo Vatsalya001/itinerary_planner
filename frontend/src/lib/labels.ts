@@ -14,6 +14,7 @@ const CONSTRAINT_NAMES: Record<string, string> = {
 }
 
 export function constraintName(key: string): string {
+  if (key.startsWith('requirement:')) return 'Additional venue facility'
   if (CONSTRAINT_NAMES[key]) return CONSTRAINT_NAMES[key]
   if (key.startsWith('pacing:')) return `Pacing requirement: ${humanize(key.split(':')[1]).toLowerCase()}`
   const [kind, value] = key.split(':', 2)

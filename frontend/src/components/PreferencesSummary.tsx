@@ -21,6 +21,10 @@ export function PreferencesSummary({ prefs, provisional = false }: { prefs: Pref
     chips.push({ key: `c-${c.kind}-${c.value}`, text: constraintName(`${c.kind}:${c.value}`), tone: 'amber' }),
   )
 
+  prefs.venue_requirements?.forEach((r) => chips.push({
+    key: `facility-${r.id}`, text: `${r.description} (${r.mandatory ? 'required' : 'optional'})`, tone: 'amber',
+  }))
+
   return (
     <section aria-labelledby="understood-title" className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm sm:p-5">
       <h2 id="understood-title" className="text-sm font-semibold text-stone-900">

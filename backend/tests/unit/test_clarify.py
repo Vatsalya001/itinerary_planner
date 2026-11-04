@@ -285,7 +285,8 @@ def test_constraint_answers_replace_skip_or_keep():
         "diet:vegetarian", "access:wheelchair"]
     assert apply_answers(request, {"constraint": SKIP_IT}).constraints == ["vegetarian"]
     kept = apply_answers(request, {"constraint": KEEP_AS_PREFERENCE})
-    assert kept.constraints == request.constraints
+    assert kept.constraints == ["vegetarian", "Optional preference: no stairs please"]
+    assert not parse_rules(kept, NOW).unmapped_constraints
     assert questions_for(kept, [BLR], asked_before=True) == []
 
 

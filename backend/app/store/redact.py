@@ -45,6 +45,7 @@ GOOGLE_DISPLAY_FIELDS: dict[str, Any] = {
     "rating_count": None,
     "hours": {"status": "unknown", "periods": []},
     "maps_url": None,
+    "website_url": None,
 }
 # Keys whose string values are our prose (never IDs or URLs); place names inside them are tokenised.
 PROSE_KEYS = {"why", "tradeoff", "warnings", "summary_note", "reason", "message", "detail", "label",

@@ -28,6 +28,7 @@ from app.graph.state import PlannerState, RunContext, dump, get_constraints, get
 from app.graph.tools import violation_dicts
 from app.llm.registry import is_baseline
 from app.pipeline import PLACES_UNAVAILABLE, search_events, search_places
+from app.providers.requirements_web import ResearchBudget, verify_candidates
 
 
 def _checked_draft_report(state: PlannerState, rc: RunContext) -> tuple[PlanDraft, ValidationReport] | None:
@@ -103,7 +104,12 @@ async def fallback_planner(state: PlannerState, runtime: Runtime[RunContext]) ->
                     event_deg = ["Event search exceeded the remaining time; using available places"]
             degradations += place_deg + event_deg
             search_ok = ok
-            for c in [*found, *events]:
+            budget = ResearchBudget(used=int((state.get("tool_exec") or {}).get("facility_lookups", 0)),
+                                    spent=int((state.get("tool_exec") or {}).get("facility_ms", 0)) / 1000,
+                                    deadline=rc.deadline - 2)
+            fresh = await verify_candidates([c for c in [*found, *events] if c.id not in ledger],
+                                            prefs, ctx, deps, budget)
+            for c in fresh:
                 if c.id not in ledger:
                     ledger[c.id] = c
                     new_ledger[c.id] = dump(c)

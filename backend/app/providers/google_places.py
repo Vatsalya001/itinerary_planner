@@ -69,7 +69,7 @@ TIMEOUT = httpx.Timeout(TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
 SEARCH_FIELDS = (
     "id", "displayName", "formattedAddress", "location", "types", "primaryType", "googleMapsUri", "businessStatus",
     "accessibilityOptions", "priceLevel", "priceRange", "rating", "userRatingCount", "regularOpeningHours",
-    "currentOpeningHours", "servesVegetarianFood", "liveMusic", "outdoorSeating",
+    "currentOpeningHours", "servesVegetarianFood", "liveMusic", "outdoorSeating", "websiteUri",
 )
 SEARCH_FIELD_MASK = ",".join(f"places.{f}" for f in SEARCH_FIELDS)
 # Place Details for share-link rehydration. Opening hours, rating, rating count and the price fields are billed at
@@ -78,7 +78,7 @@ SEARCH_FIELD_MASK = ",".join(f"places.{f}" for f in SEARCH_FIELDS)
 # fields only (store.redact._restore); a stop's stored cost, category and schedule are never replaced.
 DETAILS_FIELDS = (
     "id", "displayName", "formattedAddress", "location", "types", "primaryType", "googleMapsUri", "businessStatus",
-    "regularOpeningHours", "currentOpeningHours", "rating", "userRatingCount", "priceLevel", "priceRange",
+    "regularOpeningHours", "currentOpeningHours", "rating", "userRatingCount", "priceLevel", "priceRange", "websiteUri",
 )
 DETAILS_FIELD_MASK = ",".join(DETAILS_FIELDS)
 # get() returns a place whose Google types map to none of our categories under this placeholder instead of
@@ -385,6 +385,7 @@ def place_to_candidate(
     maps_uri = place.get("googleMapsUri")
     rating = place.get("rating")
     candidate = Candidate(
+        website_url=place.get("websiteUri") if isinstance(place.get("websiteUri"), str) and len(place["websiteUri"]) <= 2048 else None,
         id=f"gp:{pid}",
         kind="place",
         name=name,

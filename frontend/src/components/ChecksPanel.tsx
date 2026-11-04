@@ -12,6 +12,7 @@ const CHECK_NAMES: Record<string, string> = {
   crowds: 'Crowds (heuristic)',
   weather: 'Weather',
   sources: 'Sources',
+  venue_requirements: 'Venue facilities',
 }
 
 const STATUS: Record<CheckItem['status'], { label: string; icon: IconName; cls: string }> = {

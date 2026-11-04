@@ -77,6 +77,7 @@ export interface Preferences {
   mood: string
   energy: Energy
   interests: string[]
+  venue_requirements?: { id: string; description: string; mandatory: boolean; scope: string }[]
   hard_constraints: Constraint[]
   soft_preferences: string[]
   neighbourhood: string | null
@@ -131,6 +132,10 @@ export interface Source {
 }
 
 export interface Candidate {
+  website_url?: string | null
+  requirement_evidence?: { requirement_id: string; description: string;
+    status: 'confirmed' | 'contradicted' | 'unknown'; source_url: string | null;
+    retrieved_at: string | null; quote: string | null; reason: string }[]
   id: string
   kind: 'place' | 'event'
   name: string

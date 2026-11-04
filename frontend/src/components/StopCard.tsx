@@ -135,11 +135,22 @@ export function StopCard({ stop, index, city, accessRequired = false }: { stop: 
           {accessRequired ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-stone-800">
               <p>{c.wheelchair === 'confirmed' ? 'Source reports a wheelchair-accessible entrance.' : 'Entrance accessibility needs verification.'}</p>
-              <p>Internal facilities, toilets and routes between stops are unverified.</p>
+              <p>{c.requirement_evidence?.some(e => e.description === 'wheelchair-accessible toilet' && e.status === 'confirmed')
+                ? 'Other internal facilities and routes between stops remain unverified; see the specific facility evidence below.'
+                : 'Internal facilities, toilets and routes between stops are unverified.'}</p>
               <MapsLink candidate={c} city={city} label="Check entrance evidence and contact venue" />
             </div>
           ) : null}
 
+          {c.requirement_evidence?.map((e) => (
+            <div key={e.requirement_id} className="rounded-lg border border-stone-200 p-2 text-sm text-stone-800">
+              <p>{e.description}: {e.status === 'confirmed' ? 'Supported by an official-source statement' : e.status === 'contradicted' ? 'Official source reports unavailable' : 'Unverified'}</p>
+              {e.quote ? <p>“{e.quote}”</p> : null}
+              {safeHttpsUrl(e.source_url) ? <ExternalLink href={safeHttpsUrl(e.source_url)!} className={linkClass}>Facility evidence</ExternalLink> : null}
+              {e.retrieved_at ? <p>Checked {new Date(e.retrieved_at).toLocaleString()}</p> : null}
+              <p>Confirm current availability directly with the venue.</p>
+            </div>
+          ))}
           {stop.why ? <p className="text-sm text-stone-800">{stop.why}</p> : null}
           {stop.tradeoff ? (
             <p className="text-sm text-stone-700">

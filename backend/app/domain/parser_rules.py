@@ -49,6 +49,7 @@ from app.domain.constraints import (
     negates_all_diets,
 )
 from app.domain.pacing import energy_from_mood, meal_windows_between
+from app.domain.requirements import OPTIONAL_PREFIX, attach_requirements
 from app.domain.schemas import (
     ClarificationQuestion,
     Constraint,
@@ -859,7 +860,8 @@ def original_constraints(request: PlanRequest) -> list[Constraint]:
     """Constraints mapped directly from the raw request (fields + free text). Enforced even if a parser
     (LLM or rules) drops them. Keys in ``request.relaxed_constraints`` (dropped by the user via a one-tap
     relaxation) are excluded from every source."""
-    groups = [map_constraint_text(entry) for entry in request.constraints]
+    groups = [map_constraint_text(entry) for entry in request.constraints
+              if not entry.lower().startswith(OPTIONAL_PREFIX.lower())]
     groups += [_map_sentence(s) for s in _sentences(_normalize_text(request.free_text))]
     return _without_relaxed(merge_constraints(*groups), request)
 
@@ -874,6 +876,9 @@ def _relaxed_assumptions(request: PlanRequest) -> list[str]:
     out: list[str] = []
     for key in request.relaxed_constraints:
         kind, _, value = key.partition(":")
+        if kind == "requirement":
+            out.append("An additional venue facility was made optional, as you chose")
+            continue
         label = constraint_label(Constraint.model_validate({"kind": kind, "value": value}))
         out.append(f"Dropped: {label[0].lower()}{label[1:]} (as you chose)")
     return out
@@ -925,6 +930,9 @@ def _unmapped_and_soft(request: PlanRequest) -> tuple[list[str], list[str]]:
     unmapped: list[str] = []
     soft: list[str] = []
     for entry in request.constraints:
+        if entry.lower().startswith(OPTIONAL_PREFIX.lower()) and not _is_instruction_like(entry):
+            soft.append(entry[len(OPTIONAL_PREFIX):])
+            continue
         if map_constraint_text(entry) or _is_response_guidance(entry):
             continue
         diet_note = _diet_negation_note(entry)
@@ -1182,10 +1190,10 @@ def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
         energy=energy_from_mood(mood) if mood else Energy.MEDIUM, interests=interests, hard_constraints=hard,
         soft_preferences=soft, neighbourhood=neighbourhood, group_size=group, assumptions=assumptions,
     )
-    return ParseOutcome(
+    return attach_requirements(ParseOutcome(
         preferences=prefs, missing=missing, unmapped_constraints=unmapped, conflicts=detect_conflicts(hard),
         budget_currency_explicit=explicit, source="rules",
-    )
+    ), request)
 
 
 def _extract_mood(sentences: list[str]) -> str:
@@ -1212,12 +1220,12 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     rules_minutes_found = "available_time" not in rules.missing
     if llm is None:
         hard = _without_relaxed(merge_constraints(r.hard_constraints, original_constraints(request)), request)
-        return rules.model_copy(update={
+        return attach_requirements(rules.model_copy(update={
             "preferences": r.model_copy(update={"hard_constraints": hard}),
             "conflicts": detect_conflicts(hard),
             "missing": _missing(r.city, r.budget, rules_minutes_found),
             "source": "rules",
-        }, deep=True)
+        }, deep=True), request)
 
     m = llm.preferences
     llm_city, llm_nb = _canonical_city(m.city)
@@ -1286,13 +1294,13 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
         hard_constraints=hard, soft_preferences=_dedupe_soft([*r.soft_preferences, *m.soft_preferences]),
         neighbourhood=neighbourhood, group_size=group, assumptions=assumptions,
     )
-    return ParseOutcome(
+    return attach_requirements(ParseOutcome(
         preferences=prefs, missing=_missing(city, budget, minutes_found),
         unmapped_constraints=[u for u in _dedupe([*rules.unmapped_constraints, *llm.unmapped_constraints])
                               if not _is_response_guidance(u)
                               and not any(_clause_supports(c, u) for c in llm_hard)],  # the model mapped it
         conflicts=detect_conflicts(hard), budget_currency_explicit=explicit, source="llm",
-    )
+    ), request)
 
 
 # Textual support for constraints a model adds. A model constraint is kept only when the user's own words (free text
@@ -1635,15 +1643,16 @@ def _remove_constraint(data: dict[str, Any], key: str) -> None:
 
 
 def _replace_unmapped(data: dict[str, Any], answer: str) -> None:
-    unmapped, _ = _unmapped_and_soft(PlanRequest.model_validate(data))
+    request = PlanRequest.model_validate(data)
+    unmapped, _ = _unmapped_and_soft(request)
+    unmapped = attach_requirements(ParseOutcome(preferences=Preferences(), unmapped_constraints=unmapped), request).unmapped_constraints
     target = next((t for t in unmapped if not _is_instruction_like(t)), None)
     if target is None:
         return
     low = answer.strip().lower()
-    if low in _KEEP_ANSWERS:
-        return  # left as is; after this round it is disclosed as an unmapped preference
+    keep = low in _KEEP_ANSWERS
     drop = low in _DROP_ANSWERS
-    replacement = answer.strip()[:120]
+    replacement = (OPTIONAL_PREFIX + target)[:120] if keep else answer.strip()[:120]
     constraints: list[str] = list(data.get("constraints") or [])
     if target in constraints:
         index = constraints.index(target)
@@ -1653,6 +1662,14 @@ def _replace_unmapped(data: dict[str, Any], answer: str) -> None:
             constraints[index] = replacement
         data["constraints"] = constraints
         return
+    # A supported core rule and an unsupported facility can share one structured entry.
+    for index, entry in enumerate(constraints):
+        if target in entry:
+            remainder = entry.replace(target, "", 1).strip(" ,;.!")
+            remainder = re.sub(r"\s+and$|^and\s+", "", remainder, flags=re.I).strip()
+            constraints[index:index+1] = [remainder] if remainder else []
+            data["constraints"] = constraints
+            break
     free_text = _normalize_text(data.get("free_text"))
     if target in free_text:
         remaining = free_text.replace(target, "", 1)

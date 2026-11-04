@@ -63,6 +63,7 @@ from app.domain.evidence import (
     satisfies_include,
 )
 from app.domain.realworld import admission_estimate_unverified, admission_problem, prefers_short_travel
+from app.domain.requirements import applies, evidence_satisfies, requirement_problems
 from app.domain.schedule import build_schedule, plan_currency
 from app.domain.schemas import (
     Candidate,
@@ -572,6 +573,23 @@ def validate_plan(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: WorldC
         c = ledger.get(s.candidate_id)
         if c is not None:
             violations.extend(_static_stop_checks(i, s, c, ledger, ctx, constraints, currency))
+            for problem in requirement_problems(c, prefs, ctx.location.name, ctx.now):
+                violations.append(_err("REQUIREMENT_UNVERIFIED", problem, i, c.id))
+            for r in prefs.venue_requirements:
+                if not r.mandatory and r.scope != "any_stop" and applies(r, c) and not evidence_satisfies(c, r, ctx.location.name, ctx.now):
+                    violations.append(Violation(code="OPTIONAL_REQUIREMENT_UNVERIFIED", severity="warning",
+                        message=f"Optional preference '{r.description}' is unverified at {c.name}",
+                        stop_index=i, candidate_id=c.id))
+    for r in prefs.venue_requirements:
+        if r.mandatory and r.scope == "any_stop" and not any(
+                evidence_satisfies(ledger[s.candidate_id], r, ctx.location.name, ctx.now)
+                for s in draft.stops if s.candidate_id in ledger):
+            violations.append(_err("REQUIREMENT_UNVERIFIED", f"No selected stop has verified {r.description}"))
+        elif not r.mandatory and r.scope == "any_stop" and not any(
+                evidence_satisfies(ledger[s.candidate_id], r, ctx.location.name, ctx.now)
+                for s in draft.stops if s.candidate_id in ledger):
+            violations.append(Violation(code="OPTIONAL_REQUIREMENT_UNVERIFIED", severity="warning",
+                message=f"Optional preference '{r.description}' is unverified at the selected stops"))
 
     plan, schedule_violations = build_schedule(draft, ledger, ctx, prefs, travel)
     violations.extend(schedule_violations)
@@ -750,6 +768,11 @@ def summarize_checks(report: ValidationReport, ctx: WorldContext, prefs: Prefere
             providers[s.candidate.source.provider] = providers.get(s.candidate.source.provider, 0) + 1
         label = ", ".join(f"{n} {p.replace('_', ' ')}" for p, n in sorted(providers.items()))
         items.append(CheckItem(name="sources", status="pass", detail=f"Every stop has a source ({label})"))
+    if prefs.venue_requirements:
+        issues = codes.get("REQUIREMENT_UNVERIFIED", []) + codes.get("OPTIONAL_REQUIREMENT_UNVERIFIED", [])
+        items.append(CheckItem(name="venue_requirements", status=("fail" if codes.get("REQUIREMENT_UNVERIFIED")
+                               else "unverified" if issues else "pass"),
+            detail=(issues[0].message if issues else "Official-source statements support the requested facilities; confirm availability before leaving")))
     return items
 
 

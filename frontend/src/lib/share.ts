@@ -35,6 +35,11 @@ export function planToText(plan: CanonicalPlan, options: ShareTextOptions = {}):
     if (stop.why) lines.push(`   Why: ${stop.why}`)
     if (stop.tradeoff) lines.push(`   Note: ${stop.tradeoff}`)
     for (const warning of stop.warnings) lines.push(`   Verify: ${warning}`)
+    for (const e of c.requirement_evidence ?? []) {
+      lines.push(`   Facility ${e.description}: ${e.status}; confirm current availability with the venue`)
+      const source = safeHttpsUrl(e.source_url)
+      if (source) lines.push(`   Facility source: ${source}`)
+    }
     if (stop.plan_b) lines.push(`   Plan B if it rains: ${stop.plan_b.name}`)
     const leg = legAfter(plan, i) // by from_id/to_id, exactly like the timeline in PlanView
     if (leg) {

@@ -12,6 +12,7 @@ Every module (domain, providers, graph, API, evals) exchanges these models. Conv
 
 from __future__ import annotations
 
+import re
 from datetime import date as Date
 from datetime import datetime
 from enum import StrEnum
@@ -99,6 +100,10 @@ class PlanRequest(StrictModel):
         out: list[str] = []
         for key in v:
             kind, _, value = key.partition(":")
+            if kind == "requirement" and re.fullmatch(r"[a-f0-9]{12}", value):
+                if key not in out:
+                    out.append(key)
+                continue
             if value not in VOCABULARY.get(kind, set()):
                 raise ValueError(f"unknown constraint key: {key[:40]}")
             if key not in out:
@@ -144,6 +149,27 @@ class ConstraintConflict(StrictModel):
     reason: str
 
 
+class VenueRequirement(StrictModel):
+    """A user-authored venue requirement; extraction alone is never evidence of satisfaction."""
+
+    id: str = Field(max_length=80)
+    description: str = Field(max_length=240)
+    mandatory: bool = True
+    scope: Literal["all_stops", "food_stops", "any_stop"] = "all_stops"
+
+
+class VenueRequirementEvidence(StrictModel):
+    """Source-backed assessment. Unknown never satisfies a mandatory requirement."""
+
+    requirement_id: str = Field(max_length=80)
+    description: str = Field(default="", max_length=240)
+    status: Literal["confirmed", "contradicted", "unknown"] = "unknown"
+    source_url: str | None = Field(default=None, max_length=2048)
+    retrieved_at: datetime | None = None
+    quote: str | None = Field(default=None, max_length=500)
+    reason: str = Field(default="", max_length=500)
+
+
 class Preferences(StrictModel):
     """Normalized preferences. ``city`` may be None only in a partial parse awaiting clarification."""
 
@@ -157,6 +183,7 @@ class Preferences(StrictModel):
     energy: Energy = Energy.MEDIUM
     interests: list[str] = Field(default_factory=list)
     hard_constraints: list[Constraint] = Field(default_factory=list)
+    venue_requirements: list[VenueRequirement] = Field(default_factory=list, max_length=5)
     soft_preferences: list[str] = Field(default_factory=list)
     neighbourhood: str | None = None
     group_size: int = 1
@@ -298,6 +325,8 @@ class Candidate(StrictModel):
     event_date: Date | None = None
     maps_url: str | None = None
     source: Source
+    website_url: str | None = Field(default=None, max_length=2048)
+    requirement_evidence: list[VenueRequirementEvidence] = Field(default_factory=list, max_length=5)
 
 
 class PlaceQuery(StrictModel):

@@ -149,3 +149,7 @@ Latest planning behaviour: [85% window target, safe final-venue fitting and medi
 [Evaluation report (PDF)](output/pdf/EVALUATION_REPORT.pdf) consolidates the historical hosted/local-model comparisons, current code checks, methodology, provenance and open limitations. Historical scores are not presented as current-code model results.
 
 To regenerate with ReportLab installed: `python docs/reports/build_evaluation_pdf.py`. The generator cross-checks historical hard-pass counts against their selected committed JSONL sessions. No inference calls are made.
+
+### Additional mandatory venue facilities
+
+Private changing rooms and seven other facility types can be checked against bounded, official-domain Tavily research. Mandatory unknown/contradicted facilities block the plan in both planners and rain alternatives. The user can explicitly make one optional; unsupported wording cannot silently pass after clarification. Existing requests and old shared plans remain compatible. See [facility requirements, limits and offline tests](docs/VENUE_REQUIREMENTS.md). No additional key beyond the optional `TAVILY_API_KEY` is required for this research.

@@ -291,6 +291,9 @@ def agent_payload(prefs: Preferences, ctx: WorldContext, enforced: list[Constrai
                         "group_size": prefs.group_size, "budget_per_person": prefs.budget,
                         "currency": prefs.currency},
         "hard_constraints": [{"kind": c.kind, "value": c.value, "label": constraint_label(c)} for c in enforced],
+        **({"venue_requirements": [r.model_dump() for r in prefs.venue_requirements],
+            "facility_policy": "Mandatory facilities require confirmed official-source evidence for the relevant stops. Unknown is not confirmed. Never invent evidence; submit_plan enforces this."}
+           if prefs.venue_requirements else {}),
         "pacing": {"energy": p.energy.value, "max_stops": p.max_stops,
                    "max_walking_minutes_total": p.max_walk_minutes,
                    "buffer_minutes_added_between_stops": p.buffer_minutes,

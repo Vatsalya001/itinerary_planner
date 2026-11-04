@@ -51,6 +51,7 @@ from app.domain.evidence import (
 )
 from app.domain.fill import DEFAULT_TARGET_RATIO, MAX_FINAL_TRIM_MINUTES, fill_window
 from app.domain.realworld import admission_estimate_unverified, prefers_short_travel
+from app.domain.requirements import requirement_problems
 from app.domain.schedule import plan_currency
 from app.domain.schemas import (
     Candidate,
@@ -117,6 +118,7 @@ Objective = Literal["best", "cheapest", "shortest"]
 DIET_LABEL = {"vegetarian": "vegetarian", "vegan": "vegan", "jain": "Jain"}
 
 OMIT_REASONS: dict[str, str] = {
+    "requirements": "The mandatory venue facilities could not be verified from official sources.",
     "diet": "Left out because its menu isn't confirmed to suit your diet.",
     "access": "Left out because wheelchair access isn't confirmed.",
     "alcohol": "Left out because it's an alcohol-focused venue.",
@@ -185,6 +187,8 @@ def prefilter(candidates: Sequence[Candidate], ctx: WorldContext, prefs: Prefere
             continue
         seen.add(c.id)
         reasons: list[str] = []
+        if requirement_problems(c, prefs, ctx.location.name, ctx.now):
+            reasons.append("requirements")
         if category_info(c) is None:
             reasons.append("category")
         if not coords_valid(c.lat, c.lng):

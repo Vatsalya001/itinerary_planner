@@ -53,6 +53,7 @@ from app.graph.tools import (
     with_turns_left,
 )
 from app.pipeline import PLACES_UNAVAILABLE
+from app.providers.requirements_web import ResearchBudget
 from app.trace import Tracer
 
 log = logging.getLogger("app.graph")
@@ -111,7 +112,11 @@ async def run_tools(state: PlannerState, runtime: Runtime[RunContext]) -> dict[s
                   ledger=get_ledger(state), places_mode=state.get("places_mode", "live"),  # type: ignore[arg-type]
                   events_failed=bool(state.get("events_failed")),
                   event_queries_used=int((state.get("tool_exec") or {}).get("event_queries", 0)),
-                  queries_used=int((state.get("tool_exec") or {}).get(QUERIES_KEY, 0)))
+                  queries_used=int((state.get("tool_exec") or {}).get(QUERIES_KEY, 0)),
+                  research_budget=ResearchBudget(
+                      used=int((state.get("tool_exec") or {}).get("facility_lookups", 0)),
+                      spent=int((state.get("tool_exec") or {}).get("facility_ms", 0)) / 1000,
+                      deadline=rc.deadline - DEADLINE_RESERVE_S))
     requested: Counter[str] = Counter(state.get("tool_calls") or {})
     executed: Counter[str] = Counter(state.get("tool_exec") or {})
     kinds: Counter[str] = Counter(state.get("protocol_error_kinds") or {})
@@ -202,6 +207,8 @@ async def run_tools(state: PlannerState, runtime: Runtime[RunContext]) -> dict[s
 
     executed[QUERIES_KEY] = env.queries_used
     executed["event_queries"] = env.event_queries_used
+    executed["facility_lookups"] = env.research_budget.used
+    executed["facility_ms"] = round(env.research_budget.spent * 1000)
     turns_left = int(state.get("turn_cap") or rc.deps.settings.max_agent_turns) - int(state.get("agent_turns") or 0)
     messages = [m.model_copy(update={"content": with_turns_left(str(m.content), turns_left)}) for m in messages]
     has_places = any(c.kind == "place" for c in env.ledger.values())
