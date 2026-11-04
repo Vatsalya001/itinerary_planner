@@ -18,3 +18,7 @@ This change adds the bounded source-backed facilities described in [the feature 
 These checks establish application behavior on controlled synthetic data. They do not certify venue facilities in the real world or guarantee support for arbitrary requirements. Eight facility types are researched conservatively; other mandatory requirements remain clarification/blocking cases. Source statements must still be checked for current availability directly with venues. The feature does not change the model, currency, weather, cost or scheduling policies.
 
 The consolidated evaluation PDF and historical inference reports remain historical; this change does not relabel them as fresh model evaluations. New local verification outputs stay outside the repository. The private interview handbook remains uncommitted.
+
+## CI follow-up
+
+The first GitHub run exposed a pre-existing wall-clock assumption in `test_rate_limit_wait_is_reported_in_finalize`: it expected at least 150 ms waiting in a 250 ms window, but the shared runner spent more time planning and correctly waited only 91 ms. The reporting regression now freezes only the rate-limiter module's clock and asserts the exact booked 250 ms wait. The application limiter and graph deadlines are unchanged; separate sliding-window behavior tests retain real timing.
