@@ -149,3 +149,9 @@ Latest planning behaviour: [85% window target, safe final-venue fitting and medi
 [Evaluation report (PDF)](output/pdf/EVALUATION_REPORT.pdf) consolidates the historical hosted/local-model comparisons, current code checks, methodology, provenance and open limitations. Historical scores are not presented as current-code model results.
 
 To regenerate with ReportLab installed: `python docs/reports/build_evaluation_pdf.py`. The generator cross-checks historical hard-pass counts against their selected committed JSONL sessions. No inference calls are made.
+
+### Browser-local itinerary history
+
+Completed plans with a saved-plan link appear in **Your itinerary history**, labelled by city and date with the original request. The list shows up to 30 bookmarks from the last 30 days. Older entries are filtered out; the next history update rewrites the retained list. Open an entry to revisit its existing shared plan without another model/planning call; remove individual entries or clear history with confirmation. History is specific to this browser/device, and anyone using it can read the saved requests. Saved-plan links can expire or become unavailable after server storage resets.
+
+Only city, date, request text, saved timestamp and share ID are kept in `localStorage`; venue payloads, traces, resume tokens and credentials are not copied there. Corrupt, disabled or full storage does not interrupt planning; unavailable storage uses a labelled in-tab fallback. The backend, model prompts, validator, budgets and scheduling logic remain unchanged from submitted commit `c272b7c`.

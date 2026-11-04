@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { postPlan, resumePlan } from '../api/sse'
 import { ApiError } from '../api/errors'
+import { ItineraryHistory } from '../components/ItineraryHistory'
+import { useItineraryHistory } from '../hooks/useItineraryHistory'
 import { ClarificationCard } from '../components/ClarificationCard'
 import { ErrorCard } from '../components/ErrorCard'
 import { InfeasibleCard } from '../components/InfeasibleCard'
@@ -32,6 +34,8 @@ export default function Planner({ active = true }: { active?: boolean }) {
   const [dirty, setDirty] = useState<DirtyFields>({})
   const [errors, setErrors] = useState<FormErrors>({})
   const { trace, phase, run, cancel } = usePlanRun()
+  const history = useItineraryHistory()
+  const lastSavedRun = useRef<string | null>(null)
   const lastRequest = useRef<PlanRequest | null>(null)
   const [submittedCurrency, setSubmittedCurrency] = useState<string | null>(null)
   const [resumed, setResumed] = useState(false)
@@ -57,6 +61,15 @@ export default function Planner({ active = true }: { active?: boolean }) {
     },
     [start],
   )
+
+  const saveHistory = history.save
+  useEffect(() => {
+    if (phase.kind !== 'done' || !phase.result.plan
+      || !['complete', 'fallback'].includes(phase.result.status)
+      || lastSavedRun.current === phase.result.run_id) return
+    lastSavedRun.current = phase.result.run_id
+    saveHistory(phase.result, lastRequest.current)
+  }, [phase, saveHistory])
 
   // Move focus to the outcome so keyboard and screen-reader users land on it.
   useEffect(() => {
@@ -131,6 +144,9 @@ export default function Planner({ active = true }: { active?: boolean }) {
         }}
         textareaRef={textarea}
       />
+
+      <ItineraryHistory entries={history.entries} notice={history.notice} busy={busy}
+        onRemove={history.remove} onClear={history.clear} />
 
       {result?.preferences && result.status !== 'rejected' ? <PreferencesSummary prefs={result.preferences} provisional={result.status === 'needs_clarification'} /> : null}
 

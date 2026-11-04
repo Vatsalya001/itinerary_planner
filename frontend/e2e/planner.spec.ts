@@ -221,7 +221,7 @@ test.describe('security', () => {
     await page.getByLabel('Mood').fill(payload)
     await Promise.all([page.waitForResponse(isPlanPost), planButton(page).click()])
     await expect(planHeading(page)).toBeVisible()
-    await expect(page.getByText(payload)).toBeVisible() // "What I understood" shows the mood verbatim
+    await expect(page.locator('section[aria-labelledby="understood-title"]').getByText(payload)).toBeVisible() // Mood is also retained literally in browser history.
     await expect(page.locator('img[src="x"]')).toHaveCount(0)
 
     // A script tag in the city comes back inside a clarification question.
