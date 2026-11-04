@@ -142,16 +142,6 @@ def explain_infeasible(candidates: Sequence[Candidate], ctx: WorldContext, prefs
                                                                     objective="cheapest", ignore_budget=True)),
                                 min_minutes=_elapsed(baseline))
 
-    mandatory = [r for r in prefs.venue_requirements if r.mandatory]
-    if mandatory:
-        return InfeasibleReport(
-            reason="No verified plan fits the mandatory venue facilities and your other settings. "
-                   "Missing evidence does not mean the facility is absent. Confirm directly with venues, "
-                   "or explicitly make the facility optional.",
-            binding_constraints=[f"requirement:{r.id}" for r in mandatory],
-            relaxations=[Relaxation(label=f"Make {r.description} optional (not guaranteed)",
-                                   patch={"relaxed_constraints": [f"requirement:{r.id}"]}) for r in mandatory])
-
     # what each constraint rules out on its own
     removed = {c.key: sum(1 for cand in unique if not candidate_allowed(cand, [c], ctx)[0]) for c in enforced}
 

@@ -28,7 +28,6 @@ from app.pipeline import (
     search_places,
 )
 from app.providers.base import ProviderError
-from app.providers.requirements_web import ResearchBudget, verify_candidates
 from app.trace import Tracer, new_run_id
 
 
@@ -82,18 +81,10 @@ async def run_baseline(request: PlanRequest, deps: Deps, *, tracer: Tracer | Non
         return done(PlanResult(run_id=run_id, status="no_feasible_plan", model="baseline:deterministic",
                                preferences=prefs, message="Your available window has ended or has too little time left."))
 
-    if asked_before and outcome.unmapped_constraints:
-        return done(PlanResult(run_id=run_id, status="no_feasible_plan", mode="deterministic",
-            message="I cannot verify this mandatory requirement. Edit it or explicitly make it optional.",
-            preferences=outcome.preferences))
-
     with tracer.node("gather_candidates") as info:
         candidates, place_deg, places_ok = await search_places(default_queries(prefs, ctx), ctx, deps, tracer)
         events, event_deg = await search_events(prefs, ctx, deps, tracer)
         info["summary"] = f"{len(candidates)} places, {len(events)} events"
-    budget = ResearchBudget()
-    candidates = await verify_candidates(candidates, prefs, ctx, deps, budget)
-    events = await verify_candidates(events, prefs, ctx, deps, budget)
     degradations += place_deg + event_deg
     if not places_ok:
         return done(PlanResult(run_id=run_id, status="no_feasible_plan", mode="deterministic",

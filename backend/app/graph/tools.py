@@ -40,7 +40,6 @@ from app.domain.validator import draft_from_payload, duration_bounds, validate_p
 from app.graph.prompts import hhmm, parse_hhmm
 from app.pipeline import EVENTS_UNAVAILABLE, PLACES_UNAVAILABLE, SNAPSHOT_USED
 from app.providers.base import ProviderError
-from app.providers.requirements_web import ResearchBudget, verify_candidates
 
 SEARCH_PLACES = "search_places"
 SEARCH_EVENTS = "search_events"
@@ -439,9 +438,6 @@ def compact_candidate(c: Candidate, centre: tuple[float, float] | None = None) -
     out["visit_minutes"] = {"min": lo, "typical": max(lo, min(hi, c.duration_range[1])), "max": hi}
     if c.tags:
         out["tags"] = [t[:30] for t in c.tags[:8]]
-    if c.requirement_evidence:
-        out["facility_evidence"] = [{"id": e.requirement_id, "facility": e.description,
-                                      "status": e.status, "reason": e.reason} for e in c.requirement_evidence]
     return out
 
 
@@ -482,7 +478,6 @@ class ToolEnv:
     events_failed: bool = False
     event_queries_used: int = 0
     queries_used: int = 0  # search_places queries executed this run (cap MAX_QUERIES_PER_RUN)
-    research_budget: ResearchBudget = field(default_factory=ResearchBudget)
 
 
 @dataclass
@@ -572,10 +567,6 @@ async def _search_one(q: PlaceQueryArgs, env: ToolEnv, limit: int
                 env.places_mode = "unavailable"
     found = [c for c in found if (c.kind == "place" or c.event_date == ctx.date)
              and admission_problem(c, ctx) is None][:limit]
-    fresh = await verify_candidates([c for c in found if c.id not in env.ledger], env.prefs, ctx,
-                                    env.deps, env.research_budget)
-    checked = {c.id: c for c in fresh}
-    found = [env.ledger.get(c.id) or checked[c.id] for c in found]
     centre = (lat, lng) if lat is not None and lng is not None else (ctx.location.lat, ctx.location.lng)
     return found, centre, None
 
@@ -671,10 +662,6 @@ async def run_search_places(args: SearchPlacesArgs, env: ToolEnv) -> ToolOutcome
     if busy:
         bits.append(f"{busy} likely busy")
     data: dict[str, Any] = {"count": len(candidates), "queries": ran}
-    if env.prefs.venue_requirements:
-        data["facility_research_lookups"] = env.research_budget.used
-        data["facility_evidence"] = {status: sum(e.status == status for c in candidates for e in c.requirement_evidence)
-                                     for status in ("confirmed", "contradicted", "unknown")}
     if args.include_events:
         events = await run_search_events(SearchEventsArgs(), env)
         event_body = json.loads(events.content)
@@ -730,7 +717,6 @@ async def run_search_events(args: SearchEventsArgs, env: ToolEnv) -> ToolOutcome
                            summary=EVENTS_UNAVAILABLE, provider_failed=True, recovered=True,
                            degradations=[EVENTS_UNAVAILABLE], data={"code": "EVENTS_UNAVAILABLE"})
     found = [c for c in found if c.event_date == ctx.date][:MAX_RESULTS]
-    found = await verify_candidates(found, env.prefs, ctx, env.deps, env.research_budget)
     centre = (ctx.location.lat, ctx.location.lng)
     body = {"count": len(found), "date": ctx.date.isoformat(),
             "events": [compact_candidate(c, centre) for c in found]}

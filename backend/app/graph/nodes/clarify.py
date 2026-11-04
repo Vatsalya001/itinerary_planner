@@ -85,13 +85,6 @@ async def check_clarity(state: PlannerState, runtime: Runtime[RunContext]) -> di
         tracer.emit("clarification", node="check_clarity", summary=questions[0].question,
                     data={"questions": payload})
         return {"questions": payload, "route": "ask_clarification"}
-    if asked and outcome.unmapped_constraints:
-        message = ("I still cannot verify this mandatory requirement: "
-                   + "; ".join(outcome.unmapped_constraints)[:300]
-                   + ". Please edit it, remove it, or explicitly keep it as an optional preference.")
-        return {"questions": [], "route": "finalize", "final": {
-            "status": "no_feasible_plan", "mode": None, "message": message,
-            "infeasible": {"reason": message, "binding_constraints": [], "relaxations": []}}}
     if matches:
         return {"questions": [], "route": "build_context"}
     city = outcome.preferences.city

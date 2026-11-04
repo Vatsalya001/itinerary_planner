@@ -258,27 +258,3 @@ describe('PlanActions: Add to calendar', () => {
     expect(status).not.toHaveTextContent('Calendar file downloaded.')
   })
 })
-
-it('shows official facility evidence and preserves unknown as unverified', () => {
-  const result = fixtures.complete()
-  result.plan!.stops[0].candidate.requirement_evidence = [{
-    requirement_id: 'test-private-changing', description: 'private changing room', status: 'confirmed',
-    source_url: 'https://example.org/facilities', retrieved_at: '2026-11-05T04:30:00Z',
-    quote: 'A private changing room is available.', reason: 'Explicit statement on the official domain',
-  }]
-  render(<PlanView result={result} />)
-  expect(screen.getByText('private changing room: Supported by an official-source statement')).toBeInTheDocument()
-  expect(screen.getByRole('link', { name: /Facility evidence/ })).toHaveAttribute('href', 'https://example.org/facilities')
-  expect(screen.getByText('Confirm current availability directly with the venue.')).toBeInTheDocument()
-})
-
-it('never presents missing facility evidence as confirmed', () => {
-  const result = fixtures.complete()
-  result.plan!.stops[0].candidate.requirement_evidence = [{
-    requirement_id: 'test-lockers', description: 'lockers', status: 'unknown',
-    source_url: null, retrieved_at: null, quote: null, reason: 'No official-source evidence',
-  }]
-  render(<PlanView result={result} />)
-  expect(screen.getByText('lockers: Unverified')).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: /Facility evidence/ })).not.toBeInTheDocument()
-})

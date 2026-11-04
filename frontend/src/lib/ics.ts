@@ -133,11 +133,6 @@ export function buildIcs(plan: CanonicalPlan, options: IcsOptions = {}): string 
     description.push(
       `Cost per person: ${fmtCandidateCost(c)} (${costBasisLabel(c.cost.basis)})`,
     )
-    for (const e of c.requirement_evidence ?? []) {
-      description.push(`Facility ${e.description}: ${e.status}; confirm current availability with the venue`)
-      const source = safeHttpsUrl(e.source_url)
-      if (source) description.push(`Facility source: ${source}`)
-    }
     if (stop.plan_b) description.push(`Plan B if it rains: ${stop.plan_b.name}`)
     description.push(`Source: ${sourceLabel(c.source.provider)}`)
     description.push(`Map: ${mapsUrl}`)
