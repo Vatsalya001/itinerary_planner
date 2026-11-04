@@ -27,6 +27,12 @@ describe('local itinerary history', () => {
     expect(saved.prompt).toContain('Time: 120 min')
     expect(saved.prompt).toContain('Plan Bangalore')
   })
+  it('retains a full-length description alongside maximum structured constraints', () => {
+    const request = { free_text: 'x'.repeat(1000), constraints: Array.from({ length: 10 }, () => 'y'.repeat(120)) }
+    const saved = historyEntry(fixtures.complete(), request, NOW)!
+    expect(saved.prompt).toContain(request.free_text)
+    expect(saved.prompt).toContain(request.constraints.join(', '))
+  })
   it('only bookmarks completed or fallback plans with a server share link', () => {
     expect(historyEntry(fixtures.clarification(), null, NOW)).toBeNull()
     expect(historyEntry(fixtures.infeasible(), null, NOW)).toBeNull()
@@ -45,14 +51,14 @@ describe('local itinerary history', () => {
   it('expires metadata after 30 days and rejects future or invalid entries', () => {
     const entries = [item(), { ...item(1), savedAt: NOW - HISTORY_TTL_MS },
       { ...item(2), savedAt: NOW + 400_000 }, { ...item(3), date: '2026-02-31' },
-      { ...item(4), shareId: 'javascript:alert(1)' }, { ...item(5), prompt: 'x'.repeat(1001) }, null]
+      { ...item(4), shareId: 'javascript:alert(1)' }, { ...item(5), prompt: 'x'.repeat(4001) }, null]
     expect(readHistory(storage({ version: 1, entries }), NOW).entries).toEqual([item()])
   })
   it('ignores malicious extra fields and only constructs local routes from validated IDs', () => {
     const read = readHistory(storage({ version: 1, entries: [{ ...item(), href: 'https://evil.example', token: 'secret' }] }), NOW)
     expect(read.entries).toEqual([item()])
   })
-  it.each(['{bad', JSON.stringify({ version: 99, entries: [] }), 'x'.repeat(250001)])('handles corrupt or oversized storage', raw => {
+  it.each(['{bad', JSON.stringify({ version: 99, entries: [] }), 'x'.repeat(1000001)])('handles corrupt or oversized storage', raw => {
     const read = readHistory({ getItem: () => raw }, NOW)
     expect(read.entries).toEqual([])
     expect(read.notice).toBeTruthy()

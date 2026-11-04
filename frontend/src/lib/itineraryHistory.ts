@@ -3,7 +3,7 @@ import type { PlanRequest, PlanResult } from '../types'
 export const HISTORY_KEY = 'saturday-planner:itinerary-history:v1'
 export const HISTORY_LIMIT = 30
 export const HISTORY_TTL_MS = 30 * 24 * 60 * 60 * 1000
-const MAX_BYTES = 250_000
+const MAX_BYTES = 1_000_000
 
 /** Bookmarks only: venue records, traces, resume tokens and credentials are never copied into localStorage. */
 export interface ItineraryHistoryEntry {
@@ -23,7 +23,7 @@ function entry(value: unknown, now: number): ItineraryHistoryEntry | null {
     || typeof v.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v.date)
     || !Number.isFinite(Date.parse(`${v.date}T00:00:00Z`))
     || new Date(`${v.date}T00:00:00Z`).toISOString().slice(0, 10) !== v.date
-    || typeof v.prompt !== 'string' || v.prompt.length > 1000
+    || typeof v.prompt !== 'string' || v.prompt.length > 4000
     || typeof v.savedAt !== 'number' || !Number.isFinite(v.savedAt)
     || v.savedAt > now + 300_000 || now - v.savedAt >= HISTORY_TTL_MS) return null
   return { shareId: v.shareId, city: v.city, date: v.date, prompt: v.prompt, savedAt: v.savedAt }
@@ -54,6 +54,9 @@ export function historyEntry(result: PlanResult, request: PlanRequest | null, no
   const p = result.plan
   const details = [
     request?.city ? `City: ${request.city}` : '',
+    request?.date ? `Date: ${request.date}` : '',
+    request?.neighbourhood ? `Near: ${request.neighbourhood}` : '',
+    request?.group_size ? `Group size: ${request.group_size}` : '',
     request?.start_time ? `Start: ${request.start_time}` : '',
     request?.available_time ? `Time: ${request.available_time}${typeof request.available_time === 'number' ? ' min' : ''}` : '',
     request?.budget !== undefined && request.budget !== null ? `Budget ${request.currency || result.preferences?.currency || ''} ${request.budget}` : '',
@@ -63,7 +66,7 @@ export function historyEntry(result: PlanResult, request: PlanRequest | null, no
   ].filter(Boolean).join(' · ')
   // Form overrides precede the description so edited fields remain visible even for long prompts.
   const prompt = [details, request?.free_text?.trim()].filter(Boolean).join('\n') || p.city
-  return entry({ shareId: result.share_id, city: p.city, date: p.date, prompt: prompt.slice(0, 1000), savedAt: now }, now)
+  return entry({ shareId: result.share_id, city: p.city, date: p.date, prompt: prompt.slice(0, 4000), savedAt: now }, now)
 }
 
 export function writeHistory(storage: Pick<Storage, 'setItem'>, entries: ItineraryHistoryEntry[]): string | null {
