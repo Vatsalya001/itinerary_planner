@@ -9,7 +9,7 @@
 # params.rate_limit: {requests, window_s} client-side sliding window per model, shared by all runs in a process
 # pending:  true until a real model ID is pinned; requesting it raises PendingModelError
 production:
-  primary: groq:openai/gpt-oss-120b
+  primary: cerebras:gpt-oss-120b
   fallback: null  # validated deterministic planner handles model failures; no second paid provider
 
 timeouts:

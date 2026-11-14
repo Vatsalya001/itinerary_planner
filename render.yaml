@@ -41,7 +41,7 @@ services:
 
       # --- Models (registry IDs from backend/app/llm/models.yaml) ------------------------------------------
       - key: PRIMARY_MODEL
-        value: groq:openai/gpt-oss-120b
+        value: cerebras:gpt-oss-120b
       # No second hosted model: the validated deterministic planner handles failures.
       - key: FALLBACK_MODEL
         value: ""
@@ -52,7 +52,7 @@ services:
       - key: OLLAMA_BASE_URL
         value: http://127.0.0.1:11434
       # Provider keys are read from the environment by the LangChain integrations.
-      - key: GROQ_API_KEY
+      - key: CEREBRAS_API_KEY
         sync: false
 
       # --- Data providers ("auto" = live provider when its key is set, else the keyless option) -----------

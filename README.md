@@ -122,7 +122,7 @@ See [submission checklist](docs/SUBMISSION.md) for deployment settings and anony
 - An indoor alternative cannot fulfill a hard outdoor-walk requirement. When no compatible alternative exists, the plan explicitly warns about rain instead of promising one.
 - The beam search is bounded and heuristic. An inability to find a plan is not a proof that no real-world itinerary exists.
 - Model limiters and resume locks are per process. Keep the demo at one instance; additional instances require shared coordination.
-- Persisting the planner across navigation uses browser memory only. Reloading the page clears the unsaved form and active plan; share links persist subject to the configured store and TTL.
+- Navigation preserves the active session in memory. Browser local storage retains itinerary history for reopening saved plans after reload. Saved plans depend on server storage and expiry. Unsaved form edits can be lost on reload.
 - The public Mumbai smoke exercised live Google Places, geocoding, weather, storage and anonymous sharing. Tavily is configured but event discovery was not exercised by this smoke. The [GitHub CI workflow](https://github.com/Vatsalya001/itinerary_planner/actions/workflows/ci.yml) checks real Postgres and builds/smoke-tests Docker. Offline checks do not establish live venue accuracy or provider capacity.
 - The earlier Groq Mumbai run returned an underfilled fallback after HTTP 429; the later Cerebras run completed two stops. Its estimated transfer was 35–46 minutes, so the short-travel preference was only partly satisfied. Travel modes and fares are city-level heuristics, not route-specific availability checks; verify local transport restrictions and current admission/venue suitability. No broad live AI-completion rate or production latency benchmark is claimed.
 
@@ -155,3 +155,10 @@ To regenerate with ReportLab installed: `python docs/reports/build_evaluation_pd
 Completed plans with a saved-plan link appear in **Your itinerary history**, labelled by city and date with the original request. The list shows up to 30 bookmarks from the last 30 days. Older entries are filtered out; the next history update rewrites the retained list. Open an entry to revisit its existing shared plan without another model/planning call; remove individual entries or clear history with confirmation. History is specific to this browser/device, and anyone using it can read the saved requests. Saved-plan links can expire or become unavailable after server storage resets.
 
 Only city, date, request text, saved timestamp and share ID are kept in `localStorage`; venue payloads, traces, resume tokens and credentials are not copied there. Corrupt, disabled or full storage does not interrupt planning; unavailable storage uses a labelled in-tab fallback. The backend, model prompts, validator, budgets and scheduling logic remain unchanged from submitted commit `c272b7c`.
+
+
+## Support and current release evidence
+
+Report reproducible problems through [GitHub Issues](https://github.com/Vatsalya001/itinerary_planner/issues). Include the date, city, expected result, observed result and run ID when available. Issues are public, so remove private prompts, credentials and personal details.
+
+See [P2 release verification](docs/verification/P2_RELEASE_2026-11-14.md) for current checks and operational limitations. Earlier model evaluation reports are historical results for their recorded commits.

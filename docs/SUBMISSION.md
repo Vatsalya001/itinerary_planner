@@ -1,6 +1,6 @@
 # Submission checklist
 
-## Current submission status — 3 November 2026
+## Historical submission evidence — 3 November 2026
 
 - Public app: https://itinerary-planner-r54t.onrender.com/
 - Source: https://github.com/Vatsalya001/itinerary_planner
@@ -48,7 +48,7 @@ DAILY_PLAN_CAP=200
 TRACING_ENABLED=false
 ```
 
-The live service selects Cerebras through Render environment variables, overriding the repository Blueprint's Groq example. Check Cerebras account credits/limits before evaluator traffic; the successful smoke does not establish sustained capacity.
+The model registry and production Blueprint select Cerebras GPT-OSS 120B. Check Cerebras account credits/limits before evaluator traffic; the successful smoke does not establish sustained capacity.
 
 Optional: add another registered model with its provider key; add Google Places and event provider keys for wider data coverage. For the snapshot demo, tell reviewers that Bangalore is the supported city. Never label this snapshot as a live Places lookup.
 

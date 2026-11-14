@@ -48,7 +48,7 @@ def test_registry_lists_the_model_matrix() -> None:
         if "<" in row["id"]:
             continue
         assert row["id"] in reg.specs, row["id"]
-    assert reg.production_primary == "groq:openai/gpt-oss-120b"
+    assert reg.production_primary == "cerebras:gpt-oss-120b"
     assert reg.production_fallback is None
     groq = reg.specs["groq:openai/gpt-oss-120b"]
     assert groq.kind == "api" and (groq.pricing.input, groq.pricing.output) == (0.15, 0.60)
@@ -267,6 +267,6 @@ def test_render_blueprint_uses_the_registered_production_model_without_hosted_fa
     assert values["PRIMARY_MODEL"] == reg.production_primary
     assert values["FALLBACK_MODEL"] == ""
     assert values["APP_ENV"] == "prod"
-    assert "GROQ_API_KEY" in values
+    assert "CEREBRAS_API_KEY" in values
     settings = fixture_settings(primary_model=values["PRIMARY_MODEL"], fallback_model=values["FALLBACK_MODEL"])
-    assert model_chain(settings) == ["groq:openai/gpt-oss-120b"]
+    assert model_chain(settings) == ["cerebras:gpt-oss-120b"]

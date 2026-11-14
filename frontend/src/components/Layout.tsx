@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useMatch } from 'react-router-dom'
 import { useEffect } from 'react'
 import Planner from '../pages/Planner'
+import { ExternalLink } from './ExternalLink'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `rounded-lg px-2.5 py-1.5 text-sm font-medium transition-colors ${
@@ -59,6 +60,7 @@ export function Layout() {
             Places from <span translate="no">Google Maps</span> or a curated snapshot (© OpenStreetMap contributors). City,
             timezone and weather from Open-Meteo.
           </p>
+          <p><ExternalLink className="underline" href="https://github.com/Vatsalya001/itinerary_planner/issues">Report a problem on GitHub (public)</ExternalLink></p>
           <p>Travel times, fares and crowd levels are estimates. Prices and hours can change; check before you go.</p>
         </div>
       </footer>
