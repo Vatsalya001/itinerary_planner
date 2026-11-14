@@ -124,19 +124,27 @@ export class SseParser {
 export async function readSseStream(
   body: ReadableStream<Uint8Array>,
   onMessage: (msg: SseMessage) => void,
+  finished: () => boolean = () => false,
+  idleTimeoutMs = 45_000,
 ): Promise<void> {
   const reader = body.getReader()
   const decoder = new TextDecoder('utf-8')
   const parser = new SseParser(onMessage)
   try {
     for (;;) {
-      const { value, done } = await reader.read()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new StreamError('The connection stopped responding. Please try again.')), idleTimeoutMs)
+      })
+      const { value, done } = await Promise.race([reader.read(), timeout]).finally(() => clearTimeout(timer))
       if (done) break
       if (value) parser.push(decoder.decode(value, { stream: true }))
+      if (finished()) return
     }
     parser.push(decoder.decode())
     parser.end()
   } finally {
+    void reader.cancel().catch(() => {})
     reader.releaseLock()
   }
 }
@@ -182,6 +190,8 @@ export interface StreamOptions {
   /** Base URL prefix for the API (default: same origin). */
   baseUrl?: string
   fetchImpl?: typeof fetch
+  timeoutMs?: number
+  idleTimeoutMs?: number
 }
 
 function errorText(ev: TraceEvent): string | null {
@@ -196,7 +206,7 @@ function errorText(ev: TraceEvent): string | null {
   return null
 }
 
-async function streamPlan(
+async function consumePlan(
   path: string,
   body: unknown,
   onEvent: TraceListener,
@@ -245,7 +255,7 @@ async function streamPlan(
       // A rendering bug in a listener must not kill the run.
       console.error('trace listener failed', err)
     }
-  })
+  }, () => outcome.result !== null, options.idleTimeoutMs)
 
   } catch (error) {
     if (error instanceof TypeError && outcome.runId) Object.assign(error, { plannerInterrupted: true })
@@ -256,6 +266,34 @@ async function streamPlan(
     outcome.error ?? 'The connection closed before the plan was ready. Please try again.',
     outcome.runId,
   )
+}
+
+async function streamPlan(
+  path: string,
+  body: unknown,
+  onEvent: TraceListener,
+  signal: AbortSignal | undefined,
+  options: StreamOptions,
+): Promise<PlanResult> {
+  const controller = new AbortController()
+  const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: () => void = () => {}
+  const interrupted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(combined.reason)
+    if (combined.aborted) onAbort()
+    else combined.addEventListener('abort', onAbort, { once: true })
+    timer = setTimeout(() => controller.abort(
+      new StreamError('Planning took too long. Please try again.'),
+    ), options.timeoutMs ?? 240_000)
+  })
+  try {
+    return await Promise.race([consumePlan(path, body, onEvent, combined, options), interrupted])
+  } finally {
+    clearTimeout(timer)
+    combined.removeEventListener('abort', onAbort)
+    controller.abort()
+  }
 }
 
 /** POST /api/plan as SSE. Resolves with the final PlanResult; throws ApiError (HTTP) or StreamError. */

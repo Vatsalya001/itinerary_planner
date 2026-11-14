@@ -85,7 +85,7 @@ export function PlanView({
           <p>Only part of your requested window is scheduled. The remaining time is free; this is not a full-window outing.</p>
         </Notice>
       ) : null}
-      <SummaryBar plan={plan} accessRequired={accessRequired} />
+      <SummaryBar checks={result.checks} plan={plan} accessRequired={accessRequired} />
 
       {plan.summary_note ? (
         <p className="rounded-xl bg-orange-50 p-3 text-sm text-stone-800">{plan.summary_note}</p>

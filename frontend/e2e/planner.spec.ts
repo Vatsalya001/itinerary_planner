@@ -1,8 +1,9 @@
+import { test } from './helpers'
 /**
  * Phase 2 browser verification: the built UI served by the real backend (fake:agent model, frozen world).
  * See playwright.config.ts for how the server is started.
  */
-import { expect, test } from '@playwright/test'
+import { expect } from '@playwright/test'
 import {
   BRIEF_JSON,
   CLOCK,
@@ -314,4 +315,20 @@ test.describe('keyboard only', () => {
     await page.keyboard.press('Enter')
     await expect(page.locator('code', { hasText: 'search_places' }).first()).toBeVisible()
   })
+})
+
+test('direct SSE completion preserves a loadable shared plan', async ({ page }) => {
+  await page.unrouteAll()
+  await page.goto('/')
+  await planButton(page).click()
+  await expect(planHeading(page)).toBeVisible()
+  const names = await page.locator('section[aria-labelledby="plan-title"] article h4').allTextContents()
+  const whatsapp = await page.getByRole('link', { name: 'Share on WhatsApp' }).getAttribute('href')
+  expect(whatsapp).toBeTruthy()
+  const sharedText = new URL(whatsapp!).searchParams.get('text') ?? ''
+  const sharePath = sharedText.match(/\/p\/[A-Za-z0-9_-]+/)?.[0]
+  expect(sharePath).toBeTruthy()
+  await page.goto(sharePath!)
+  await expect(planHeading(page)).toBeVisible()
+  await expect(page.locator('section[aria-labelledby="plan-title"] article h4')).toHaveText(names)
 })

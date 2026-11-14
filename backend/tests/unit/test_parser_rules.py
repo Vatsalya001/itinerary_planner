@@ -1177,3 +1177,23 @@ def test_accessibility_evidence_instruction_does_not_add_a_clarification():
     mixed = parse(city="London", budget=60, currency="GBP", constraints=[
         "Don't assume unknown facilities are accessible and I need a hearing loop"])
     assert mixed.unmapped_constraints and clarification_questions(mixed, [LONDON], False)
+
+
+@pytest.mark.parametrize("description", [
+    "Our total budget is ₹4000 for two adults. Spend one hour at each museum.",
+    "For two adults, budget ₹4000 total.",
+])
+def test_group_budget_survives_model_merge(description):
+    request = PlanRequest(free_text=f"Plan Mumbai for 4 hours. {description}")
+    rules = parse_rules(request, NOW)
+    prefs = merge_parse(_llm(budget=4000, group_size=3), rules, request).preferences
+    assert prefs.budget == 2000
+    assert prefs.group_size == 2
+
+
+@pytest.mark.parametrize("fields", [
+    {"free_text": "Mumbai for two adults, 4 hours, budget ₹4000 per person"},
+    {"free_text": "Mumbai for two adults, 4 hours, total budget ₹8000", "budget": 4000},
+])
+def test_explicit_per_person_budget_preserved(fields):
+    assert parse_rules(PlanRequest(**fields), NOW).preferences.budget == 4000

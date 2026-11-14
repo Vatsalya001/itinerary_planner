@@ -102,15 +102,21 @@ def _subject(request: Request, deps: Deps) -> str:
     return rate_limit_subject(client_ip(request, deps.settings.trust_proxy_headers))
 
 
-async def _simple_limit(request: Request, deps: Deps, bucket: str, limit: int, noun: str) -> SafeJSONResponse | None:
-    """One per-IP 10-minute sliding limit. Fails open (logged) if the store errors."""
+def _quota_unavailable() -> SafeJSONResponse:
+    return rejected(503, "Planning is temporarily unavailable. Please try again shortly.",
+                    headers={"Retry-After": "30"})
+
+
+async def _simple_limit(request: Request, deps: Deps, bucket: str, limit: int, noun: str,
+                        *, require_store: bool = False) -> SafeJSONResponse | None:
+    """One per-IP limit. Cost-bearing requests require a successful quota check."""
     if deps.store is None:
-        return None
+        return _quota_unavailable() if require_store else None
     try:
         allowed, retry_after = await deps.store.hit_rate_limit(f"ip:{_subject(request, deps)}:{bucket}", 600, limit)
     except Exception as exc:
-        log.error("rate limit check failed; allowing request", extra={"error_type": type(exc).__name__})
-        return None
+        log.error("rate limit check failed", extra={"error_type": type(exc).__name__})
+        return _quota_unavailable() if require_store else None
     if allowed:
         return None
     log.info("rate limited", extra={"bucket": bucket})
@@ -125,7 +131,7 @@ async def check_read_limit(request: Request, deps: Deps) -> SafeJSONResponse | N
 
 async def check_resume_limit(request: Request, deps: Deps) -> SafeJSONResponse | None:
     """Per-IP limit for clarification resumes (separate from the plan limits and the daily cap)."""
-    return await _simple_limit(request, deps, "resume", RESUMES_PER_10MIN, "answers")
+    return await _simple_limit(request, deps, "resume", RESUMES_PER_10MIN, "answers", require_store=True)
 
 
 async def check_limits(request: Request, deps: Deps) -> SafeJSONResponse | None:
@@ -133,11 +139,11 @@ async def check_limits(request: Request, deps: Deps) -> SafeJSONResponse | None:
 
     ``store.hit_limits`` checks every limit first and counts the request in all of them only when all allow it
     (atomically per store), so a request refused by the day window or the daily cap never uses up a 10-minute
-    hit. Fails open (logged) if the store errors."""
+    hit. Storage failures refuse new plans before any provider work begins."""
     settings = deps.settings
     store = deps.store
     if store is None:
-        return None
+        return _quota_unavailable()
     subject = _subject(request, deps)
     try:
         windows = [(f"ip:{subject}:10m", 600, settings.rate_limit_per_10min),
@@ -145,8 +151,8 @@ async def check_limits(request: Request, deps: Deps) -> SafeJSONResponse | None:
         allowed, retry_after, denied_by = await store.hit_limits(windows, daily_key=DAILY_PLANS_KEY,
                                                                  daily_cap=settings.daily_plan_cap)
     except Exception as exc:
-        log.error("rate limit check failed; allowing request", extra={"error_type": type(exc).__name__})
-        return None
+        log.error("plan quota check failed", extra={"error_type": type(exc).__name__})
+        return _quota_unavailable()
     if allowed:
         return None
     if denied_by == DAILY_PLANS_KEY:

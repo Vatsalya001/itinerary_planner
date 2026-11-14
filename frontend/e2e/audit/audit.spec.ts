@@ -1,3 +1,4 @@
+import { test } from '../helpers'
 /**
  * Independent frontend audit, browser reproductions against the real backend (docs/verification/AUDIT_FRONTEND.md).
  *
@@ -7,7 +8,7 @@
  * it pass. AUDIT_STRICT=1 runs them as plain tests to show each failure. Tests without `test.fail` are passing
  * regression guards for behaviour the audit checked and found correct.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import {
   description,
   expectNoHorizontalOverflow,

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { CanonicalPlan } from '../types'
+import type { CanonicalPlan, CheckItem } from '../types'
 import { fmtClockRange, fmtDate, fmtDuration, fmtMoney, weatherDetails } from '../lib/format'
 import { Icon, type IconName } from './Icon'
 
@@ -47,7 +47,8 @@ function BudgetMeter({ worst, budget, currency }: { worst: number; budget: numbe
   )
 }
 
-export function SummaryBar({ plan, accessRequired = false }: { plan: CanonicalPlan; accessRequired?: boolean }) {
+export function SummaryBar({ plan, accessRequired = false, checks = [] }: { plan: CanonicalPlan; accessRequired?: boolean; checks?: CheckItem[] }) {
+  const budgetVerified = checks.some((check) => check.name === 'budget' && check.status === 'pass')
   const t = plan.totals
   const hasBudget = typeof t.budget === 'number'
   const rainy = plan.weather.status === 'ok' && (plan.weather.precip_prob_max ?? 0) >= 50
@@ -68,7 +69,7 @@ export function SummaryBar({ plan, accessRequired = false }: { plan: CanonicalPl
       <div className="rounded-xl border border-stone-200 bg-white p-3">
         <dt className="flex items-center gap-1.5 text-xs font-medium text-stone-600">
           <Icon name="wallet" className="h-3.5 w-3.5" />
-          Worst-case estimate per person
+          {budgetVerified ? 'Worst-case estimate per person' : 'Estimated cost per person'}
         </dt>
         <dd className="mt-1 text-base font-semibold text-stone-900">
           {fmtMoney(t.worst_case, t.currency)}
@@ -81,14 +82,14 @@ export function SummaryBar({ plan, accessRequired = false }: { plan: CanonicalPl
         </dd>
         {hasBudget ? (
           <dd>
-            <BudgetMeter worst={t.worst_case} budget={t.budget as number} currency={t.currency} />
+            {budgetVerified ? <BudgetMeter worst={t.worst_case} budget={t.budget as number} currency={t.currency} /> : <p className="mt-2 text-xs text-amber-800">Budget unverified — costs may exceed this estimate</p>}
           </dd>
         ) : null}
       </div>
       <Tile
         icon="clock"
         label="Left over"
-        value={typeof t.budget_left === 'number' ? `${fmtMoney(t.budget_left, t.currency)} spare` : 'No budget set'}
+        value={!budgetVerified && hasBudget ? 'Remaining budget unverified' : typeof t.budget_left === 'number' ? `${fmtMoney(t.budget_left, t.currency)} spare` : 'No budget set'}
         sub={`${fmtDuration(Math.max(0, t.minutes_left))} spare of ${fmtDuration(t.available_minutes)} · ${fmtDuration(t.walking_min)} ${accessRequired ? 'standard pedestrian estimate' : 'walking'}`}
       />
     </dl>

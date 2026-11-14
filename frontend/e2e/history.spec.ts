@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { test } from './helpers'
+import { expect } from '@playwright/test'
 import { expectNoHorizontalOverflow, planHeading, submitDescription } from './helpers'
 
 const KEY = 'saturday-planner:itinerary-history:v1'

@@ -287,3 +287,45 @@ describe('resumePlan', () => {
     expect(JSON.parse(init.body as string)).toEqual({ answers: { city: 'Bangalore' } })
   })
 })
+
+describe('stream completion and deadlines', () => {
+  it('resolves a terminal result while the server keeps the connection open', async () => {
+    const cancel = vi.fn()
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          `data: ${JSON.stringify({ type: 'result', data: complete })}\n\n`,
+        ))
+      },
+      cancel,
+    })
+    const result = await postPlan({}, () => {}, undefined, { fetchImpl: async () => new Response(body) })
+    expect(result.status).toBe('complete')
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it('bounds a fetch that never returns headers', async () => {
+    await expect(postPlan({}, () => {}, undefined, {
+      fetchImpl: () => new Promise<Response>(() => {}),
+      timeoutMs: 5,
+    })).rejects.toThrow('Planning took too long')
+  })
+
+  it('bounds a stalled stream and cancels its reader', async () => {
+    const cancel = vi.fn()
+    await expect(postPlan({}, () => {}, undefined, {
+      fetchImpl: async () => new Response(new ReadableStream({ cancel })),
+      idleTimeoutMs: 5,
+    })).rejects.toThrow('connection stopped responding')
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it('preserves explicit user cancellation', async () => {
+    const controller = new AbortController()
+    const pending = postPlan({}, () => {}, controller.signal, {
+      fetchImpl: () => new Promise<Response>(() => {}),
+    })
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  })
+})

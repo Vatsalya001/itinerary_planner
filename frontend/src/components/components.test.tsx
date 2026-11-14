@@ -258,3 +258,14 @@ describe('PlanActions: Add to calendar', () => {
     expect(status).not.toHaveTextContent('Calendar file downloaded.')
   })
 })
+
+it('shows uncertain cost and remaining budget when admission costs are unverified', () => {
+  const result = fixtures.complete()
+  result.checks = result.checks.map((check) =>
+    check.name === 'budget' ? { ...check, status: 'unverified' as const } : check,
+  )
+  render(<PlanView result={result} />)
+  expect(screen.getByText('Remaining budget unverified')).toBeInTheDocument()
+  expect(screen.getByText('Budget unverified — costs may exceed this estimate')).toBeInTheDocument()
+  expect(screen.queryByText('₹857 spare')).not.toBeInTheDocument()
+})

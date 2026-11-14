@@ -1509,7 +1509,7 @@ increment the daily counter and refuse when it exceeds the cap. If any limit ref
 refused request is never counted anywhere; otherwise it is committed. `Retry-After` is the longest wait among the
 refusing limits (`sliding_retry_after` for windows, seconds to UTC midnight for the cap), and the response text names
 the daily cap when that is the longest wait. `POST /api/plan` checks both per-IP windows and the cap this way;
-resumes and reads use one window. All checks fail open (logged) when the store errors.
+resumes and reads use one window. New plans and clarification resumes return HTTP 503 with Retry-After when quota storage is unavailable. Read requests remain available if their rate-limit check fails.
 
 Subject (`security.client_ip`, `rate_limit_subject`): with `TRUST_PROXY_HEADERS=true`, the right-most
 `X-Forwarded-For` hop (across repeated headers) if it is a valid IP, else the peer address; never further left. IPv6

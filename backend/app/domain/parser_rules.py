@@ -1103,6 +1103,34 @@ def _order_hint(sentences: list[str]) -> str | None:
 # ---------------------------------------------------------------------------------------------------
 
 
+_GROUP_BUDGET_PREFIX = "Split the stated group budget"
+_GROUP_BUDGET = re.compile(r"\b(?:total|group|combined)\s+budget\b", re.IGNORECASE)
+_PERSON_QUALIFIER = r"(?:per\s+(?:person|head)|a\s+head|each|pp|/\s*(?:person|head|pp))"
+
+
+def _is_group_budget(text: str, money: _Money) -> bool:
+    """Qualifiers must describe the selected amount, rather than unrelated activities."""
+    patterns = (_MONEY_PREFIX, _MONEY_SUFFIX, _MONEY_PER_PERSON, _MONEY_CONTEXT, _MONEY_CUE_AFTER, _MONEY_K)
+    matches = [match for pattern in patterns for match in pattern.finditer(text)
+               if match.start() == money.start]
+    if not matches:
+        return False
+    match = max(matches, key=lambda candidate: candidate.end())
+    prefix = re.split(r"[.;!?]", text[:money.start])[-1]
+    suffix = text[match.end():]
+    amount_text = match.group()
+    per_person = (
+        re.search(rf"\b{_PERSON_QUALIFIER}\s+(?:budget\s*)?(?:is\s*)?$", prefix, re.IGNORECASE)
+        or re.match(rf"\s*{_PERSON_QUALIFIER}\b", suffix, re.IGNORECASE)
+        or _MONEY_PER_PERSON.fullmatch(amount_text)
+    )
+    return not per_person and bool(
+        _GROUP_BUDGET.search(prefix + amount_text)
+        or re.match(r"\s*(?:in\s+)?total\b", suffix, re.IGNORECASE)
+        or re.search(r"\b(?:in\s+)?total$", amount_text, re.IGNORECASE)
+    )
+
+
 def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
     """Regex/rule parser over free_text + structured fields. Structured fields win over free text.
 
@@ -1154,6 +1182,12 @@ def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
                  else _extract_interests([_blank_places(s) for s in sentences]))
     group = request.group_size if request.group_size != 1 else (
         _extract_group(" ".join([clean, request.mood or ""])) or 1)
+
+    if (request.budget is None and budget is not None and group > 1
+            and money is not None and _is_group_budget(clean, money)):
+        total = budget
+        budget = total // group
+        assumptions.append(f"{_GROUP_BUDGET_PREFIX} of {total:,} across {group} people")
 
     hard = original_constraints(request)
     assumptions.extend(_relaxed_assumptions(request))
@@ -1231,8 +1265,9 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     # The model's time and budget fields count only when the user's text actually contains a time expression
     # or a money-like number; otherwise they were invented and the rules value or a disclosed default is used.
     time_seen, money_seen = _text_evidence(request)
+    group_budget = any(a.startswith(_GROUP_BUDGET_PREFIX) for a in r.assumptions)
     budget = (m.budget if request.budget is None and m.budget is not None and money_seen
-              and NEGATIVE_BUDGET_NOTE not in r.assumptions else r.budget)
+              and not group_budget and NEGATIVE_BUDGET_NOTE not in r.assumptions else r.budget)
     explicit = request.currency is not None or rules.budget_currency_explicit  # only text we can see
     if request.currency is not None:
         currency: str | None = request.currency
@@ -1269,8 +1304,8 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
                              *_explicit_interest_tags(request)])
     llm_hard = _supported_llm_constraints(m.hard_constraints, request)
     hard = _without_relaxed(merge_constraints(r.hard_constraints, original_constraints(request), llm_hard), request)
-    if request.group_size != 1:
-        group = request.group_size
+    if request.group_size != 1 or group_budget:
+        group = r.group_size
     else:
         group = m.group_size if m.group_size != 1 else r.group_size
 

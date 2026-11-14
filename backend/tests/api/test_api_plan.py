@@ -454,15 +454,31 @@ async def test_persistence_failure_does_not_break_response(make_client: Any, fak
         assert result["share_id"] is None
 
 
-async def test_rate_limit_store_failure_fails_open(make_client: Any, fake_runner: FakeRunner) -> None:
+async def test_rate_limit_store_failure_blocks_provider_work(make_client: Any, fake_runner: FakeRunner) -> None:
     async with make_client() as (client, _app, deps):
         async def fail(*args: Any, **kwargs: Any) -> Any:
             raise RuntimeError("db down")
 
         deps.store.hit_rate_limit = fail
         deps.store.hit_limits = fail
-        assert (await client.post("/api/plan", json=BRIEF)).status_code == 200
-        assert (await client.post("/api/plan/t_abcdef12/resume", json={"answers": {"city": "Pune"}})).status_code == 200
+        for response in (
+            await client.post("/api/plan", json=BRIEF),
+            await client.post("/api/plan", json=BRIEF, headers=SSE),
+            await client.post("/api/plan/t_abcdef12/resume", json={"answers": {"city": "Pune"}}),
+        ):
+            assert response.status_code == 503
+            assert response.headers["Retry-After"] == "30"
+        assert fake_runner.calls == []
+        assert fake_runner.run_plan_calls == 0
+
+
+async def test_missing_quota_store_blocks_provider_work(make_client: Any, fake_runner: FakeRunner) -> None:
+    async with make_client() as (client, _app, deps):
+        deps.store = None
+        assert (await client.post("/api/plan", json=BRIEF)).status_code == 503
+        assert (await client.post("/api/plan/t_abcdef12/resume", json={"answers": {"city": "Pune"}})).status_code == 503
+        assert fake_runner.calls == []
+        assert fake_runner.run_plan_calls == 0
 
 
 async def test_client_disconnect_still_persists(make_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:

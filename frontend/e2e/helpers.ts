@@ -1,4 +1,20 @@
-import { expect, type Page, type Response } from '@playwright/test'
+import { expect, test as base, type Page, type Response, type Request } from '@playwright/test'
+
+// Capture the real backend payload before the browser cancels a completed SSE response.
+// Chromium can discard Network.getResponseBody data once the client releases its stream.
+const capturedBodies = new WeakMap<Request, string>()
+
+export const test = base.extend({
+  page: async ({ page }, use) => {
+    await page.route(/\/api\/plan(\/[^/]+\/resume)?$/, async (route) => {
+      const response = await route.fetch()
+      const body = await response.text()
+      capturedBodies.set(route.request(), body)
+      await route.fulfill({ response, body })
+    })
+    await use(page)
+  },
+})
 
 export const BRIEF_JSON = {
   city: 'Bangalore',
@@ -45,7 +61,7 @@ export function planHeading(page: Page) {
 
 /** Wait for the SSE POST to finish and return its parsed result event. */
 export async function resultFrom(response: Response): Promise<Record<string, unknown>> {
-  const body = await response.text()
+  const body = capturedBodies.get(response.request()) ?? await response.text()
   const frames = body.split('\n\n').filter((f) => f.startsWith('data: '))
   const events = frames.map((f) => JSON.parse(f.slice(6)) as Record<string, unknown>)
   const result = events.reverse().find((e) => e.type === 'result')
