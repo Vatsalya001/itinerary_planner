@@ -23,15 +23,17 @@ async def test_unavailable_weather_still_has_sunset_and_marks_trace():
     assert failed and failed[0].data == {"code": "weather_unavailable", "recovered": True}
 
 
-async def test_saturday_afternoon_start_moves_forward():
+async def test_expired_saturday_window_moves_to_next_week():
     deps = build_deps(fixture_settings())
     prefs = Preferences(city="Bangalore", start_min=900, available_minutes=180)
     now = datetime(2026, 11, 7, 12, 40, tzinfo=UTC)  # Saturday 18:10 IST
     ctx, _ = await build_context(prefs, BLR, deps, Tracer("r_test"), now)
-    assert ctx.date.isoformat() == "2026-11-07"
-    assert ctx.start_min == 18 * 60 + 30
-    assert ctx.end_min == ctx.start_min  # the original 15:00-18:00 window has passed; no extra hours invented
-    assert any("usual start time has passed" in a for a in prefs.assumptions)
+    assert ctx.date.isoformat() == "2026-11-14"
+    assert ctx.start_min == 900
+    assert ctx.end_min == 1080
+    assert prefs.date == ctx.date
+    assert prefs.available_minutes == 180
+    assert any("Moved to Saturday" in a for a in prefs.assumptions)
 
 
 def test_unknown_fault_names_are_logged_and_known_ones_are_not(caplog: pytest.LogCaptureFixture) -> None:
@@ -76,3 +78,28 @@ async def test_events_fault_only_wraps_enabled_events() -> None:
         await enabled.events.search(["music"], make_ctx())
     places = build_deps(fixture_settings(fault="places_http_503")).places
     assert isinstance(places, FailingPlaces) and places.status == "unavailable"
+
+
+@pytest.mark.parametrize("end, rolls", [(1110, True), (1125, True), (1140, False)])
+async def test_saturday_rollover_respects_minimum_remaining_window(end, rolls):
+    deps = build_deps(fixture_settings())
+    prefs = Preferences(city="Bangalore", start_min=900, available_minutes=end - 900)
+    now = datetime(2026, 11, 7, 12, 40, tzinfo=UTC)  # earliest start 18:30 IST
+    tracer = Tracer("r_boundary")
+    ctx, _ = await build_context(prefs, BLR, deps, tracer, now)
+    assert ctx.date.isoformat() == ("2026-11-14" if rolls else "2026-11-07")
+    assert ctx.start_min == (900 if rolls else 1110)
+    assert ctx.end_min == end
+    forecast_call = next(e for e in tracer.events if e.type == "tool_called")
+    assert ctx.date.isoformat() in forecast_call.summary
+
+
+async def test_future_explicit_date_keeps_requested_window():
+    from datetime import date
+
+    deps = build_deps(fixture_settings())
+    prefs = Preferences(city="Bangalore", date=date(2026, 11, 21), start_min=600, available_minutes=180)
+    ctx, _ = await build_context(prefs, BLR, deps, Tracer("r_future"),
+                                 datetime(2026, 11, 7, 12, 40, tzinfo=UTC))
+    assert ctx.date == prefs.date
+    assert (ctx.start_min, ctx.end_min) == (600, 780)

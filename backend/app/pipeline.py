@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.deps import Deps
@@ -44,7 +44,8 @@ async def build_context(prefs: Preferences, location: Location, deps: Deps, trac
     """Target date, time window, weather (with an astronomical sunset fallback) and pacing.
 
     If the plan is for today (a Saturday) and the start time has already passed, the start moves to the
-    next quarter hour (the window length is kept) and an assumption is added to ``prefs``.
+    next quarter hour while keeping the original end. If fewer than 30 minutes remain on Saturday,
+    move the original window to the following Saturday before fetching weather.
     """
     degradations: list[str] = []
     day = prefs.date or next_saturday(now, location.timezone)
@@ -54,10 +55,19 @@ async def build_context(prefs: Preferences, location: Location, deps: Deps, trac
         earliest = -(-earliest // 15) * 15  # round up to the quarter hour
         if prefs.start_min < earliest:
             original_end = prefs.start_min + prefs.available_minutes
-            prefs.available_minutes = max(0, original_end - earliest)
-            prefs.start_min = earliest
-            prefs.assumptions = [a for a in prefs.assumptions if not a.startswith("Starting at ")]
-            prefs.assumptions.append(f"Starting at {fmt_clock(earliest)} because the usual start time has passed")
+            remaining = max(0, original_end - earliest)
+            if local_now.weekday() == 5 and remaining < 30 and prefs.available_minutes >= 30:
+                day += timedelta(days=7)
+                prefs.date = day
+                prefs.assumptions.append(
+                    f"Moved to Saturday {day.isoformat()} because today's requested window "
+                    "has fewer than 30 usable minutes remaining. Kept your original start time and duration."
+                )
+            else:
+                prefs.available_minutes = remaining
+                prefs.start_min = earliest
+                prefs.assumptions = [a for a in prefs.assumptions if not a.startswith("Starting at ")]
+                prefs.assumptions.append(f"Starting at {fmt_clock(earliest)} because the usual start time has passed")
 
     tracer.emit("tool_called", node="get_weather", tool="get_weather", summary=f"Forecast for {day.isoformat()}")
     t0 = time.perf_counter()
