@@ -16,6 +16,7 @@ from app.domain.parser_rules import (
     default_queries,
     merge_parse,
     parse_rules,
+    requests_next_saturday,
 )
 from app.domain.schemas import PlanRequest, PlanResult
 from app.domain.validator import summarize_checks, validate_plan
@@ -75,7 +76,9 @@ async def run_baseline(request: PlanRequest, deps: Deps, *, tracer: Tracer | Non
 
     location = matches[0]
     prefs = apply_defaults(outcome, location)
-    ctx, degradations = await build_context(prefs, location, deps, tracer, now)
+    ctx, degradations = await build_context(
+        prefs, location, deps, tracer, now, strict_next_saturday=requests_next_saturday(request)
+    )
     constraints, original = enforced_constraints(prefs, request)
     if prefs.available_minutes < 30:
         return done(PlanResult(run_id=run_id, status="no_feasible_plan", model="baseline:deterministic",

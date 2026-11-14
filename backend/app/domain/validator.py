@@ -578,6 +578,13 @@ def validate_plan(draft: PlanDraft, ledger: Mapping[str, Candidate], ctx: WorldC
     if plan is not None:
         late_events = {v.stop_index for v in schedule_violations if v.code == "HOURS_CONFLICT" and v.stop_index is not None}
         violations.extend(_scheduled_checks(plan, draft, ledger, ctx, prefs, constraints, late_events))
+        if "Requested indoor rain backup" in prefs.soft_preferences and any(
+                is_outdoor(s.candidate) and s.plan_b is None for s in plan.stops):
+            violations.append(_err(
+                "WEATHER_RISK",
+                "The requested indoor rain backup is unavailable for at least one outdoor stop. "
+                "This itinerary does not guarantee an indoor alternative if it rains."
+            ))
         alternatives = [s.plan_b_candidate_id for s in draft.stops]
         if any(alternatives):
             # At most eight stops: exhaustively check each combination of rain substitutions.

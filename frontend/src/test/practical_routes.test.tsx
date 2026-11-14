@@ -60,7 +60,7 @@ describe('practical route and evidence regressions', () => {
     result.plan!.totals.available_minutes = 240
     render(<PlanView result={result} />)
     expect(screen.getByText('Partial itinerary')).toBeInTheDocument()
-    expect(screen.getByText(/Requested window: 3:00 PM – 7:00 PM/)).toBeInTheDocument()
+    expect(screen.getByText(/Planning window: 3:00 PM – 7:00 PM/)).toBeInTheDocument()
   })
 
   it.each([[191, true], [192, false]] as const)('uses the 80 percent lower margin at %i scheduled minutes', (elapsed, partial) => {

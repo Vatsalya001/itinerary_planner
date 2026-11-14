@@ -1197,3 +1197,23 @@ def test_group_budget_survives_model_merge(description):
 ])
 def test_explicit_per_person_budget_preserved(fields):
     assert parse_rules(PlanRequest(**fields), NOW).preferences.budget == 4000
+
+
+def test_explicit_window_wins_over_model_time():
+    request = PlanRequest(free_text="Mumbai Saturday 9 AM to 8 PM, ₹2000.")
+    prefs = merge_parse(_llm(start_min=915, available_minutes=285), parse_rules(request, NOW), request).preferences
+    assert (prefs.start_min, prefs.available_minutes) == (540, 660)
+
+
+def test_next_saturday_negation_and_endpoint_disclosure():
+    from app.domain.parser_rules import requests_next_saturday
+
+    request = PlanRequest(free_text="Mumbai this Saturday, not next Saturday. Start and finish at Churchgate.")
+    assert not requests_next_saturday(request)
+    assert requests_next_saturday(PlanRequest(free_text="Mumbai next Saturday"))
+    assert any("Only travel between stops" in item for item in parse_rules(request, NOW).preferences.assumptions)
+
+
+def test_rain_backup_request_is_preserved():
+    request = PlanRequest(free_text="Mumbai parks, with an indoor backup if it rains. Rain is possible.")
+    assert "Requested indoor rain backup" in parse_rules(request, NOW).preferences.soft_preferences

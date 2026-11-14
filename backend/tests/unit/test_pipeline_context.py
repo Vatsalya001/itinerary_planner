@@ -103,3 +103,14 @@ async def test_future_explicit_date_keeps_requested_window():
                                  datetime(2026, 11, 7, 12, 40, tzinfo=UTC))
     assert ctx.date == prefs.date
     assert (ctx.start_min, ctx.end_min) == (600, 780)
+
+
+async def test_explicit_next_saturday_uses_destination_timezone_and_original_window():
+    deps = build_deps(fixture_settings())
+    prefs = Preferences(city="Bangalore", start_min=600, available_minutes=180)
+    now = datetime(2026, 11, 6, 21, tzinfo=UTC)  # Saturday locally, Friday UTC
+    tracer = Tracer("r_next")
+    ctx, _ = await build_context(prefs, BLR, deps, tracer, now, strict_next_saturday=True)
+    assert ctx.date.isoformat() == "2026-11-14"
+    assert (ctx.start_min, ctx.end_min) == (600, 780)
+    assert "2026-11-14" in next(e for e in tracer.events if e.type == "tool_called").summary

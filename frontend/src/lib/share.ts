@@ -24,7 +24,7 @@ export function planToText(plan: CanonicalPlan, options: ShareTextOptions = {}):
   const lines: string[] = []
   lines.push(`My Saturday in ${plan.city}`)
   lines.push(`${fmtDate(plan.date)}, ${fmtClockRange(plan.start_min, plan.end_min)}`)
-  lines.push(`Requested window: ${fmtClockRange(plan.start_min, plan.start_min + t.available_minutes)}`)
+  lines.push(`Planning window: ${fmtClockRange(plan.start_min, plan.start_min + t.available_minutes)}`)
   lines.push(`Weather: ${weatherLine(plan.weather)}`)
   lines.push('')
 

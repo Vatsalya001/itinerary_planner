@@ -807,3 +807,11 @@ def test_distance_inside_a_venue_name_is_not_a_claim():
     assert "PROSE_NUMERIC_CLAIM" not in codes(ok)
     bad = run(PlanDraft(stops=[stop("fx:run", 50, why="5km Run Cafe is 2 km from here.")]), [run_cafe])
     assert "PROSE_NUMERIC_CLAIM" in codes(bad)
+
+
+def test_requested_rain_backup_missing_is_disclosed():
+    park = make_candidate("fx:park", "park", cost=(0, 0))
+    park = park.model_copy(update={"indoor": False})
+    prefs = make_prefs().model_copy(update={"soft_preferences": ["Requested indoor rain backup"]})
+    report = run(make_draft(("fx:park", 45)), [park], prefs=prefs)
+    assert any(v.code == "WEATHER_RISK" and "requested indoor rain backup" in v.message for v in report.warnings)

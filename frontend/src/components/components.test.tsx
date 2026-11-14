@@ -18,7 +18,7 @@ describe('PlanView', () => {
 
     // summary bar
     expect(screen.getByText('3:00 PM – 6:35 PM')).toBeInTheDocument()
-    expect(screen.getByText('Saturday, 7 November 2026 · 3 h 35 min scheduled. Requested window: 3:00 PM – 7:00 PM')).toBeInTheDocument()
+    expect(screen.getByText('Saturday, 7 November 2026 · 3 h 35 min scheduled. Planning window: 3:00 PM – 7:00 PM')).toBeInTheDocument()
     expect(screen.getByText('Partly cloudy')).toBeInTheDocument()
     expect(screen.getByText('19–28°C · 20% chance of rain · sunset 5:45 PM')).toBeInTheDocument()
     expect(screen.getByText('₹1,143')).toBeInTheDocument()

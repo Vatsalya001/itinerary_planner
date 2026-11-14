@@ -10,11 +10,11 @@ SATURDAY = 5
 LATE_SATURDAY_CUTOFF_HOUR = 20  # after 20:00 on a Saturday, plan for the next one
 
 
-def next_saturday(now: datetime, tz: str) -> date:
+def next_saturday(now: datetime, tz: str, *, include_today: bool = True) -> date:
     """The coming Saturday in ``tz``. Today counts if it is Saturday before 20:00 local time."""
     local = now.astimezone(ZoneInfo(tz)) if now.tzinfo else now.replace(tzinfo=ZoneInfo(tz))
     days_ahead = (SATURDAY - local.weekday()) % 7
-    if days_ahead == 0 and local.hour >= LATE_SATURDAY_CUTOFF_HOUR:
+    if days_ahead == 0 and (not include_today or local.hour >= LATE_SATURDAY_CUTOFF_HOUR):
         days_ahead = 7
     return local.date() + timedelta(days=days_ahead)
 

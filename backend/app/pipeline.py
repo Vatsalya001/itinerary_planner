@@ -40,7 +40,7 @@ async def geocode(city: str, deps: Deps, tracer: Tracer) -> list[Location]:
 
 
 async def build_context(prefs: Preferences, location: Location, deps: Deps, tracer: Tracer,
-                        now: datetime) -> tuple[WorldContext, list[str]]:
+                        now: datetime, *, strict_next_saturday: bool = False) -> tuple[WorldContext, list[str]]:
     """Target date, time window, weather (with an astronomical sunset fallback) and pacing.
 
     If the plan is for today (a Saturday) and the start time has already passed, the start moves to the
@@ -48,13 +48,14 @@ async def build_context(prefs: Preferences, location: Location, deps: Deps, trac
     move the original window to the following Saturday before fetching weather.
     """
     degradations: list[str] = []
-    day = prefs.date or next_saturday(now, location.timezone)
+    day = prefs.date or next_saturday(now, location.timezone, include_today=not strict_next_saturday)
     local_now = now.astimezone(ZoneInfo(location.timezone))
     if day == local_now.date():
         earliest = local_now.hour * 60 + local_now.minute + 15
         earliest = -(-earliest // 15) * 15  # round up to the quarter hour
         if prefs.start_min < earliest:
-            original_end = prefs.start_min + prefs.available_minutes
+            original_start = prefs.start_min
+            original_end = original_start + prefs.available_minutes
             remaining = max(0, original_end - earliest)
             if local_now.weekday() == 5 and remaining < 30 and prefs.available_minutes >= 30:
                 day += timedelta(days=7)
@@ -67,7 +68,8 @@ async def build_context(prefs: Preferences, location: Location, deps: Deps, trac
                 prefs.available_minutes = remaining
                 prefs.start_min = earliest
                 prefs.assumptions = [a for a in prefs.assumptions if not a.startswith("Starting at ")]
-                prefs.assumptions.append(f"Starting at {fmt_clock(earliest)} because the usual start time has passed")
+                prefs.assumptions.append(f"Starting at {fmt_clock(earliest)} because the usual start time has passed. "
+                                         f"Original window was {fmt_clock(original_start)} to {fmt_clock(original_end)}")
 
     tracer.emit("tool_called", node="get_weather", tool="get_weather", summary=f"Forecast for {day.isoformat()}")
     t0 = time.perf_counter()

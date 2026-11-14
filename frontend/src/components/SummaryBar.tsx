@@ -58,7 +58,7 @@ export function SummaryBar({ plan, accessRequired = false, checks = [] }: { plan
         icon="calendar"
         label="When"
         value={fmtClockRange(plan.start_min, plan.end_min)}
-        sub={`${fmtDate(plan.date)} · ${fmtDuration(t.elapsed_min)} scheduled. Requested window: ${fmtClockRange(plan.start_min, plan.start_min + t.available_minutes)}`}
+        sub={`${fmtDate(plan.date)} · ${fmtDuration(t.elapsed_min)} scheduled. Planning window: ${fmtClockRange(plan.start_min, plan.start_min + t.available_minutes)}`}
       />
       <Tile
         icon={rainy ? 'rain' : 'sun'}

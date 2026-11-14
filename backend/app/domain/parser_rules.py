@@ -1108,6 +1108,10 @@ _GROUP_BUDGET = re.compile(r"\b(?:total|group|combined)\s+budget\b", re.IGNORECA
 _PERSON_QUALIFIER = r"(?:per\s+(?:person|head)|a\s+head|each|pp|/\s*(?:person|head|pp))"
 
 
+_NEXT_SATURDAY = re.compile(r"\bnext\s+saturday\b", re.IGNORECASE)
+_NEGATED_DATE = re.compile(r"\b(?:not|never|avoid|skip|except|instead\s+of|rather\s+than)\s*$", re.IGNORECASE)
+
+
 def _is_group_budget(text: str, money: _Money) -> bool:
     """Qualifiers must describe the selected amount, rather than unrelated activities."""
     patterns = (_MONEY_PREFIX, _MONEY_SUFFIX, _MONEY_PER_PERSON, _MONEY_CONTEXT, _MONEY_CUE_AFTER, _MONEY_K)
@@ -1128,6 +1132,15 @@ def _is_group_budget(text: str, money: _Money) -> bool:
         _GROUP_BUDGET.search(prefix + amount_text)
         or re.match(r"\s*(?:in\s+)?total\b", suffix, re.IGNORECASE)
         or re.search(r"\b(?:in\s+)?total$", amount_text, re.IGNORECASE)
+    )
+
+
+def requests_next_saturday(request: PlanRequest) -> bool:
+    return request.date is None and any(
+        not _NEGATED_DATE.search(sentence[:match.start()])
+        for sentence in _sentences(_normalize_text(request.free_text))
+        if not _is_instruction_like(sentence)
+        for match in _NEXT_SATURDAY.finditer(sentence)
     )
 
 
@@ -1190,8 +1203,16 @@ def parse_rules(request: PlanRequest, now: datetime) -> ParseOutcome:
         assumptions.append(f"{_GROUP_BUDGET_PREFIX} of {total:,} across {group} people")
 
     hard = original_constraints(request)
+    if re.search(r"\b(?:start|finish|return|end)\s+(?:and\s+(?:finish|end)\s+)?(?:at|from|to)\b", clean, re.IGNORECASE):
+        assumptions.append(
+            "Travel from your starting location to the first stop and from the last stop to your "
+            "final destination is not included in this plan's time or budget. Only travel between stops is estimated."
+        )
     assumptions.extend(_relaxed_assumptions(request))
     unmapped, soft = _unmapped_and_soft(request)
+    if re.search(r"\brain\b", clean, re.IGNORECASE) and re.search(
+            r"\b(?:backup|alternative|plan b)\b", clean, re.IGNORECASE):
+        soft.append("Requested indoor rain backup")
     order = _order_hint(sentences)
     if order:
         soft.append(order)
@@ -1266,6 +1287,11 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     # or a money-like number; otherwise they were invented and the rules value or a disclosed default is used.
     time_seen, money_seen = _text_evidence(request)
     group_budget = any(a.startswith(_GROUP_BUDGET_PREFIX) for a in r.assumptions)
+    explicit_range = any(
+        parse_time_range(sentence.lower()) is not None
+        for sentence in _sentences(_normalize_text(request.free_text))
+        if not _is_instruction_like(sentence)
+    )
     budget = (m.budget if request.budget is None and m.budget is not None and money_seen
               and not group_budget and NEGATIVE_BUDGET_NOTE not in r.assumptions else r.budget)
     explicit = request.currency is not None or rules.budget_currency_explicit  # only text we can see
@@ -1277,7 +1303,8 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
         currency = (m.currency if money_seen else None) or r.currency
 
     llm_minutes_found = "available_time" not in llm.missing
-    if request.available_time is not None and parse_duration(request.available_time) is not None:
+    if ((request.available_time is not None and parse_duration(request.available_time) is not None)
+            or (explicit_range and rules_minutes_found)):
         minutes, minutes_found = r.available_minutes, True
     elif time_seen and llm_minutes_found and m.available_minutes != DEFAULT_MINUTES:  # default-valued == not found
         minutes, minutes_found = m.available_minutes, True
@@ -1286,7 +1313,7 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
     else:
         minutes, minutes_found = DEFAULT_MINUTES, False
 
-    if _structured_start(request.start_time) is not None:
+    if _structured_start(request.start_time) is not None or (explicit_range and rules_start_found):
         start, start_found = r.start_min, True
     elif time_seen and m.start_min != DEFAULT_START_MIN:  # a default-valued LLM start counts as "not found"
         start, start_found = m.start_min, True
@@ -1316,7 +1343,7 @@ def merge_parse(llm: ParseOutcome | None, rules: ParseOutcome, request: PlanRequ
 
     prefs = Preferences(
         city=city, budget=budget, currency=currency, start_min=start, available_minutes=minutes,
-        date=r.date if request.date is not None else (m.date or r.date), mood=mood, energy=m.energy if mood else Energy.MEDIUM,
+        date=r.date if request.date is not None or requests_next_saturday(request) else (m.date or r.date), mood=mood, energy=m.energy if mood else Energy.MEDIUM,
         interests=interests,
         hard_constraints=hard, soft_preferences=_dedupe_soft([*r.soft_preferences, *m.soft_preferences]),
         neighbourhood=neighbourhood, group_size=group, assumptions=assumptions,

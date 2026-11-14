@@ -6,7 +6,7 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from app.domain.parser_rules import apply_defaults
+from app.domain.parser_rules import apply_defaults, requests_next_saturday
 from app.graph.nodes.common import AGENT_NO_TIME, DEADLINE_RESERVE_S, WEATHER_ASSUMPTION, tracer_of
 from app.graph.prompts import hhmm
 from app.graph.state import PlannerState, RunContext, dump, get_matches, get_parse, get_request
@@ -28,8 +28,11 @@ async def build_context(state: PlannerState, runtime: Runtime[RunContext]) -> di
     extra: list[str] = list(state.get("extra_assumptions") or [])
     with tracer.node("build_context") as info:
         prefs = apply_defaults(get_parse(state), location)
-        ctx, ctx_degradations = await pipeline_build_context(prefs, location, rc.deps, tracer, rc.deps.now())
-        enforced, original = enforced_constraints(prefs, get_request(state))
+        request = get_request(state)
+        ctx, ctx_degradations = await pipeline_build_context(
+            prefs, location, rc.deps, tracer, rc.deps.now(), strict_next_saturday=requests_next_saturday(request)
+        )
+        enforced, original = enforced_constraints(prefs, request)
         info["summary"] = (f"{location.name}, {ctx.date.isoformat()} {hhmm(ctx.start_min)}-{hhmm(ctx.end_min)}; "
                            f"{ctx.weather.summary or ctx.weather.status}; {prefs.energy.value} energy; "
                            f"{len(enforced)} hard constraint(s)")
